@@ -2,12 +2,15 @@
 //!
 //! OpenSBI enters `_start` in S-mode with `a0` = hartid and `a1` = physical
 //! address of the device tree blob. `_start` sets `gp` and `sp`, zeros `.bss`,
-//! then calls `kmain`, which currently parks the hart. Console output and
-//! clean shutdown are later M0 tasks (docs/PLAN.md) — per project rules,
-//! nothing beyond the current milestone is implemented.
+//! then calls `kmain`, which prints a hello line over the SBI debug console
+//! and parks. Clean shutdown is a later M0 task (docs/PLAN.md) — per project
+//! rules, nothing beyond the current milestone is implemented.
 
 #![no_std]
 #![no_main]
+
+mod console;
+mod sbi;
 
 use core::arch::{asm, global_asm};
 
@@ -53,12 +56,13 @@ _start:
 "#
 );
 
-/// Rust entry, called from `_start` with OpenSBI's boot arguments in `a0`/`a1`
-/// (unused until the console prints them). Parks forever: `wfi` sleeps the
-/// hart until an interrupt would fire, and none is ever enabled — an idle
-/// loop that costs no host CPU.
+/// Rust entry, called from `_start` with OpenSBI's boot arguments in `a0`/`a1`.
+/// Prints a hello line, then parks: `wfi` sleeps the hart until an interrupt
+/// would fire, and none is ever enabled.
 #[no_mangle]
-extern "C" fn kmain(_hartid: usize, _dtb_pa: usize) -> ! {
+extern "C" fn kmain(hartid: usize, dtb_pa: usize) -> ! {
+    sbi::require_dbcn();
+    println!("kestrel: hello from hart {}, dtb at {:#x}", hartid, dtb_pa);
     park()
 }
 

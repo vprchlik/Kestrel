@@ -137,9 +137,9 @@ zero `.bss` and `call kmain` passing through `a0`/`a1`.
   context as set up by OpenSBI.
 
 ### T0.3 — SBI console output + `println!` — M
-An `sbi` module with a raw `ecall` wrapper; console putchar (legacy EID 0x01,
-with the newer DBCN extension as a recorded alternative — decision entry
-required); a `core::fmt::Write` implementation and `print!`/`println!` macros.
+An `sbi` module with a raw `ecall` wrapper; DBCN `console_write_byte`
+(EID `0x4442434E`, FID 2 — see D-0015); a `core::fmt::Write` implementation
+and `print!`/`println!` macros. Probe DBCN via BASE before the first write.
 
 - **Acceptance:** `just run` prints exactly:
   ```
