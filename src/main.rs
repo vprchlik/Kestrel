@@ -2,9 +2,10 @@
 //!
 //! OpenSBI enters `_start` in S-mode with `a0` = hartid and `a1` = physical
 //! address of the device tree blob. `_start` sets `gp` and `sp`, zeros `.bss`,
-//! then calls `kmain`, which prints a hello line over the SBI debug console
-//! and parks. Clean shutdown is a later M0 task (docs/PLAN.md) — per project
-//! rules, nothing beyond the current milestone is implemented.
+//! then calls `kmain`, which prints a hello line over the SBI debug console.
+//! A panic prints `PANIC at file:line: message` and parks. Clean shutdown is
+//! a later M0 task (docs/PLAN.md) — per project rules, nothing beyond the
+//! current milestone is implemented.
 
 #![no_std]
 #![no_main]
@@ -63,14 +64,45 @@ _start:
 extern "C" fn kmain(hartid: usize, dtb_pa: usize) -> ! {
     sbi::require_dbcn();
     println!("kestrel: hello from hart {}, dtb at {:#x}", hartid, dtb_pa);
-    park()
+    panic!("selftest");
 }
 
+/// Set for the duration of `panic`. If we re-enter, `println!` is already on
+/// the stack — printing again would recurse until the stack dies. Single hart,
+/// not a lock: a `bool` in `.bss`, zeroed by `_start`.
+static mut IN_PANIC: bool = false;
+
 /// Required by `no_std`: where `core` lands when an invariant fails.
-/// Pre-console there is no way to print, so parking is the only honest option;
-/// a later M0 task replaces this with a loud print of location and message.
+/// Prints location and message, then parks. Nested panics `ebreak` and park
+/// without printing.
 #[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! {
+fn panic(info: &core::panic::PanicInfo) -> ! {
+    let nested = unsafe {
+        if IN_PANIC {
+            true
+        } else {
+            IN_PANIC = true;
+            false
+        }
+    };
+    if nested {
+        // Already printing a panic. Do not call println! or panic! again.
+        unsafe {
+            asm!(
+                "ebreak",
+                "1: wfi",
+                "j 1b",
+                options(noreturn),
+            );
+        }
+    }
+
+    match info.location() {
+        Some(loc) => {
+            println!("PANIC at {}:{}: {}", loc.file(), loc.line(), info.message())
+        }
+        None => println!("PANIC at ?:?: {}", info.message()),
+    }
     park()
 }
 
