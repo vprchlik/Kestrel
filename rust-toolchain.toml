@@ -1,0 +1,6 @@
+# Pins the toolchain for everyone (and cloud agents) who builds this repo.
+# rustup auto-installs the target and components on first use.
+[toolchain]
+channel = "stable"
+components = ["rust-src", "llvm-tools-preview", "clippy", "rustfmt"]
+targets = ["riscv64gc-unknown-none-elf"]

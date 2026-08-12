@@ -1,0 +1,15 @@
+{
+    // Without a target override, rust-analyzer checks against the HOST
+    // triple, which has std — every no_std file then shows false errors
+    // (or worse, none where there should be some).
+    "rust-analyzer.cargo.target": "riscv64gc-unknown-none-elf",
+    // Don't check tests/benches/examples: those imply std and don't exist
+    // for a bare-metal binary crate.
+    "rust-analyzer.check.allTargets": false,
+    // Clippy findings inline; its pedantry is welcome in unsafe-adjacent code.
+    "rust-analyzer.check.command": "clippy",
+    "files.associations": {
+        "*.ld": "linkerscript",
+        "justfile": "makefile"
+    }
+}
