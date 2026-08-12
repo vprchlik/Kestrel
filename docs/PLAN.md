@@ -31,7 +31,7 @@ against a minimal Linux VM.
 
 | Milestone | Name | One-line goal | Status |
 |---|---|---|---|
-| M0 | Boot | OpenSBI → kernel entry → UART "hello" → clean QEMU exit | not started |
+| M0 | Boot | OpenSBI → kernel entry → UART "hello" → clean QEMU exit | in progress |
 | M1 | Fundamentals | Traps, SBI timer interrupts, frame allocator, Sv39 paging, heap | not started |
 | M2 | Execution | U-mode, 5 syscalls, context switch, preemptive scheduling of 2+ tasks | [TO BE DETAILED at milestone start] |
 | M3 | Unikernel | App-in-image as sole U-mode task, virtio-net, tiny HTTP responder | [TO BE DETAILED at milestone start] |
@@ -69,8 +69,9 @@ M-mode (PMP, trap delegation), then `mret`s into our kernel at 0x8020_0000 in
 S-mode with `a0 = hartid` and `a1 = pointer to the device tree blob`.
 
 **3. The QEMU `virt` memory map.** Physical RAM starts at 0x8000_0000 (default
-128 MiB, so it ends at 0x8800_0000). OpenSBI occupies roughly the first 512 KiB
-of RAM and protects itself with PMP — touching it from S-mode causes an access
+128 MiB, so it ends at 0x8800_0000). OpenSBI occupies the first ~322 KiB of
+RAM (observed: `Firmware Base 0x80000000`, `Firmware Size 322 KB`) and
+protects itself with PMP — touching it from S-mode causes an access
 fault, which is a classic mystery crash. Memory-mapped devices live below RAM:
 UART (NS16550A) at 0x1000_0000, virtio-mmio slots at 0x1000_1000–0x1000_8000,
 PLIC at 0x0C00_0000, CLINT at 0x0200_0000, and the "test finisher" device at
@@ -119,8 +120,10 @@ testing: `just test` can run QEMU headless and inspect its output and exit.
 Follow `docs/SETUP.md`; run bare QEMU with no kernel.
 
 - **Acceptance:** `qemu-system-riscv64 -machine virt -nographic -bios default`
-  prints the OpenSBI banner (version line, platform `riscv-virtio,qemu`, and
-  the `Domain0 Next Address: 0x0000000080200000` line). Exit with `Ctrl-a x`.
+  prints the OpenSBI banner (version line, platform `riscv-virtio,qemu`).
+  Without a `-kernel`, `Domain0 Next Address` is `0x0` — OpenSBI has nowhere
+  to jump. With our kernel it is `0x80200000` in S-mode (already observed).
+  Exit with `Ctrl-a x`.
 
 ### T0.2 — Kernel entry: linker script + assembly `_start` — M
 The scaffolding (linker script, `_start` that sets `sp` and parks) already

@@ -55,8 +55,9 @@ touch it if M3 chooses interrupt-driven networking over polling.
 
 **PMP (Physical Memory Protection).** M-mode CSRs that grant/deny physical
 address ranges to lower privilege levels, checked before paging even applies.
-OpenSBI uses PMP to protect its own RAM (first ~512 KiB at 0x8000_0000) — the
-reason an S-mode read of that region access-faults.
+OpenSBI uses PMP to protect its own RAM (first ~322 KiB at 0x8000_0000,
+observed on OpenSBI v1.3) — the reason an S-mode read of that region
+access-faults.
 
 **satp (Supervisor Address Translation and Protection).** The CSR that turns
 paging on: it holds the translation mode (8 = Sv39) and the physical page
@@ -79,10 +80,21 @@ memory: after changing PTEs or `satp`, older translations may still be cached
 until you execute it. Project rule: fence after every PTE change — cheap
 insurance on one hart.
 
+**Sstc.** The RISC-V extension that gives S-mode a `stimecmp` CSR, so the
+supervisor can arm timer interrupts without an `ecall` into M-mode. OpenSBI
+v1.3 on QEMU `virt` advertises it as `Boot HART ISA Extensions: time,sstc`.
+Recorded for M1; unused until then — M1 still plans to go through the SBI
+TIME extension unless a later decision switches to `stimecmp`.
+
 **Sv39.** The smallest rv64 virtual-memory mode: 39-bit virtual addresses
 translated through three levels of 512-entry page tables to 4 KiB pages (with
 2 MiB / 1 GiB leaves possible at higher levels). 512 GiB of address space —
 absurdly more than our 128 MiB of RAM, which is why we don't need Sv48.
+
+**timebase.** The rate of the `rdtime` / `mtime` counter. On QEMU `virt`,
+OpenSBI reports `Platform Timer Device: aclint-mtimer @ 10000000Hz` — 10 MHz,
+so 100 ns per tick. M1 will convert timeslices into comparator deltas with
+this number; unused until then.
 
 **TLB (Translation Lookaside Buffer).** The hart's cache of recent
 virtual→physical translations, consulted before walking page tables in memory.
