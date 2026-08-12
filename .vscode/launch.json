@@ -1,0 +1,22 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            // Flow: `just debug` in a terminal (QEMU frozen at reset, GDB
+            // stub on :1234), then F5 here. CodeLLDB's "custom" mode creates
+            // a target from the kernel ELF and attaches to the stub — set
+            // breakpoints, continue, step at source level. For CSRs
+            // (scause/sepc/stval/satp) use `just gdb` instead: LLDB does not
+            // expose them (DEBUGGING.md §1).
+            "name": "Attach to QEMU GDB stub",
+            "type": "lldb",
+            "request": "custom",
+            "targetCreateCommands": [
+                "target create ${workspaceFolder}/target/riscv64gc-unknown-none-elf/debug/kestrel"
+            ],
+            "processCreateCommands": [
+                "gdb-remote localhost:1234"
+            ]
+        }
+    ]
+}

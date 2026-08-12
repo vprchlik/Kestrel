@@ -1,0 +1,11 @@
+/target
+serial.log
+qemu.log
+
+# Agent scratch, editor debris, local transcripts — never commit
+.cursor/*.log
+.cursor/scratch/
+*.orig
+*.rej
+*~
+.DS_Store
