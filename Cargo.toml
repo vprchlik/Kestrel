@@ -1,0 +1,16 @@
+[package]
+name = "kestrel"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+
+# Bare metal has no unwinder; abort turns panics into a plain call to our
+# #[panic_handler] and drops the eh_personality requirement.
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+lto = true
+codegen-units = 1

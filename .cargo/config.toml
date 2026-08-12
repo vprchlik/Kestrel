@@ -1,0 +1,16 @@
+# Cross-compilation defaults: every cargo invocation in this repo targets the
+# bare-metal triple, links with our script, and can boot via `cargo run`.
+
+[build]
+target = "riscv64gc-unknown-none-elf"
+
+[target.riscv64gc-unknown-none-elf]
+rustflags = [
+    # Place sections per linker.ld (entry at 0x8020_0000 etc.).
+    "-C", "link-arg=-Tlinker.ld",
+    # Frame pointers make GDB backtraces work on bare metal.
+    "-C", "force-frame-pointers=yes",
+]
+# `cargo run` boots QEMU directly (cargo appends the ELF path after -kernel).
+# The justfile is the primary interface; this is a convenience.
+runner = "qemu-system-riscv64 -machine virt -nographic -bios default -kernel"
