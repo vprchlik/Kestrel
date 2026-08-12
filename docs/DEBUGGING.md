@@ -144,7 +144,10 @@ never reached your code. In rough order of likelihood:
    repeating cause 12 with `epc` = instruction after the `csrw satp`.
 2. `stvec` unset/misaligned when the first trap arrives (low 2 bits of `stvec`
    are a MODE field — a non-4-byte-aligned handler address silently corrupts
-   both mode and address).
+   both mode and address). Advancing `sepc` is a separate footgun: `ecall` is
+   always 4 bytes, but the trapped instruction in general may be 2 (RVC).
+   Hardcoding `sepc += 4` in our handler will skip a byte after a compressed
+   trap. Decode width from the instruction at `sepc` (see GLOSSARY: RVC).
 3. Trap handler itself faults (unmapped stack, clobbered register) →
    recursive trap → loop. `-d int`: alternating/nested causes.
 4. Missing `sfence.vma` after editing PTEs → stale TLB → works, then faults
@@ -156,7 +159,9 @@ never reached your code. In rough order of likelihood:
 7. First static introduced = first real exercise of the `.bss` zero loop
    (the section is empty until then, so the loop is a no-op). If a static
    reads nonzero at init, suspect the loop bounds before suspecting the
-   code that reads it.
+   code that reads it. The panic reentrancy flag (`IN_PANIC` in `main.rs`)
+   is that first static — confirm `__bss_start != __bss_end` and that the
+   flag reads as `false` at `kmain`.
 
 **M2 (expand at milestone start)**
 1. `sret` to U-mode with `sstatus.SPP` still S, or `sepc` bogus.

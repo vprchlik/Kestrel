@@ -21,7 +21,10 @@ we print the pointer but hardcode the `virt` layout instead (see D-0012).
 **ecall.** The RISC-V instruction that requests service from a higher
 privilege level by raising a synchronous exception. From S-mode it is how we
 call OpenSBI (SBI calls); from U-mode it will be how the app makes syscalls
-into our kernel — same instruction, different trap destination.
+into our kernel — same instruction, different trap destination. It has no
+compressed encoding, so it is always 4 bytes and OpenSBI advances `mepc` by
+exactly 4; that fact does not license our S-mode handler to hardcode `sepc += 4`
+(see RVC).
 
 **hart.** A HARdware Thread — one independent instruction stream with its own
 registers and CSRs; a core with hyperthreading would be multiple harts. This
@@ -58,6 +61,15 @@ address ranges to lower privilege levels, checked before paging even applies.
 OpenSBI uses PMP to protect its own RAM (first ~322 KiB at 0x8000_0000,
 observed on OpenSBI v1.3) — the reason an S-mode read of that region
 access-faults.
+
+**RVC (compressed instructions).** The C extension gives 16-bit encodings for
+common integer operations; a trap can land on either a 2-byte or a 4-byte
+instruction. `ecall` / `ebreak` / CSR ops have no C encoding and are always
+4 bytes — OpenSBI can therefore advance `mepc` by 4 after an S-mode `ecall`.
+Our S-mode handler (M1/T1.2) must not copy that shortcut: inspect the
+instruction at `sepc` (low two bits `0b11` ⇒ 32-bit, otherwise 16-bit) and
+advance by that width, or a compressed trap will skip a byte and a later
+`sret` will land mid-instruction.
 
 **satp (Supervisor Address Translation and Protection).** The CSR that turns
 paging on: it holds the translation mode (8 = Sv39) and the physical page
