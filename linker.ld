@@ -58,8 +58,8 @@ SECTIONS
     /* Boot stack: 64 KiB, NOLOAD (nothing to store in the image; stacks
      * don't need initialization). Kept outside __bss_start/__bss_end so the
      * M0 bss-clearing loop doesn't zero the stack it may be standing on.
-     * No guard page until paging exists (M1): overflow silently corrupts
-     * whatever sits below — if M0/M1 behavior is inexplicable, suspect this. */
+ * No guard page until paging exists (M1/T1.5, see D-0016): overflow
+ * silently corrupts .bss, which sits immediately below. */
     .boot_stack (NOLOAD) : ALIGN(16) {
         __boot_stack_bottom = .;
         . += 64K;
