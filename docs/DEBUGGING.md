@@ -129,6 +129,10 @@ never reached your code. In rough order of likelihood:
    `just objdump | head`.
 2. `sp` never set / set to a bogus address → first Rust function prologue
    store-faults with `stvec` unset → hang. Check with gdb `si` from `_start`.
+   Observed `kmain` prologue (debug build): `addi sp,sp,-32`; `sd ra,24(sp)`;
+   `sd s0,16(sp)`; **`addi s0,sp,32`** (frame pointer, after the saves);
+   then `sd a0`/`sd a1` relative to `s0`. The `ra`/`s0` stores use `sp`, not
+   `s0` — `s0` is only established after those stores.
 3. `.bss` not zeroed → statics contain junk → weird behavior *later* (this one
    defers, it doesn't usually instant-hang — which is worse).
 4. Touched 0x8000_0000–0x8020_0000 (OpenSBI's PMP-protected RAM) → access
@@ -149,6 +153,10 @@ never reached your code. In rough order of likelihood:
 5. Missing A/D bits in PTEs → cause 13/15 on first touch, on QEMU configs that
    don't set them in hardware. We set A|D on all kernel leaves (PLAN M1/T1.5).
 6. Timer interrupt enabled before `stvec` points at a real handler.
+7. First static introduced = first real exercise of the `.bss` zero loop
+   (the section is empty until then, so the loop is a no-op). If a static
+   reads nonzero at init, suspect the loop bounds before suspecting the
+   code that reads it.
 
 **M2 (expand at milestone start)**
 1. `sret` to U-mode with `sstatus.SPP` still S, or `sepc` bogus.

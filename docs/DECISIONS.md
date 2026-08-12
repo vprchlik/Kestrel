@@ -266,3 +266,20 @@ D-0011 onward are working decisions made under those constraints.
   a system whose every line has a reason the author can articulate.
 - **Consequences:** this entry is the citation for future "why didn't you..."
   questions; deviations from it require their own decision entry.
+
+## D-0016: Unmapped guard page below the boot stack (M1/T1.5)
+- Date: 2026-08-12 — Status: accepted (implement at M1/T1.5, not before)
+- **Decision:** once Sv39 is live, leave one 4 KiB page immediately below
+  `__boot_stack_bottom` unmapped so a stack overflow takes a store page fault
+  instead of silently corrupting whatever sits there.
+- **Alternatives considered:** keep the stack adjacent to `.bss` with no gap
+  (status quo until paging exists — there is no translation, so an unmapped
+  page cannot fault). A mapped guard with no W bit is equivalent on this
+  hardware; unmapped is simpler (no PTE to get wrong).
+- **Rationale:** today `__boot_stack_bottom` sits exactly at `__bss_end`.
+  Overflow walks downward into `.bss` (and then into `.data` / `.rodata` /
+  `.text`) with no trap. That is undetectable until some static is impossibly
+  wrong. Paging is the first moment the hardware can tell us.
+- **Consequences:** do **not** implement this in M0. T1.5's kernel map must
+  skip that page; the frame allocator must not hand it out. Revisit the
+  linker script then if the gap needs to be a named symbol.

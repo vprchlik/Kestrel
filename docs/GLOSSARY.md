@@ -80,6 +80,12 @@ memory: after changing PTEs or `satp`, older translations may still be cached
 until you execute it. Project rule: fence after every PTE change — cheap
 insurance on one hart.
 
+**sstatus.SPP.** The S-mode "previous privilege" bit (sstatus bit 8): 0 = U,
+1 = S. It records where `sret` will return, not the privilege the hart is
+running at now. Observed 0 at `kmain` — OpenSBI's initial value after `mret`
+into S-mode, not evidence that we are in U-mode. Becomes load-bearing in M2
+when we set SPP=U before `sret` into the app.
+
 **Sstc.** The RISC-V extension that gives S-mode a `stimecmp` CSR, so the
 supervisor can arm timer interrupts without an `ecall` into M-mode. OpenSBI
 v1.3 on QEMU `virt` advertises it as `Boot HART ISA Extensions: time,sstc`.
