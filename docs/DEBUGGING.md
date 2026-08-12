@@ -157,11 +157,12 @@ never reached your code. In rough order of likelihood:
    don't set them in hardware. We set A|D on all kernel leaves (PLAN M1/T1.5).
 6. Timer interrupt enabled before `stvec` points at a real handler.
 7. First static introduced = first real exercise of the `.bss` zero loop
-   (the section is empty until then, so the loop is a no-op). If a static
-   reads nonzero at init, suspect the loop bounds before suspecting the
-   code that reads it. The panic reentrancy flag (`IN_PANIC` in `main.rs`)
-   is that first static — confirm `__bss_start != __bss_end` and that the
-   flag reads as `false` at `kmain`.
+   (the section is empty until then, so the loop is a no-op). **Confirmed
+   working as of T0.4:** `IN_PANIC` at `__bss_start` (`0x80203000`) read
+   `false` at `kmain`, `__bss_end` moved to `0x80204000`, stack sat above
+   it. Drop the loop off the M1 suspect list unless the bounds themselves
+   change (new sections, a broken `__bss_end`). A later static that reads
+   nonzero is then a bug in the reader, not in `_start`.
 
 **M2 (expand at milestone start)**
 1. `sret` to U-mode with `sstatus.SPP` still S, or `sepc` bogus.
