@@ -31,7 +31,7 @@ against a minimal Linux VM.
 
 | Milestone | Name | One-line goal | Status |
 |---|---|---|---|
-| M0 | Boot | OpenSBI → kernel entry → UART "hello" → clean QEMU exit | in progress |
+| M0 | Boot | OpenSBI → kernel entry → UART "hello" → clean QEMU exit | done |
 | M1 | Fundamentals | Traps, SBI timer interrupts, frame allocator, Sv39 paging, heap | not started |
 | M2 | Execution | U-mode, 5 syscalls, context switch, preemptive scheduling of 2+ tasks | [TO BE DETAILED at milestone start] |
 | M3 | Unikernel | App-in-image as sole U-mode task, virtio-net, tiny HTTP responder | [TO BE DETAILED at milestone start] |
@@ -163,14 +163,19 @@ printing a final marker line first.
   own (no `Ctrl-a x`), and `echo $?` is `0`.
 
 ### T0.6 — Wire the headless boot test — S
-Make `just test` (already scaffolded) assert on the marker.
+Make `just test` assert on the kernel marker, not the OpenSBI banner.
+Timeout is a hang-guard (~3s), not the normal path. Verdict from serial +
+QEMU status together (D-0017): `PANIC` → FAIL; timeout → HANG; marker +
+exit 0 → PASS.
 
-- **Acceptance:** `just test expect="M0 BOOT OK"` prints `TEST PASS` and exits 0.
+- **Acceptance:** `just test` prints `TEST PASS: found "M0 BOOT OK"` and
+  exits 0. `just test-panic` prints `TEST FAIL: panic` and the panic line,
+  exit 1. `just test-hang` prints `TEST HANG` and exit 2.
 
 ## Milestone acceptance test
 
 ```
-$ just test expect="M0 BOOT OK"
+$ just test
 ```
 prints `TEST PASS: found "M0 BOOT OK"` and exits 0. And interactively:
 ```
@@ -196,8 +201,23 @@ $ echo $?
 - **`ecall` returns garbage / no output:** wrong register convention — SBI takes
   EID in `a7`, FID in `a6`, args in `a0..a5`; legacy extensions differ (no FID).
 - **Works interactively, test hangs:** kernel never calls shutdown, so headless
-  QEMU never exits — the test recipe uses `timeout` as a backstop, but the
-  acceptance requires a real clean exit.
+  QEMU never exits — the test recipe uses `timeout` as a hang-guard (exit 2),
+  but the acceptance requires a real clean exit.
+
+## M0 summary
+
+**Produced:** a `no_std` rv64gc kernel that OpenSBI enters at `0x80200000` in
+S-mode, zeros `.bss`, prints over DBCN, panics loudly with a reentrancy
+guard, and shuts down via SRST so QEMU exits 0. `just test` is a CI-shaped
+gate on that path.
+
+**Acceptance proves:** `just test` finds `M0 BOOT OK` and exits 0; `just run`
+prints the hello line (DTB in RAM) plus `M0 BOOT OK` and returns 0. The
+harness also distinguishes panic (FAIL) from timeout (HANG).
+
+**Decisions this milestone:** D-0015 DBCN `write_byte` (no legacy putchar);
+D-0016 unmapped stack guard page (accepted, deferred to M1/T1.5); D-0017
+SRST shutdown, no guest-controlled exit code, harness parses serial.
 
 ---
 

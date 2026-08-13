@@ -13,6 +13,11 @@ behalf when we call `sbi_set_timer`, so we never touch it directly.
 `csrw`) rather than loads/stores. They configure privileged behavior and record
 trap state; which CSRs are accessible depends on the current privilege level.
 
+**DBCN (Debug Console).** The SBI extension (EID `0x4442434E`) that replaces
+legacy putchar. We use FID 2, `console_write_byte` — one `ecall` per byte —
+after probing it via BASE (D-0015). OpenSBI v1.3 implements it and drives the
+16550 for us; a missing DBCN is a hard abort, not a fallback to EID `0x01`.
+
 **DTB (Device Tree Blob).** A binary description of the machine's hardware
 (RAM size, device addresses, interrupt routing) that QEMU generates and OpenSBI
 passes to the kernel in register `a1`. Real kernels parse it for portability;
@@ -97,6 +102,11 @@ insurance on one hart.
 running at now. Observed 0 at `kmain` — OpenSBI's initial value after `mret`
 into S-mode, not evidence that we are in U-mode. Becomes load-bearing in M2
 when we set SPP=U before `sret` into the app.
+
+**SRST (System Reset).** The SBI extension (EID `0x53525354`) that asks
+firmware to reset or shut down the machine. We probe it, then call FID 0 with
+type=shutdown (D-0017). QEMU exits 0; there is no guest-controlled fail code.
+If the `ecall` returns, we print the error and park.
 
 **Sstc.** The RISC-V extension that gives S-mode a `stimecmp` CSR, so the
 supervisor can arm timer interrupts without an `ecall` into M-mode. OpenSBI

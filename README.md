@@ -7,8 +7,8 @@ compiled into the image, running in U-mode over a 5-syscall interface
 Linux VM. Built as a learning and portfolio project: **minimal and legible
 beats clever, everywhere.**
 
-**Status: pre-M0.** Planning and scaffolding only — the kernel builds and
-parks the hart; first output lands in milestone M0.
+**Status: M0 done.** OpenSBI → hello → `M0 BOOT OK` → QEMU exits 0.
+`just test` is the gate. M1 (traps, timer, paging, heap) is next.
 
 ## Documentation map
 
@@ -26,8 +26,10 @@ parks the hart; first output lands in milestone M0.
 Environment setup: [docs/SETUP.md](docs/SETUP.md). Then:
 
 ```bash
-just run     # build + boot in QEMU (exit: Ctrl-a x)
-just test    # headless boot, assert on serial output
+just run       # build + boot; QEMU exits 0 after M0 BOOT OK
+just test      # headless PASS (exit 0) on M0 BOOT OK
+just test-panic
+just test-hang # FAIL (1) / HANG (2) — same harness, diverted builds
 just debug   # boot frozen with GDB stub; then `just gdb` or F5 in the editor
 just objdump # disassemble the kernel image
 ```

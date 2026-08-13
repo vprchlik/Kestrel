@@ -312,7 +312,9 @@ D-0011 onward are working decisions made under those constraints.
   hardware and needs no extra Sv39 mapping. The extra exit-code channel
   buys nothing the harness does not already get from serial + timeout.
 - **Consequences:** a panic that parks looks like a hang to `timeout` unless
-  serial is grepped for `PANIC`. A failed SRST call (probe miss or `ecall`
-  returns) prints a reason and parks — diagnose as a hang with that line,
-  not as undefined fall-through. Revisit sifive_test only if a later
-  harness truly cannot parse serial.
+  serial is grepped for `PANIC` **first** — `just test` does that. Verdicts:
+  marker + QEMU exit 0 → `TEST PASS` (exit 0); `PANIC` in serial →
+  `TEST FAIL` (exit 1, panic line echoed); timeout without panic →
+  `TEST HANG` (exit 2). A failed SRST call prints a reason and parks
+  (HANG, with that line). Revisit sifive_test only if a later harness
+  truly cannot parse serial.
