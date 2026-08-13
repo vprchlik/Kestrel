@@ -4,8 +4,9 @@
 //! address of the device tree blob. `_start` sets `gp` and `sp`, zeros `.bss`,
 //! then calls `kmain`, which prints a hello line over the SBI debug console,
 //! a boot CSR snapshot, installs the trap handler, continues past a
-//! deliberate `ebreak`, and `M0 BOOT OK`, then asks OpenSBI to shut the
-//! machine down. A panic prints `PANIC at file:line: message` and parks.
+//! deliberate `ebreak`, waits for 30 timer ticks, and `M0 BOOT OK`, then
+//! asks OpenSBI to shut the machine down. A panic prints
+//! `PANIC at file:line: message` and parks.
 
 #![no_std]
 #![no_main]
@@ -13,6 +14,7 @@
 mod console;
 mod csr;
 mod sbi;
+mod timer;
 mod trap;
 
 use core::arch::{asm, global_asm};
@@ -60,10 +62,11 @@ _start:
 );
 
 /// Rust entry, called from `_start` with OpenSBI's boot arguments in `a0`/`a1`.
-/// Prints hello, the boot CSR snapshot (`CSR OK`), installs `stvec`, continues
-/// past an `ebreak` (`TRAP OK`), and `M0 BOOT OK`, then shuts down via SRST.
-/// The `panic-selftest` / `hang-selftest` features divert that path so the
-/// harness can exercise FAIL and HANG without editing this file.
+/// Prints hello, the boot CSR snapshot (`CSR OK`), installs `stvec`, starts
+/// 10 ms ticks, continues past an `ebreak` (`TRAP OK`), waits for `tick 30`,
+/// and `M0 BOOT OK`, then shuts down via SRST. The `panic-selftest` /
+/// `hang-selftest` features divert that path so the harness can exercise
+/// FAIL and HANG without editing this file.
 #[no_mangle]
 extern "C" fn kmain(hartid: usize, dtb_pa: usize) -> ! {
     sbi::require_dbcn();
@@ -83,6 +86,7 @@ extern "C" fn kmain(hartid: usize, dtb_pa: usize) -> ! {
         println!("CSR OK");
     }
     trap::install();
+    timer::init();
     #[cfg(feature = "panic-selftest")]
     panic!("selftest");
     #[cfg(feature = "hang-selftest")]
@@ -110,6 +114,9 @@ extern "C" fn kmain(hartid: usize, dtb_pa: usize) -> ! {
             );
         }
         println!("TRAP OK");
+        while timer::ticks() < 30 {
+            unsafe { asm!("wfi") };
+        }
         println!("M0 BOOT OK");
         let ret = sbi::shutdown();
         println!(
