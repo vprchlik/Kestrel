@@ -88,3 +88,7 @@ a nontrivial choice silently.
 - Keep agent scratch files, chat transcripts, and scaffolding artifacts out
   of version control. If a file is not part of the kernel, the docs, or the
   build/test harness, it belongs in `.gitignore`, not in a commit.
+- **Never** post, edit, or comment on GitHub issues or pull requests, and
+  never open or modify a PR body. Output PR descriptions, summaries, and any
+  other GitHub-destined prose in chat only — the user pastes them. Pushing
+  branches and commits is fine.
