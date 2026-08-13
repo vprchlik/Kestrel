@@ -95,7 +95,7 @@ from our panic printout, from gdb, or from `-d int`, it's the same three:
 | 0 | instruction address misaligned | jump to odd address (corrupted function pointer / return address) |
 | 1 | instruction access fault | PC in a PMP-protected region (OpenSBI RAM!) or outside RAM |
 | 2 | illegal instruction | executing data; CSR access not permitted; FP use with FPU off |
-| 3 | breakpoint | `ebreak` — ours (T1.2 test) or a debugger's |
+| 3 | breakpoint | `ebreak` — ours (T1.2 test) or a debugger's. **Observed:** the T1.2 self-test assembled as `c.ebreak` (`0x9002`, 2 bytes) at `sepc=0x8020114a`. |
 | 4 / 6 | load / store misaligned | should not happen (rv64gc allows misaligned in QEMU) — suspect wild pointer |
 | 5 / 7 | load / store access fault | PMP violation (OpenSBI region) or nonexistent physical address |
 | 8 | ecall from U-mode | a syscall (M2+) — not an error |
@@ -156,6 +156,10 @@ never reached your code. In rough order of likelihood:
    always 4 bytes, but the trapped instruction in general may be 2 (RVC).
    Hardcoding `sepc += 4` in our handler will skip a byte after a compressed
    trap. Decode width from the instruction at `sepc` (see GLOSSARY: RVC).
+   **Observed T1.2:** the self-test `ebreak` was emitted as `c.ebreak`
+   (encoding `0x9002`, width 2) at `sepc=0x8020114a`. A hardcoded `+4` would
+   have `sret`'d into the middle of the next instruction. D-0021's decode is
+   load-bearing, not theoretical.
 4. Trap handler itself faults (unmapped stack, clobbered register) →
    recursive trap → loop. `-d int`: alternating/nested causes.
 5. Missing `sfence.vma` after editing PTEs → stale TLB → works, then faults
