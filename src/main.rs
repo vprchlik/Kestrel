@@ -3,7 +3,8 @@
 //! OpenSBI enters `_start` in S-mode with `a0` = hartid and `a1` = physical
 //! address of the device tree blob. `_start` sets `gp` and `sp`, zeros `.bss`,
 //! then calls `kmain`, which prints a hello line over the SBI debug console,
-//! a boot CSR snapshot, and `M0 BOOT OK`, then asks OpenSBI to shut the
+//! a boot CSR snapshot, installs the trap handler, continues past a
+//! deliberate `ebreak`, and `M0 BOOT OK`, then asks OpenSBI to shut the
 //! machine down. A panic prints `PANIC at file:line: message` and parks.
 
 #![no_std]
@@ -12,6 +13,7 @@
 mod console;
 mod csr;
 mod sbi;
+mod trap;
 
 use core::arch::{asm, global_asm};
 
@@ -58,19 +60,14 @@ _start:
 );
 
 /// Rust entry, called from `_start` with OpenSBI's boot arguments in `a0`/`a1`.
-/// Prints hello, the boot CSR snapshot (`CSR OK`), and `M0 BOOT OK`, then
-/// shuts down via SRST. The `panic-selftest` / `hang-selftest` features
-/// divert that path so the harness can exercise FAIL and HANG without
-/// editing this file.
+/// Prints hello, the boot CSR snapshot (`CSR OK`), installs `stvec`, continues
+/// past an `ebreak` (`TRAP OK`), and `M0 BOOT OK`, then shuts down via SRST.
+/// The `panic-selftest` / `hang-selftest` features divert that path so the
+/// harness can exercise FAIL and HANG without editing this file.
 #[no_mangle]
 extern "C" fn kmain(hartid: usize, dtb_pa: usize) -> ! {
     sbi::require_dbcn();
     println!("kestrel: hello from hart {}, dtb at {:#x}", hartid, dtb_pa);
-    #[cfg(feature = "panic-selftest")]
-    panic!("selftest");
-    #[cfg(feature = "hang-selftest")]
-    park();
-    #[cfg(not(any(feature = "panic-selftest", feature = "hang-selftest")))]
     {
         let sstatus = csr::sstatus::read();
         let sie = csr::sie::read();
@@ -84,6 +81,35 @@ extern "C" fn kmain(hartid: usize, dtb_pa: usize) -> ! {
             panic!("satp={:#x}, expected Bare (0)", satp);
         }
         println!("CSR OK");
+    }
+    trap::install();
+    #[cfg(feature = "panic-selftest")]
+    panic!("selftest");
+    #[cfg(feature = "hang-selftest")]
+    park();
+    #[cfg(not(any(feature = "panic-selftest", feature = "hang-selftest")))]
+    {
+        let ebreak_pc: usize;
+        unsafe {
+            asm!(
+                "lla {pc}, 1f",
+                "1: ebreak",
+                pc = out(reg) ebreak_pc,
+                options(nostack),
+            );
+        }
+        let half = unsafe { core::ptr::read(ebreak_pc as *const u16) };
+        let width = trap::instruction_width(half);
+        let sepc = csr::sepc::read();
+        if sepc != ebreak_pc + width {
+            panic!(
+                "ebreak continued at sepc={:#x}, expected {:#x} (ebreak was {:#x})",
+                sepc,
+                ebreak_pc + width,
+                ebreak_pc
+            );
+        }
+        println!("TRAP OK");
         println!("M0 BOOT OK");
         let ret = sbi::shutdown();
         println!(
