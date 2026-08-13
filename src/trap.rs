@@ -11,6 +11,7 @@
 
 use crate::csr;
 use crate::println;
+use crate::timer;
 use core::arch::global_asm;
 
 /// `TrapFrame` size in bytes. 32 GPRs + `sepc` + `sstatus`.
@@ -118,8 +119,10 @@ extern "C" fn trap_handler(frame: &mut TrapFrame) {
     let code = scause & !csr::scause::INTERRUPT;
 
     if interrupt {
-        // No interrupt sources enabled until T1.3. A pending bit that
-        // sneaks through is unknown, not a timer tick.
+        if code == csr::scause::INT_S_TIMER {
+            timer::on_interrupt();
+            return;
+        }
         unknown_trap(scause, code, true, frame, stval);
     }
 
@@ -151,7 +154,7 @@ extern "C" fn trap_handler(frame: &mut TrapFrame) {
 /// Codes 1, 2, 4, 5, 6, 7, 9 are **not** delegated: they never reach this
 /// function; they produce an OpenSBI dump. `MIDELEG = 0x1666` includes
 /// supervisor timer (bit 5), so a timer interrupt can arrive once T1.3
-/// enables it — not before, and not as an "unknown exception".
+/// enables it. Other interrupt codes still panic here.
 fn unknown_trap(scause: usize, code: usize, interrupt: bool, frame: &TrapFrame, stval: usize) -> ! {
     panic!(
         "unknown trap scause={:#x} ({} code {}) sepc={:#x} stval={:#x} sp={:#x}",
