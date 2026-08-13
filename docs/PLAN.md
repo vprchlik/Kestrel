@@ -308,7 +308,8 @@ requested size; there is no OOM recovery story in a unikernel.
 **9. Delegation is not universal — read `medeleg`.** OpenSBI chooses which
 exceptions reach S-mode, and the boot log tells us exactly which. Observed on
 OpenSBI v1.3 / QEMU `virt`: `MEDELEG = 0xf0b509` delegates exception codes 0
-(instruction address misaligned), 3 (breakpoint), 8 (`ecall` from U-mode), 12,
+(instruction address misaligned), 3 (breakpoint), 8 (`ecall` from U-mode), 10
+(`ecall` from VS-mode, H-extension; bit 10 is set in the observed mask), 12,
 13, 15 (the three page faults), plus the H-extension guest-fault codes 20–23.
 It does **not** delegate 1 (instruction access fault), 2 (illegal instruction),
 4/6 (misaligned load/store), 5/7 (load/store access fault), or 9 (`ecall` from
