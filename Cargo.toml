@@ -7,6 +7,8 @@ edition = "2021"
 # Build with `--features panic-selftest` (or `just panic`) to panic in kmain
 # instead of shutting down. Keeps the panic handler reachable without edits.
 panic-selftest = []
+# Park after hello with no marker and no panic — exercises TEST HANG.
+hang-selftest = []
 
 [dependencies]
 

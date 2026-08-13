@@ -17,14 +17,12 @@ build:
 run qemu_extra="": build
     {{qemu}} {{qemu_args}} {{qemu_extra}} -kernel {{kernel}}
 
-# Boot a build that panics in kmain (`panic!("selftest")`) and parks.
-# Compile-time cargo feature so the default image never contains the
-# selftest. Re-run in M1 after installing stvec to confirm the handler
-# still works when panic arrives from a trap context, not just kmain.
-# Parks, so wrap with timeout; exit with Ctrl-a x if running interactively.
+# Boot a build that panics in kmain. Parks after the PANIC line (no SRST).
+# Prefer `just test features=panic-selftest` for a FAIL verdict; this recipe
+# is the live serial view. Timeout is a hang-guard; its status is not swallowed.
 panic timeout_s="5":
     cargo build --features panic-selftest
-    timeout --foreground {{timeout_s}} {{qemu}} {{qemu_args}} -kernel {{kernel}} || true
+    timeout --foreground {{timeout_s}} {{qemu}} {{qemu_args}} -kernel {{kernel}}
 
 # Boot frozen at reset (-S) with the GDB stub on tcp::1234 (-s).
 # Then attach from another terminal with `just gdb`, or press F5 in the editor.
@@ -35,20 +33,20 @@ debug: build
 gdb:
     gdb-multiarch {{kernel}} -ex "target remote :1234"
 
-# Headless boot asserting on serial output. `timeout` is a backstop for
-# kernels that don't shut themselves down (pre-M0/T0.5 that's expected;
-# afterwards a timeout expiry means the clean-exit path regressed).
-test expect="OpenSBI" timeout_s="10": build
-    @rm -f serial.log
-    timeout --foreground {{timeout_s}} {{qemu}} {{qemu_args}} -kernel {{kernel}} > serial.log 2>&1 || true
-    @if grep -q '{{expect}}' serial.log; then \
-        echo 'TEST PASS: found "{{expect}}"'; \
-    else \
-        echo 'TEST FAIL: "{{expect}}" not found in serial output:'; \
-        echo '----------------------------------------'; \
-        cat serial.log; \
-        exit 1; \
-    fi
+# Headless boot. Verdict from serial + QEMU status together (D-0017):
+#   PANIC in serial          → TEST FAIL (exit 1), panic line echoed
+#   timeout (status 124)     → TEST HANG (exit 2)
+#   marker + QEMU exit 0     → TEST PASS (exit 0)
+#   anything else            → TEST FAIL (exit 1)
+# Check PANIC before timeout: a panicking kernel parks, so timeout also fires.
+test:
+    bash scripts/boot-test.sh
+
+test-panic:
+    bash scripts/boot-test.sh panic-selftest
+
+test-hang:
+    bash scripts/boot-test.sh hang-selftest
 
 # Disassemble the kernel. Extra flags as one quoted arg, e.g. just objdump '-d --source'
 objdump flags="-d": build
