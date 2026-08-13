@@ -168,7 +168,13 @@ never reached your code. In rough order of likelihood:
 6. Missing A/D bits in PTEs → cause 13/15 on first touch, on QEMU configs that
    don't set them in hardware. We set A|D on all kernel leaves (PLAN M1/T1.5).
 7. Timer interrupt enabled before `stvec` points at a real handler.
-8. First static introduced = first real exercise of the `.bss` zero loop
+8. **Post-T1.3, `park()` is not quiescence.** `park` is `wfi`. With `sie.STIE`
+   set, the hart wakes every 10 ms, runs the timer handler, and `sret`s into
+   the next `wfi` — a "parked" panic prints `PANIC` and then keeps emitting
+   `tick N` lines. Leave `park` as `wfi`. True quiescence (a panic that must
+   not be interrupted, or the T1.7 `satp` window) clears `sie.STIE` first
+   (T1.7 also clears `sstatus.SIE`, D-0022 — same effect on ticks).
+9. First static introduced = first real exercise of the `.bss` zero loop
    (the section is empty until then, so the loop is a no-op). **Confirmed
    working as of T0.4:** `IN_PANIC` at `__bss_start` (`0x80203000`) read
    `false` at `kmain`, `__bss_end` moved to `0x80204000`, stack sat above
