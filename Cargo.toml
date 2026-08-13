@@ -3,6 +3,13 @@ name = "kestrel"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+# Build with `--features panic-selftest` (or `just panic`) to panic in kmain
+# instead of shutting down. Keeps the panic handler reachable without edits.
+panic-selftest = []
+# Park after hello with no marker and no panic — exercises TEST HANG.
+hang-selftest = []
+
 [dependencies]
 
 # Bare metal has no unwinder; abort turns panics into a plain call to our

@@ -13,6 +13,11 @@ behalf when we call `sbi_set_timer`, so we never touch it directly.
 `csrw`) rather than loads/stores. They configure privileged behavior and record
 trap state; which CSRs are accessible depends on the current privilege level.
 
+**DBCN (Debug Console).** The SBI extension (EID `0x4442434E`) that replaces
+legacy putchar. We use FID 2, `console_write_byte` — one `ecall` per byte —
+after probing it via BASE (D-0015). OpenSBI v1.3 implements it and drives the
+16550 for us; a missing DBCN is a hard abort, not a fallback to EID `0x01`.
+
 **DTB (Device Tree Blob).** A binary description of the machine's hardware
 (RAM size, device addresses, interrupt routing) that QEMU generates and OpenSBI
 passes to the kernel in register `a1`. Real kernels parse it for portability;
@@ -21,7 +26,10 @@ we print the pointer but hardcode the `virt` layout instead (see D-0012).
 **ecall.** The RISC-V instruction that requests service from a higher
 privilege level by raising a synchronous exception. From S-mode it is how we
 call OpenSBI (SBI calls); from U-mode it will be how the app makes syscalls
-into our kernel — same instruction, different trap destination.
+into our kernel — same instruction, different trap destination. It has no
+compressed encoding, so it is always 4 bytes and OpenSBI advances `mepc` by
+exactly 4; that fact does not license our S-mode handler to hardcode `sepc += 4`
+(see RVC).
 
 **hart.** A HARdware Thread — one independent instruction stream with its own
 registers and CSRs; a core with hyperthreading would be multiple harts. This
@@ -55,8 +63,18 @@ touch it if M3 chooses interrupt-driven networking over polling.
 
 **PMP (Physical Memory Protection).** M-mode CSRs that grant/deny physical
 address ranges to lower privilege levels, checked before paging even applies.
-OpenSBI uses PMP to protect its own RAM (first ~512 KiB at 0x8000_0000) — the
-reason an S-mode read of that region access-faults.
+OpenSBI uses PMP to protect its own RAM (first ~322 KiB at 0x8000_0000,
+observed on OpenSBI v1.3) — the reason an S-mode read of that region
+access-faults.
+
+**RVC (compressed instructions).** The C extension gives 16-bit encodings for
+common integer operations; a trap can land on either a 2-byte or a 4-byte
+instruction. `ecall` / `ebreak` / CSR ops have no C encoding and are always
+4 bytes — OpenSBI can therefore advance `mepc` by 4 after an S-mode `ecall`.
+Our S-mode handler (M1/T1.2) must not copy that shortcut: inspect the
+instruction at `sepc` (low two bits `0b11` ⇒ 32-bit, otherwise 16-bit) and
+advance by that width, or a compressed trap will skip a byte and a later
+`sret` will land mid-instruction.
 
 **satp (Supervisor Address Translation and Protection).** The CSR that turns
 paging on: it holds the translation mode (8 = Sv39) and the physical page
@@ -79,10 +97,32 @@ memory: after changing PTEs or `satp`, older translations may still be cached
 until you execute it. Project rule: fence after every PTE change — cheap
 insurance on one hart.
 
+**sstatus.SPP.** The S-mode "previous privilege" bit (sstatus bit 8): 0 = U,
+1 = S. It records where `sret` will return, not the privilege the hart is
+running at now. Observed 0 at `kmain` — OpenSBI's initial value after `mret`
+into S-mode, not evidence that we are in U-mode. Becomes load-bearing in M2
+when we set SPP=U before `sret` into the app.
+
+**SRST (System Reset).** The SBI extension (EID `0x53525354`) that asks
+firmware to reset or shut down the machine. We probe it, then call FID 0 with
+type=shutdown (D-0017). QEMU exits 0; there is no guest-controlled fail code.
+If the `ecall` returns, we print the error and park.
+
+**Sstc.** The RISC-V extension that gives S-mode a `stimecmp` CSR, so the
+supervisor can arm timer interrupts without an `ecall` into M-mode. OpenSBI
+v1.3 on QEMU `virt` advertises it as `Boot HART ISA Extensions: time,sstc`.
+Recorded for M1; unused until then — M1 still plans to go through the SBI
+TIME extension unless a later decision switches to `stimecmp`.
+
 **Sv39.** The smallest rv64 virtual-memory mode: 39-bit virtual addresses
 translated through three levels of 512-entry page tables to 4 KiB pages (with
 2 MiB / 1 GiB leaves possible at higher levels). 512 GiB of address space —
 absurdly more than our 128 MiB of RAM, which is why we don't need Sv48.
+
+**timebase.** The rate of the `rdtime` / `mtime` counter. On QEMU `virt`,
+OpenSBI reports `Platform Timer Device: aclint-mtimer @ 10000000Hz` — 10 MHz,
+so 100 ns per tick. M1 will convert timeslices into comparator deltas with
+this number; unused until then.
 
 **TLB (Translation Lookaside Buffer).** The hart's cache of recent
 virtual→physical translations, consulted before walking page tables in memory.

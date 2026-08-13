@@ -1,25 +1,29 @@
 //! Kestrel — a minimal rv64gc unikernel for QEMU virt, booted via OpenSBI.
 //!
-//! Pre-M0 scaffold: this image does nothing but park the hart. OpenSBI enters
-//! `_start` in S-mode with `a0` = hartid and `a1` = physical address of the
-//! device tree blob; we set up a stack and sleep in `wfi`. Console output,
-//! bss clearing, and clean shutdown are M0 tasks (docs/PLAN.md) — per project
-//! rules, nothing beyond the current milestone is implemented.
+//! OpenSBI enters `_start` in S-mode with `a0` = hartid and `a1` = physical
+//! address of the device tree blob. `_start` sets `gp` and `sp`, zeros `.bss`,
+//! then calls `kmain`, which prints a hello line over the SBI debug console
+//! and `M0 BOOT OK`, then asks OpenSBI to shut the machine down. A panic
+//! prints `PANIC at file:line: message` and parks.
 
 #![no_std]
 #![no_main]
+
+mod console;
+mod sbi;
 
 use core::arch::{asm, global_asm};
 
 // Kernel entry. The linker script places `.text.entry` at 0x8020_0000, the
 // address OpenSBI jumps to. Firmware gives us registers and nothing else: no
-// stack, no zeroed bss. Here we only set `gp` and `sp`, then enter Rust.
+// stack, no zeroed bss.
 //
 // The `norelax` dance: `gp` itself is loaded with an absolute address; if the
 // assembler were allowed to relax that load into a gp-relative one, it would
 // compute gp from the garbage gp we're trying to replace.
 //
-// `.bss` zeroing is deliberately absent — that is task M0/T0.2.
+// `a0`/`a1` are saved across the bss loop so OpenSBI's hartid and DTB pointer
+// reach `kmain` even if a future edit of the loop uses those registers.
 global_asm!(
     r#"
     .section .text.entry, "ax"
@@ -29,25 +33,89 @@ _start:
     .option norelax
     la      gp, __global_pointer$
     .option pop
+
     la      sp, __boot_stack_top
+
+    mv      s0, a0
+    mv      s1, a1
+
+    la      t0, __bss_start
+    la      t1, __bss_end
+1:
+    bgeu    t0, t1, 2f
+    sd      zero, 0(t0)
+    addi    t0, t0, 8
+    j       1b
+2:
+    mv      a0, s0
+    mv      a1, s1
     call    kmain
+3:
+    wfi
+    j       3b
 "#
 );
 
-/// Rust entry, called from `_start` with OpenSBI's boot arguments passed
-/// through untouched in `a0`/`a1` (unused until M0 prints them).
-/// Parks forever: `wfi` sleeps the hart until an interrupt would fire, and
-/// none is ever enabled — an idle loop that costs no host CPU.
+/// Rust entry, called from `_start` with OpenSBI's boot arguments in `a0`/`a1`.
+/// Prints hello and `M0 BOOT OK`, then shuts down via SRST. The
+/// `panic-selftest` / `hang-selftest` features divert that path so the
+/// harness can exercise FAIL and HANG without editing this file.
 #[no_mangle]
-extern "C" fn kmain(_hartid: usize, _dtb_pa: usize) -> ! {
-    park()
+extern "C" fn kmain(hartid: usize, dtb_pa: usize) -> ! {
+    sbi::require_dbcn();
+    println!("kestrel: hello from hart {}, dtb at {:#x}", hartid, dtb_pa);
+    #[cfg(feature = "panic-selftest")]
+    panic!("selftest");
+    #[cfg(feature = "hang-selftest")]
+    park();
+    #[cfg(not(any(feature = "panic-selftest", feature = "hang-selftest")))]
+    {
+        println!("M0 BOOT OK");
+        let ret = sbi::shutdown();
+        println!(
+            "shutdown failed: SRST error={} value={}",
+            ret.error, ret.value
+        );
+        park()
+    }
 }
 
+/// Set for the duration of `panic`. If we re-enter, `println!` is already on
+/// the stack — printing again would recurse until the stack dies. Single hart,
+/// not a lock: a `bool` in `.bss`, zeroed by `_start`.
+static mut IN_PANIC: bool = false;
+
 /// Required by `no_std`: where `core` lands when an invariant fails.
-/// Pre-M0 there is no console, so parking is the only honest option;
-/// M0/T0.4 replaces this with a loud print of location and message.
+/// Prints location and message, then parks. Nested panics `ebreak` and park
+/// without printing.
 #[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! {
+fn panic(info: &core::panic::PanicInfo) -> ! {
+    let nested = unsafe {
+        if IN_PANIC {
+            true
+        } else {
+            IN_PANIC = true;
+            false
+        }
+    };
+    if nested {
+        // Already printing a panic. Do not call println! or panic! again.
+        unsafe {
+            asm!(
+                "ebreak",
+                "1: wfi",
+                "j 1b",
+                options(noreturn),
+            );
+        }
+    }
+
+    match info.location() {
+        Some(loc) => {
+            println!("PANIC at {}:{}: {}", loc.file(), loc.line(), info.message())
+        }
+        None => println!("PANIC at ?:?: {}", info.message()),
+    }
     park()
 }
 

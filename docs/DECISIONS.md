@@ -77,10 +77,10 @@ D-0011 onward are working decisions made under those constraints.
 
 ## D-0004: Console I/O goes through the SBI console, no raw UART driver
 - Date: 2026-08-12 — Status: accepted
-- **Decision:** all kernel console output uses the SBI console extension
-  (legacy putchar or DBCN — sub-decision recorded when implemented in M0/T0.3).
-  We do not write an NS16550A driver unless a later milestone is blocked
-  without one.
+- **Decision:** all kernel console output uses the SBI Debug Console
+  extension (DBCN), specifically `console_write_byte` (see D-0015). We do
+  not write an NS16550A driver unless a later milestone is blocked without
+  one.
 - **Alternatives considered:** raw NS16550A MMIO driver at 0x1000_0000
   (rejected for now: a fine exercise but duplicates what firmware already does;
   adds an MMIO mapping dependency into M0 that Sv39 work in M1 would then have
@@ -203,20 +203,12 @@ D-0011 onward are working decisions made under those constraints.
 ---
 
 ## D-0011: Clean exit via SBI system reset (SRST), not the sifive-test device
-- Date: 2026-08-12 — Status: accepted
+- Date: 2026-08-12 — Status: superseded by D-0017
 - **Decision:** `shutdown()` calls the SBI SRST extension (EID 0x53525354,
   type=shutdown); QEMU exits with code 0.
-- **Alternatives considered:** writing 0x5555 to the sifive-test MMIO device at
-  0x0010_0000 (works and allows arbitrary exit codes; rejected as primary
-  because it's a QEMU-`virt`-specific back door where SRST is the documented
-  firmware interface we already speak — one mechanism family, fewer special
-  cases). Keep it in the debugging toolbox for exiting from contexts where SBI
-  is unavailable (e.g. broken trap state).
-- **Rationale:** consistency with D-0004: talk to firmware until firmware
-  can't do the job.
-- **Consequences:** distinguishing pass/fail exits from the *test harness* is
-  done by matching serial output, not exit codes; revisit if M4 harness needs
-  guest-controlled exit codes (then the test device is the tool).
+- **Superseded because:** T0.5 re-opened the choice with the T1.5 mapping cost
+  and the harness's pass/fail/hang needs made explicit. D-0017 is the
+  decision as implemented.
 
 ## D-0012: Hardcode the QEMU `virt` memory map; do not parse the DTB
 - Date: 2026-08-12 — Status: accepted
@@ -266,3 +258,63 @@ D-0011 onward are working decisions made under those constraints.
   a system whose every line has a reason the author can articulate.
 - **Consequences:** this entry is the citation for future "why didn't you..."
   questions; deviations from it require their own decision entry.
+
+## D-0015: Console bytes go through DBCN `console_write_byte` (FID 2)
+- Date: 2026-08-12 — Status: accepted
+- **Decision:** kernel console output uses the SBI Debug Console extension
+  (EID `0x4442434E` `"DBCN"`), function `console_write_byte` (FID 2). One
+  `ecall` per byte. Probe DBCN via BASE `sbi_probe_extension` (EID `0x10`,
+  FID 3) before the first write; if it is absent, abort (no legacy fallback).
+- **Alternatives considered:** legacy `sbi_console_putchar` (EID `0x01`, no
+  FID — rejected: deprecated, and it does not teach the `a7`/`a6` convention
+  SRST and TIME will use). DBCN `console_write` (FID 0, a whole buffer from a
+  physical address — deferred: same `Write::write_str` shape wants bytes, and
+  buffer-write is an optimization if console volume ever shows in M4 numbers).
+  Raw NS16550A MMIO (rejected in D-0004).
+- **Rationale:** DBCN is the current spec and the interface that survives;
+  FID 2 is the same shape as `core::fmt::Write` and ~10 lines; the calling
+  convention is the one every later SBI call will use.
+- **Consequences:** every printed byte traps to M-mode and back (slow; fine
+  for a debug console). A missing DBCN is a hard abort, not a silent fallback
+  to EID `0x01`. Revisit FID 0 only if M4 measurements blame console `ecall`
+  volume.
+
+## D-0016: Unmapped guard page below the boot stack (M1/T1.5)
+- Date: 2026-08-12 — Status: accepted (implement at M1/T1.5, not before)
+- **Decision:** once Sv39 is live, leave one 4 KiB page immediately below
+  `__boot_stack_bottom` unmapped so a stack overflow takes a store page fault
+  instead of silently corrupting whatever sits there.
+- **Alternatives considered:** keep the stack adjacent to `.bss` with no gap
+  (status quo until paging exists — there is no translation, so an unmapped
+  page cannot fault). A mapped guard with no W bit is equivalent on this
+  hardware; unmapped is simpler (no PTE to get wrong).
+- **Rationale:** today `__boot_stack_bottom` sits exactly at `__bss_end`.
+  Overflow walks downward into `.bss` (and then into `.data` / `.rodata` /
+  `.text`) with no trap. That is undetectable until some static is impossibly
+  wrong. Paging is the first moment the hardware can tell us.
+- **Consequences:** do **not** implement this in M0. T1.5's kernel map must
+  skip that page; the frame allocator must not hand it out. Revisit the
+  linker script then if the gap needs to be a named symbol.
+
+## D-0017: Shut down via SBI SRST; harness parses serial, not exit codes
+- Date: 2026-08-13 — Status: accepted (supersedes D-0011)
+- **Decision:** `shutdown()` probes and calls the SBI System Reset extension
+  (EID `0x53525354` `"SRST"`, FID 0, type=shutdown, reason=none). We accept
+  that this yields **no guest-controlled exit code**: QEMU exits 0 on
+  shutdown. Pass vs fail vs hang is distinguished by the test harness
+  parsing serial (`M0 BOOT OK` / `PANIC` / timeout), not by `echo $?`.
+- **Alternatives considered:** sifive_test MMIO at `0x0010_0000` (store
+  `0x5555` = exit 0, `(code << 16) | 0x3333` = exit `code` — rejected as
+  primary: QEMU-`virt`-only, and T1.5 would have to identity-map that page
+  W at the exact moment paging is already the project's hardest step). Keep
+  it in the debugging toolbox for contexts where SBI is unreachable.
+- **Rationale:** SRST is the firmware interface that survives onto real
+  hardware and needs no extra Sv39 mapping. The extra exit-code channel
+  buys nothing the harness does not already get from serial + timeout.
+- **Consequences:** a panic that parks looks like a hang to `timeout` unless
+  serial is grepped for `PANIC` **first** — `just test` does that. Verdicts:
+  marker + QEMU exit 0 → `TEST PASS` (exit 0); `PANIC` in serial →
+  `TEST FAIL` (exit 1, panic line echoed); timeout without panic →
+  `TEST HANG` (exit 2). A failed SRST call prints a reason and parks
+  (HANG, with that line). Revisit sifive_test only if a later harness
+  truly cannot parse serial.
