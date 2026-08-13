@@ -203,20 +203,12 @@ D-0011 onward are working decisions made under those constraints.
 ---
 
 ## D-0011: Clean exit via SBI system reset (SRST), not the sifive-test device
-- Date: 2026-08-12 — Status: accepted
+- Date: 2026-08-12 — Status: superseded by D-0017
 - **Decision:** `shutdown()` calls the SBI SRST extension (EID 0x53525354,
   type=shutdown); QEMU exits with code 0.
-- **Alternatives considered:** writing 0x5555 to the sifive-test MMIO device at
-  0x0010_0000 (works and allows arbitrary exit codes; rejected as primary
-  because it's a QEMU-`virt`-specific back door where SRST is the documented
-  firmware interface we already speak — one mechanism family, fewer special
-  cases). Keep it in the debugging toolbox for exiting from contexts where SBI
-  is unavailable (e.g. broken trap state).
-- **Rationale:** consistency with D-0004: talk to firmware until firmware
-  can't do the job.
-- **Consequences:** distinguishing pass/fail exits from the *test harness* is
-  done by matching serial output, not exit codes; revisit if M4 harness needs
-  guest-controlled exit codes (then the test device is the tool).
+- **Superseded because:** T0.5 re-opened the choice with the T1.5 mapping cost
+  and the harness's pass/fail/hang needs made explicit. D-0017 is the
+  decision as implemented.
 
 ## D-0012: Hardcode the QEMU `virt` memory map; do not parse the DTB
 - Date: 2026-08-12 — Status: accepted
@@ -303,3 +295,24 @@ D-0011 onward are working decisions made under those constraints.
 - **Consequences:** do **not** implement this in M0. T1.5's kernel map must
   skip that page; the frame allocator must not hand it out. Revisit the
   linker script then if the gap needs to be a named symbol.
+
+## D-0017: Shut down via SBI SRST; harness parses serial, not exit codes
+- Date: 2026-08-13 — Status: accepted (supersedes D-0011)
+- **Decision:** `shutdown()` probes and calls the SBI System Reset extension
+  (EID `0x53525354` `"SRST"`, FID 0, type=shutdown, reason=none). We accept
+  that this yields **no guest-controlled exit code**: QEMU exits 0 on
+  shutdown. Pass vs fail vs hang is distinguished by the test harness
+  parsing serial (`M0 BOOT OK` / `PANIC` / timeout), not by `echo $?`.
+- **Alternatives considered:** sifive_test MMIO at `0x0010_0000` (store
+  `0x5555` = exit 0, `(code << 16) | 0x3333` = exit `code` — rejected as
+  primary: QEMU-`virt`-only, and T1.5 would have to identity-map that page
+  W at the exact moment paging is already the project's hardest step). Keep
+  it in the debugging toolbox for contexts where SBI is unreachable.
+- **Rationale:** SRST is the firmware interface that survives onto real
+  hardware and needs no extra Sv39 mapping. The extra exit-code channel
+  buys nothing the harness does not already get from serial + timeout.
+- **Consequences:** a panic that parks looks like a hang to `timeout` unless
+  serial is grepped for `PANIC`. A failed SRST call (probe miss or `ecall`
+  returns) prints a reason and parks — diagnose as a hang with that line,
+  not as undefined fall-through. Revisit sifive_test only if a later
+  harness truly cannot parse serial.

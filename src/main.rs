@@ -2,10 +2,9 @@
 //!
 //! OpenSBI enters `_start` in S-mode with `a0` = hartid and `a1` = physical
 //! address of the device tree blob. `_start` sets `gp` and `sp`, zeros `.bss`,
-//! then calls `kmain`, which prints a hello line over the SBI debug console.
-//! A panic prints `PANIC at file:line: message` and parks. Clean shutdown is
-//! a later M0 task (docs/PLAN.md) — per project rules, nothing beyond the
-//! current milestone is implemented.
+//! then calls `kmain`, which prints a hello line over the SBI debug console
+//! and `M0 BOOT OK`, then asks OpenSBI to shut the machine down. A panic
+//! prints `PANIC at file:line: message` and parks.
 
 #![no_std]
 #![no_main]
@@ -58,13 +57,25 @@ _start:
 );
 
 /// Rust entry, called from `_start` with OpenSBI's boot arguments in `a0`/`a1`.
-/// Prints a hello line, then parks: `wfi` sleeps the hart until an interrupt
-/// would fire, and none is ever enabled.
+/// Prints hello and `M0 BOOT OK`, then shuts down via SRST. The
+/// `panic-selftest` feature panics instead, so the handler stays reachable
+/// without editing this file.
 #[no_mangle]
 extern "C" fn kmain(hartid: usize, dtb_pa: usize) -> ! {
     sbi::require_dbcn();
     println!("kestrel: hello from hart {}, dtb at {:#x}", hartid, dtb_pa);
+    #[cfg(feature = "panic-selftest")]
     panic!("selftest");
+    #[cfg(not(feature = "panic-selftest"))]
+    {
+        println!("M0 BOOT OK");
+        let ret = sbi::shutdown();
+        println!(
+            "shutdown failed: SRST error={} value={}",
+            ret.error, ret.value
+        );
+        park()
+    }
 }
 
 /// Set for the duration of `panic`. If we re-enter, `println!` is already on

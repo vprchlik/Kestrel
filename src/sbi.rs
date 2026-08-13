@@ -1,9 +1,8 @@
 //! SBI ecall wrapper: the only path from S-mode into OpenSBI.
 //!
 //! Owns the calling convention (EID in `a7`, FID in `a6`, args in `a0..a5`,
-//! `ecall`; error in `a0`, value in `a1` on return) and the DBCN console-byte
-//! function. Without this module the kernel cannot talk to firmware — no
-//! console, and later no timers or shutdown.
+//! `ecall`; error in `a0`, value in `a1` on return), DBCN console-byte, and
+//! SRST shutdown. Without this module the kernel cannot talk to firmware.
 
 use core::arch::asm;
 
@@ -21,6 +20,19 @@ pub const FID_BASE_PROBE: usize = 3;
 pub const EID_DBCN: usize = 0x4442_434E;
 /// `sbi_debug_console_write_byte`. SBI spec DBCN, FID 2.
 pub const FID_DBCN_WRITE_BYTE: usize = 2;
+
+/// System Reset extension. SBI spec, EID ASCII `"SRST"`.
+#[cfg_attr(feature = "panic-selftest", allow(dead_code))]
+pub const EID_SRST: usize = 0x5352_5354;
+/// `sbi_system_reset`. SBI spec SRST, FID 0.
+#[cfg_attr(feature = "panic-selftest", allow(dead_code))]
+pub const FID_SRST_RESET: usize = 0;
+/// Shutdown. SBI spec SRST, `reset_type`.
+#[cfg_attr(feature = "panic-selftest", allow(dead_code))]
+pub const SRST_TYPE_SHUTDOWN: usize = 0;
+/// No recorded reason. SBI spec SRST, `reset_reason`.
+#[cfg_attr(feature = "panic-selftest", allow(dead_code))]
+pub const SRST_REASON_NONE: usize = 0;
 
 /// Return of an SBI call: `a0` = error, `a1` = value.
 #[derive(Clone, Copy)]
@@ -90,4 +102,30 @@ pub fn console_write_byte(byte: u8) {
     if ret.error != SBI_SUCCESS {
         abort_sbi(ret.error);
     }
+}
+
+/// Ask OpenSBI to shut the machine down. Does not return on success.
+///
+/// Probes SRST first (same BASE probe as DBCN). If the extension is absent
+/// or `ecall` returns, returns that `Sbiret` so the caller can print and
+/// park — never fall off into whatever follows `call kmain`.
+#[cfg_attr(feature = "panic-selftest", allow(dead_code))]
+pub fn shutdown() -> Sbiret {
+    let probe = probe_extension(EID_SRST);
+    if probe.error != SBI_SUCCESS {
+        return probe;
+    }
+    if probe.value == 0 {
+        return Sbiret {
+            error: SBI_ERR_NOT_SUPPORTED,
+            value: 0,
+        };
+    }
+    ecall(
+        EID_SRST,
+        FID_SRST_RESET,
+        SRST_TYPE_SHUTDOWN,
+        SRST_REASON_NONE,
+        0,
+    )
 }

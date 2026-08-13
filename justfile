@@ -11,10 +11,20 @@ qemu_args := "-machine virt -nographic -bios default"
 build:
     cargo build
 
-# Boot in QEMU. Exit: Ctrl-a x. Extra QEMU flags as one quoted arg,
+# Boot in QEMU. Extra QEMU flags as one quoted arg,
 # e.g.  just run '-d int,cpu_reset,guest_errors -D qemu.log'
+# After T0.5, QEMU exits 0 on its own (no Ctrl-a x).
 run qemu_extra="": build
     {{qemu}} {{qemu_args}} {{qemu_extra}} -kernel {{kernel}}
+
+# Boot a build that panics in kmain (`panic!("selftest")`) and parks.
+# Compile-time cargo feature so the default image never contains the
+# selftest. Re-run in M1 after installing stvec to confirm the handler
+# still works when panic arrives from a trap context, not just kmain.
+# Parks, so wrap with timeout; exit with Ctrl-a x if running interactively.
+panic timeout_s="5":
+    cargo build --features panic-selftest
+    timeout --foreground {{timeout_s}} {{qemu}} {{qemu_args}} -kernel {{kernel}} || true
 
 # Boot frozen at reset (-S) with the GDB stub on tcp::1234 (-s).
 # Then attach from another terminal with `just gdb`, or press F5 in the editor.
