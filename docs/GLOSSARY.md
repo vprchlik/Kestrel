@@ -3,6 +3,11 @@
 Running list of terms, each defined in 2–3 sentences, in our project's
 context. Updated at the end of every milestone (project rule). Alphabetical.
 
+**A/D bits.** The Accessed and Dirty flags in an Sv39 PTE (bits 6 and 7).
+Some implementations, QEMU included depending on version and config, fault
+instead of setting them in hardware, so every kernel leaf is built with
+A=1 and D=1 (D-0019).
+
 **CLINT (Core-Local Interruptor).** The per-hart block on QEMU `virt` (at
 0x0200_0000) holding the `mtime` counter, the `mtimecmp` timer comparators, and
 software-interrupt registers. It is M-mode hardware: OpenSBI programs it on our
@@ -31,9 +36,27 @@ compressed encoding, so it is always 4 bytes and OpenSBI advances `mepc` by
 exactly 4; that fact does not license our S-mode handler to hardcode `sepc += 4`
 (see RVC).
 
+**first-fit.** The heap walks the free list and takes the first block that
+can satisfy the request. Combined with coalescing adjacent frees (D-0027)
+it is the K&R allocator: after `Vec` growth the old buffers merge into one
+hole rather than a staircase of unusable sizes.
+
+**frame.** A 4 KiB physical page. The frame allocator's intrusive free list
+owns `[__heap_end, RAM_END)`; the heap's variable-size blocks live in the
+1 MiB carve-out below that and never come from this list (D-0024).
+
+**GlobalAlloc.** Rust's `no_std` heap interface (`alloc` / `dealloc` with a
+`Layout` of size plus alignment). Our implementation panics on exhaustion
+with those two numbers and never returns null (D-0027).
+
 **hart.** A HARdware Thread — one independent instruction stream with its own
 registers and CSRs; a core with hyperthreading would be multiple harts. This
 project runs on exactly one hart (hart 0), by constraint D-0007.
+
+**identity map.** A translation where the virtual address equals the physical
+address. The kernel is identity-mapped (D-0006), so the PC, stack pointer,
+and return addresses keep their numeric values across the `satp` write —
+there is no higher-half trampoline.
 
 **mret / sret.** "Return from trap" instructions for M-mode and S-mode
 respectively: they restore the previous privilege level and interrupt-enable
@@ -66,6 +89,17 @@ address ranges to lower privilege levels, checked before paging even applies.
 OpenSBI uses PMP to protect its own RAM (first ~322 KiB at 0x8000_0000,
 observed on OpenSBI v1.3) — the reason an S-mode read of that region
 access-faults.
+
+**PPN / VPN.** Physical and virtual page numbers. An Sv39 VA splits into
+VPN[2]/VPN[1]/VPN[0] (9 bits each) plus a 12-bit offset; a leaf PTE's PPN
+concatenated with that offset is the PA. `satp.PPN` is the root table's
+address shifted right 12 — writing the address itself is a factor-of-4096
+error (PLAN M1 concept 11).
+
+**PTE (page-table entry).** A 64-bit Sv39 word: V/R/W/X/U/G/A/D in the low
+bits, PPN in [53:10]. Any of R/W/X set makes it a leaf (including a 2 MiB
+or 1 GiB superpage); a non-leaf must have V=1 and R=W=X=0 or the walk
+stops early (concept 11.4). We use only 4 KiB leaves (D-0026).
 
 **RVC (compressed instructions).** The C extension gives 16-bit encodings for
 common integer operations; a trap can land on either a 2-byte or a 4-byte
@@ -111,23 +145,39 @@ If the `ecall` returns, we print the error and park.
 **Sstc.** The RISC-V extension that gives S-mode a `stimecmp` CSR, so the
 supervisor can arm timer interrupts without an `ecall` into M-mode. OpenSBI
 v1.3 on QEMU `virt` advertises it as `Boot HART ISA Extensions: time,sstc`.
-Recorded for M1; unused until then — M1 still plans to go through the SBI
-TIME extension unless a later decision switches to `stimecmp`.
+M1 arms through SBI TIME instead (D-0018); Sstc is the M4 comparison, not
+the M1 mechanism.
+
+**superpage.** An Sv39 leaf at level 1 (2 MiB) or level 2 (1 GiB). The PPN
+must be aligned to that size or the walk faults. M1 maps everything with
+4 KiB (level-0) leaves (D-0026): kernel W^X and the 4 KiB guard already
+force that grain, and a mixed path is how a non-leaf with R/W/X set
+accidentally becomes a misaligned superpage.
 
 **Sv39.** The smallest rv64 virtual-memory mode: 39-bit virtual addresses
 translated through three levels of 512-entry page tables to 4 KiB pages (with
-2 MiB / 1 GiB leaves possible at higher levels). 512 GiB of address space —
-absurdly more than our 128 MiB of RAM, which is why we don't need Sv48.
+2 MiB / 1 GiB leaves possible at higher levels; we do not use them, D-0026).
+512 GiB of address space — absurdly more than our 128 MiB of RAM, which is
+why we don't need Sv48.
+
+**TIME (SBI).** The SBI extension we use to arm the supervisor timer
+(`sbi_set_timer`, absolute `rdtime` deadline). Re-arming is also how S-mode
+acknowledges `sip.STIP`, which is not write-clearable here (D-0018). 10 ms
+is 100_000 ticks at this platform's 10 MHz timebase.
 
 **timebase.** The rate of the `rdtime` / `mtime` counter. On QEMU `virt`,
 OpenSBI reports `Platform Timer Device: aclint-mtimer @ 10000000Hz` — 10 MHz,
-so 100 ns per tick. M1 will convert timeslices into comparator deltas with
-this number; unused until then.
+so 100 ns per tick. M1's timeslice is `rdtime() + 100_000` (D-0018).
 
 **TLB (Translation Lookaside Buffer).** The hart's cache of recent
 virtual→physical translations, consulted before walking page tables in memory.
 It is what makes paging fast and what makes *stale* mappings possible — hence
 `sfence.vma`.
+
+**TrapFrame.** The 272-byte register save area built on the kernel stack
+at trap entry: `x[0..31]` at `8 * regnum`, then `sepc` and `sstatus`
+(D-0020). `x[2]` is the pre-trap `sp`. Direct `stvec`; `sscratch` unused
+until M2.
 
 **unikernel.** A single application linked with exactly the OS services it
 needs into one bootable image — no processes, no dynamic loading, no
@@ -138,9 +188,14 @@ boundary and a 5-syscall interface so the isolation cost can be measured
 **virtio / virtio-mmio.** A standard family of paravirtual devices where guest
 and hypervisor share ring buffers (virtqueues) in guest memory instead of
 emulating real hardware registers. On `virt`, devices appear as virtio-mmio
-slots at 0x1000_1000–0x1000_8000; our M3 NIC is a `virtio-net-device`.
+slots at 0x1000_1000–0x1000_8000; our M3 NIC is a `virtio-net-device`. M1
+maps none of that MMIO (D-0025).
+
+**W^X.** Write xor execute: a page is never both writable and executable.
+Kernel `.text` is R+X, `.rodata` is R, `.data`/`.bss`/stack/heap/frames are
+R+W. The identity map enforces this at page granularity (D-0019).
 
 **wfi (Wait For Interrupt).** The instruction that hints the hart to sleep
 until an interrupt arrives — the polite form of an idle loop, and what our
-scaffold's parked hart executes. QEMU actually idles the host CPU on it,
-unlike a spin loop.
+parked hart executes. With `sie.STIE` set it wakes every 10 ms; that is not
+quiescence. QEMU actually idles the host CPU on it, unlike a spin loop.

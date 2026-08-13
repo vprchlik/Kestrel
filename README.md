@@ -7,8 +7,9 @@ compiled into the image, running in U-mode over a 5-syscall interface
 Linux VM. Built as a learning and portfolio project: **minimal and legible
 beats clever, everywhere.**
 
-**Status: M0 done.** OpenSBI → hello → `M0 BOOT OK` → QEMU exits 0.
-`just test` is the gate. M1 (traps, timer, paging, heap) is next.
+**Status: M1 done.** Traps, 10 ms ticks, frames, Sv39 identity map, heap.
+`just test` gates on `M1 FUNDAMENTALS OK`. M2 (U-mode, syscalls, scheduling)
+is next and is not started.
 
 ## Documentation map
 
@@ -26,8 +27,8 @@ beats clever, everywhere.**
 Environment setup: [docs/SETUP.md](docs/SETUP.md). Then:
 
 ```bash
-just run       # build + boot; QEMU exits 0 after M0 BOOT OK
-just test      # headless PASS (exit 0) on M0 BOOT OK
+just run       # build + boot; QEMU exits 0 after M1 FUNDAMENTALS OK
+just test      # headless PASS (exit 0) on M1 FUNDAMENTALS OK
 just test-panic
 just test-hang # FAIL (1) / HANG (2) — same harness, diverted builds
 just debug   # boot frozen with GDB stub; then `just gdb` or F5 in the editor

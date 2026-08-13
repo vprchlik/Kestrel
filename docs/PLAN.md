@@ -32,7 +32,7 @@ against a minimal Linux VM.
 | Milestone | Name | One-line goal | Status |
 |---|---|---|---|
 | M0 | Boot | OpenSBI → kernel entry → UART "hello" → clean QEMU exit | done |
-| M1 | Fundamentals | Traps, SBI timer interrupts, frame allocator, Sv39 paging, heap | not started |
+| M1 | Fundamentals | Traps, SBI timer interrupts, frame allocator, Sv39 paging, heap | done |
 | M2 | Execution | U-mode, 5 syscalls, context switch, preemptive scheduling of 2+ tasks | [TO BE DETAILED at milestone start] |
 | M3 | Unikernel | App-in-image as sole U-mode task, virtio-net, tiny HTTP responder | [TO BE DETAILED at milestone start] |
 | M4 | Evaluation | Scripted reproducible benchmarks vs minimal Linux VM + technical report | [TO BE DETAILED at milestone start] |
@@ -593,6 +593,30 @@ run.
 - **T1.8:** `GlobalAlloc` must honor `Layout::align()`, not just size. The
   heap region must come from the reserved carve-out rather than being placed
   by hand, or it will overlap the frame allocator's range.
+
+## M1 summary
+
+**Produced:** an S-mode kernel that takes delegated traps (Direct `stvec`,
+register-indexed `TrapFrame`), arms 10 ms ticks through SBI TIME, owns RAM
+as 4 KiB frames above a 1 MiB heap carve-out, identity-maps that RAM in Sv39
+with W^X and an unmapped stack-guard hole, and serves `Box`/`Vec`/`String`
+from a coalescing first-fit heap. Paging is validated in software (T1.6)
+before `satp` is written (T1.7). Page-fault probes and the T1.6 walk table
+are per-task checks and are not in the final image.
+
+**Acceptance proves:** `just test` finds `M1 FUNDAMENTALS OK` and exits 0.
+`just run` prints, in order, `CSR OK`, `TRAP OK`, `tick 10`, `tick 20`,
+`tick 30`, `FRAME OK`, `PAGETABLE OK`, `PAGING OK`, `HEAP OK`,
+`M1 FUNDAMENTALS OK`, then QEMU exits 0. `just test-panic` / `just test-hang`
+still distinguish FAIL from HANG.
+
+**Decisions this milestone:** D-0018 SBI TIME not Sstc; D-0019 map all of
+RAM R+W, intrusive frame list; D-0020 `TrapFrame` / Direct `stvec`; D-0021
+instruction width from the trapped bits, never on interrupts; D-0022 clear
+`sstatus.SIE` across `satp`; D-0023 hardcoded `RAM_END`, DTB header check
+then clobber; D-0024 1 MiB heap carve-out before the free list; D-0025 no
+MMIO in M1; D-0026 4 KiB leaves only, no superpages; D-0027 address-sorted
+heap free list, coalesce on free, first-fit.
 
 ---
 

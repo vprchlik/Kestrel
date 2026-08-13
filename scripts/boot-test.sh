@@ -6,7 +6,7 @@
 #   hang-selftest       → HANG
 set -u
 
-EXPECT="${EXPECT:-M0 BOOT OK}"
+EXPECT="${EXPECT:-M1 FUNDAMENTALS OK}"
 TIMEOUT_S="${TIMEOUT_S:-3}"
 FEATURE="${1:-}"
 TARGET="riscv64gc-unknown-none-elf"

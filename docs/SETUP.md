@@ -66,7 +66,7 @@ just build   # cross-compiles the scaffold kernel
 just test    # boots it headless, asserts on kernel marker
 ```
 
-Expected: `TEST PASS: found "M0 BOOT OK"` and exit 0. `just test-panic`
+Expected: `TEST PASS: found "M1 FUNDAMENTALS OK"` and exit 0. `just test-panic`
 exits 1; `just test-hang` exits 2.
 
 **3c. Debug loop:** `just debug` in one terminal (QEMU frozen, GDB stub on
