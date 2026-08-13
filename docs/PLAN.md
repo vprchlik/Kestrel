@@ -305,100 +305,288 @@ region built from frames) rather than pull in a crate — the point is being
 able to defend it (D-0013). Allocation failure panics loudly with the
 requested size; there is no OOM recovery story in a unikernel.
 
+**9. Delegation is not universal — read `medeleg`.** OpenSBI chooses which
+exceptions reach S-mode, and the boot log tells us exactly which. Observed on
+OpenSBI v1.3 / QEMU `virt`: `MEDELEG = 0xf0b509` delegates exception codes 0
+(instruction address misaligned), 3 (breakpoint), 8 (`ecall` from U-mode), 12,
+13, 15 (the three page faults), plus the H-extension guest-fault codes 20–23.
+It does **not** delegate 1 (instruction access fault), 2 (illegal instruction),
+4/6 (misaligned load/store), 5/7 (load/store access fault), or 9 (`ecall` from
+S-mode — that one is how we call SBI). `MIDELEG = 0x1666` includes bit 5, so
+supervisor timer interrupts do reach us. Two consequences: we cannot test our
+own handler with an illegal instruction, and a wild pointer into OpenSBI's
+PMP-protected RAM produces a *firmware* trap dump rather than ours. Knowing
+which codes can possibly arrive is what makes the "unknown trap" panic arm
+meaningful instead of decorative.
+
+**10. The CLINT is closed to S-mode.** OpenSBI's PMP setup prints
+`Region00: 0x02000000-0x0200ffff M: (I,R,W) S/U: ()`. The timer comparator
+`mtimecmp` lives in that range, so S-mode cannot write it: the store raises an
+access fault, and access faults are not delegated, so our handler would never
+even see the failure. This single hardware fact reduces "how do we arm a
+timer" to exactly two options — an SBI call into M-mode, or the Sstc
+extension's `stimecmp` CSR (see D-0018).
+
+**11. What makes the instruction after `csrw satp` fetch successfully.**
+`satp` is written as `MODE(=8, Sv39) << 60 | ASID(=0) << 44 | PPN(root)`, where
+PPN is the root table's physical address shifted right by 12. The write takes
+effect for this hart immediately. The **next instruction fetch** — at the
+address right after the `csrw`, and since we are identity mapped that is
+numerically the same address it was a cycle ago — is no longer a direct
+physical access. The hardware walker now performs, for that fetch: read the
+root table at `satp.PPN << 12` and index it with virtual address bits [38:30];
+if that entry is a pointer, read the level-1 table and index with bits [29:21];
+if that entry is a pointer, read the level-0 table and index with bits [20:12];
+take the leaf's PPN and concatenate the page offset from bits [11:0].
+
+For that fetch to succeed, **all** of the following must already be true
+before the `csrw` retires:
+
+1. `satp.MODE` is 8. If it is 0, translation never turns on and the whole
+   thing silently no-ops — you believe paging is live and it is not.
+2. `satp.PPN` is the root table's physical address **shifted right 12**, not
+   the address itself. Writing the address is a factor-of-4096 error that
+   lands the walker on garbage.
+3. The root table's entry for the PC's bits [38:30] has V=1.
+4. Every intermediate entry on the walk has V=1 and R=W=X=0. A non-leaf with
+   any of R/W/X set *is* a leaf; the walk stops early and either resolves to
+   the wrong physical page or faults as a misaligned superpage.
+5. The leaf has V=1 and X=1.
+6. The leaf has U=0. In S-mode, a leaf marked U=1 is inaccessible for
+   instruction fetch, and `sstatus.SUM` does not help — SUM affects loads and
+   stores only, never fetches. This is a corner that bites people in M2.
+7. The leaf has A=1, and D=1 for anything we will write. QEMU may fault rather
+   than set these itself, depending on version and configuration, so we set
+   them up front on every kernel leaf.
+8. The leaf's PPN maps back to the same physical frame, so the bytes fetched
+   are the instruction we compiled.
+9. The page tables themselves are at physical addresses the walker can read,
+   and PMP permits it. The walker uses physical addressing, so the tables do
+   **not** need to be mapped for the walk to work — but *we* need them mapped
+   to edit them afterwards, which identity mapping gives us free.
+10. The stack is mapped R+W before the next prologue, and `ra` points into
+    mapped X memory before the next `ret`.
+11. `stvec`'s target page is mapped X and the handler's stack is mapped W —
+    because if any of 1–10 is wrong, the resulting page fault vectors there,
+    and if that page is also unmapped the fault faults, forever, with no
+    output. That is the silent hang.
+12. **No interrupt arrives during the transition.** If `sstatus.SIE` is set and
+    the timer fires between the `csrw` and the `sfence.vma`, we take a trap
+    through a mapping we have not yet validated. Since T1.3 turns on 10 ms
+    ticks before T1.7 runs, this window is not hypothetical (see D-0022).
+
+Then `sfence.vma` with both operands zero, flushing everything. QEMU flushes on
+a `satp` write in practice, but the specification does not promise it, and a
+kernel that depends on unpromised behavior is a kernel that works until it does
+not.
+
+This enumeration is also the strongest available defense of D-0006: identity
+mapping means the PC, the stack pointer, and every return address keep their
+numeric values across the switch. A higher-half kernel has to map both the old
+and new views, jump, then drop the old one. That trampoline is why xv6 and
+Linux look the way they do here, and being able to say why we did not need one
+is a good interview answer.
+
+**12. Instruction width and `sepc`.** For an exception we resume *past*
+(`ebreak` in M1, `ecall` in M2), the handler must add the trapped
+instruction's width, because `sepc` points *at* the offending instruction and
+`sret` would re-execute it forever. Width comes from the low two bits of the
+instruction halfword at `sepc`: `0b11` means 4 bytes, anything else means 2
+(the C extension). For an **interrupt**, do not touch `sepc` — it already
+points at the instruction that has not run yet, and advancing it skips an
+instruction, silently, until the consequence is inexplicable. Two rules, one
+CSR; conflating them is a classic bug (see D-0021).
+
+## Kernel address space — the M1 target
+
+Single root table, identity mapped (VA = PA), one address space for the
+lifetime of the system (D-0006). Addresses below are after T1.5 inserts the
+guard page, which shifts everything above `.bss` up by one page.
+
+| Region | Range | Permissions | Why |
+|---|---|---|---|
+| OpenSBI firmware | `0x8000_0000 – 0x8006_0000` | **not mapped** | PMP already denies S-mode. Unmapped means a stray access is a page fault we decode, not an access fault firmware absorbs. |
+| Kernel `.text` | `0x8020_0000 – 0x8020_2000` | R + X | Executable, never writable. |
+| `.rodata` | `0x8020_2000 – 0x8020_3000` | R | No X, so a jump into a string constant faults. |
+| `.data` + `.bss` | `0x8020_3000 – 0x8020_4000` | R + W | No X. |
+| Stack guard | `0x8020_4000 – 0x8020_5000` | **not mapped** | D-0016. Overflow becomes a store page fault instead of silent `.bss` corruption. |
+| Boot stack | `0x8020_5000 – 0x8021_5000` | R + W | 64 KiB, grows down into the guard. |
+| Heap | 1 MiB above the stack | R + W | Carved before the free list (D-0024). |
+| Free frames | heap end – `0x8800_0000` | R + W | Page tables and, later, task stacks come from here (D-0019). |
+| MMIO (UART, virtio, sifive_test) | — | **not mapped** | D-0025. Console is an `ecall`; virtio is M3. |
+
+Every leaf carries A+D. Nothing outside these ranges is mapped at all, which is
+what makes both T1.7 fault probes meaningful: `0x9000_0000` is past the end of
+RAM, and the guard page is a hole inside it.
+
 ## Tasks
 
+Ten tasks. T1.0 is harness plumbing every later acceptance line depends on.
+T1.6 and T1.7 are deliberately split so the page tables are *validated in
+software* before they are activated — the split exists because activation is
+the one step in this project whose failure mode is a silent hang with no
+output.
+
+### T1.0 — Restore `expect` parameterization in the harness — S
+T0.6 replaced the old `just test expect=…` interface with
+`scripts/boot-test.sh` reading an `EXPECT` environment variable, so every
+per-task acceptance line below needs a one-command form. Add an `expect`
+parameter (and a `timeout_s` parameter) back to the `test` recipe, passing
+through to the script's environment.
+
+- **Acceptance:** `just test expect="M0 BOOT OK"` prints
+  `TEST PASS: found "M0 BOOT OK"` and exits 0; `just test-panic` still exits 1
+  and `just test-hang` still exits 2.
+
 ### T1.1 — CSR access module — S
-`riscv::csr` module: typed read/write/set/clear helpers for the CSRs listed
-above (macro or per-CSR functions — keep it boring), plus bitfield constants
-with spec citations.
+`csr` module: read/write/set/clear helpers for `sstatus`, `sie`, `sip`,
+`stvec`, `scause`, `sepc`, `stval`, `satp`, and `time` (macro or per-CSR
+functions — keep it boring), plus named bit constants with spec citations.
 
-- **Acceptance:** `kmain` prints `sstatus`, `sie`, `stvec` as hex at boot;
-  values are sane (e.g. `stvec` still 0 or OpenSBI's leftover before we set it).
+- **Acceptance:** boot prints `sstatus`, `sie`, `stvec`, `satp` as hex;
+  `satp` reads 0 (Bare mode, paging not yet on) and `stvec` reads whatever
+  OpenSBI left. `just test expect="CSR OK"` passes.
 
-### T1.2 — Trap vector, trap frame, dispatch — L
-Assembly `__trap_entry`: allocate a trap frame on the stack, save all 31 GPRs
-(+ `sepc`, `sstatus`), call Rust `trap_handler(&mut TrapFrame)`, restore,
-`sret`. `stvec` set to it (direct mode — note the 4-byte alignment
-requirement). Rust dispatch on `scause`: known causes handled, **everything
-unknown panics printing `scause`/`sepc`/`stval` decoded** per the fail-loudly
-rule.
+### T1.2 — Trap entry, frame, and dispatch — L
+Assembly `__trap_entry`: reserve 272 bytes on the current stack, save all 31
+GPRs plus `sepc` and `sstatus` at register-indexed offsets, pass the frame
+pointer to Rust `trap_handler(&mut TrapFrame)`, restore, `sret`. `stvec` set
+to it in Direct mode (4-byte alignment is mandatory — the low two bits are the
+mode field). Layout and the four M2-proofing constraints per D-0020; `sepc`
+advance per D-0021. Rust dispatch on `scause`: known causes handled,
+**everything unknown panics printing decoded `scause`, `sepc`, and `stval`**
+per the fail-loudly rule.
 
 - **Acceptance:** a deliberate `unsafe { asm!("ebreak") }` in `kmain` prints a
-  trap report with `scause=3 (breakpoint)`, `sepc` = the ebreak address, then
-  execution *continues* past it (handler advances `sepc` by the instruction
-  width) and prints `TRAP OK`.
+  trap report with `scause=3 (breakpoint)` and `sepc` equal to the `ebreak`
+  address, then execution *continues* past it and prints `TRAP OK`.
+  `just test expect="TRAP OK"` passes. Second check, now that `stvec` is
+  installed: `just panic` still prints its `PANIC at …` line (a panic arriving
+  from a trap context is a different situation than one from `kmain`).
 
-### T1.3 — Timer interrupts via SBI — M
-Enable `sie.STIE` and `sstatus.SIE`; arm the first timer via SBI `set_timer`;
-on supervisor-timer interrupt, increment a tick counter and re-arm at
-`now + 1_000_000` (100 ms at 10 MHz). Print a line every 10 ticks.
+### T1.3 — Timer interrupts via SBI TIME — M
+Probe the TIME extension via BASE (same shape as the DBCN and SRST probes),
+enable `sie.STIE` and `sstatus.SIE`, arm the first deadline, and on each
+supervisor-timer interrupt increment a tick counter and re-arm at
+`rdtime() + 100_000` (10 ms at 10 MHz). Print a line every 10 ticks. Keep the
+arm in a single function so the M4 Sstc comparison is a one-site change
+(D-0018).
 
-- **Acceptance:** `just run` prints `tick 10`, `tick 20`, `tick 30` at ~1 s
-  wall-clock intervals (then shuts down after 30 for the test:
-  `just test expect="tick 30"` passes).
+- **Acceptance:** `just test expect="tick 30"` passes — 30 ticks is 0.3 s,
+  comfortably inside the 3 s hang-guard. Serial shows `tick 10`, `tick 20`,
+  `tick 30`.
 
 ### T1.4 — Physical frame allocator — M
-Free-list allocator over `[align_up(__kernel_end, 4K), 0x8800_0000)`.
-`alloc_frame() -> PhysFrame` (zeroed), `free_frame(PhysFrame)`. Panics on
-exhaustion, panics on double-free of the most recent frame (cheap check),
-frames are 4 KiB-aligned by construction.
+Intrusive free-list allocator over `[heap_end, RAM_END)`, where the heap region
+is carved first (D-0024) and `RAM_END` is the hardcoded `0x8800_0000` validated
+per D-0023. Each free frame stores its successor in its own first 8 bytes, so
+total metadata is one head pointer in `.bss`. `alloc_frame()` returns a zeroed
+4 KiB-aligned frame; `free_frame()` pushes it back. Panics on exhaustion with
+the frame count; panics on the cheap double-free check (freeing the current
+head).
 
-- **Acceptance:** boot-time self-test: allocate two frames (distinct, aligned,
-  zeroed), free the first, allocate again and get it back (LIFO), prints
-  `FRAME OK`. Run under `just test expect="FRAME OK"`.
+- **Acceptance:** boot self-test allocates two frames (distinct, aligned,
+  zeroed), frees the first, reallocates and gets it back (LIFO); prints the
+  total frame count and `FRAME OK`. `just test expect="FRAME OK"` passes.
 
-### T1.5 — Sv39 paging with kernel mapped — L
-Page-table module: PTE type with flag constants, `map(root, va, pa, flags)`
-that walks/creates intermediate tables from the frame allocator. Build the
-kernel address space: identity-map `.text` R+X, `.rodata` R, `.data`/`.bss`/
-stack/heap-to-be R+W (section boundaries from linker symbols — this is why W^X
-needs the linker script's 4 KiB alignment), identity-map the UART page and
-virtio-mmio range R+W for later, set A+D on all leaves. Write `satp`,
-`sfence.vma`, and *keep executing*.
+### T1.5 — Linker script: guard-page hole and heap symbols — S
+Insert an unmapped 4 KiB hole between `__bss_end` and `__boot_stack_bottom`
+(implements D-0016 — today they are the same address, so overflow walks
+straight into `.bss`), and export heap-region symbols for T1.8. Everything
+above shifts up by one page.
 
-- **Acceptance:** prints `PAGING OK` from virtual (=identity) addresses after
-  the `satp` write; then a deliberate read of an unmapped address (e.g.
-  0x9000_0000) produces our loud panic with `scause=13 (load page fault)`,
-  `stval=0x90000000`. Both observed in one `just run`.
+- **Acceptance:** `nm` shows `__boot_stack_bottom == __bss_end + 0x1000`; the
+  kernel still boots and `just test expect="M0 BOOT OK"` passes.
 
-### T1.6 — Heap allocator — M
-Fixed-size heap region (e.g. 1 MiB) built from frames, linked-list free-block
-allocator behind `#[global_allocator]`, `extern crate alloc`.
+### T1.6 — Build the page tables *without* activating them — M
+Page-table module: PTE type with flag constants, and `map(root, va, pa, flags)`
+walking and creating intermediate tables from the frame allocator. Build the
+kernel address space per D-0019 and D-0025: `.text` R+X, `.rodata` R,
+`.data`/`.bss` R+W, guard page absent, stack R+W, heap R+W, all remaining RAM
+R+W, OpenSBI's region and all MMIO unmapped, A+D set on every leaf. Then walk
+the finished tables **in software** and print the resolved translation and
+permissions for a list of probes: kernel entry, a `.rodata` address, a stack
+address, the guard page, and `0x9000_0000`. Nothing touches `satp`.
 
-- **Acceptance:** boot self-test: `Box::new(42)`, a `Vec` pushed to 10_000
+- **Acceptance:** the printed walk matches expected permissions for every
+  probe, the guard page and `0x9000_0000` both resolve to "unmapped", and
+  `just test expect="PAGETABLE OK"` passes. This is the task that makes T1.7
+  survivable: you verify the map is right before betting the machine on it.
+
+### T1.7 — Activate paging — L
+Clear `sstatus.SIE` (D-0022 — timer ticks have been live since T1.3), write
+`satp`, `sfence.vma`, restore `SIE`, and keep executing. Prerequisite concept
+11 is the checklist for this task; DEBUGGING.md §4 has the first-response
+procedure when it hangs.
+
+- **Acceptance:** prints `PAGING OK` after the switch; a deliberate read of
+  `0x9000_0000` panics with `scause=13 (load page fault)`,
+  `stval=0x90000000`; a deliberate write into the guard page panics with
+  `scause=15 (store page fault)` and `stval` inside the guard. All three
+  observed in one `just run`. The two fault probes are then removed and
+  `just test expect="PAGING OK"` passes.
+
+### T1.8 — Heap allocator — M
+Linked-list free-block allocator over the reserved heap region behind
+`#[global_allocator]`, `extern crate alloc`. Honors `Layout::align()`. Panics
+on exhaustion with the requested size and alignment.
+
+- **Acceptance:** boot self-test: `Box::new(42)`, a `Vec` grown to 10_000
   elements (forces realloc), a `String`, drop everything, allocate again;
-  prints `HEAP OK`. Milestone wrap: final line `M1 FUNDAMENTALS OK`, clean
-  shutdown, `just test expect="M1 FUNDAMENTALS OK"` passes.
+  prints `HEAP OK`. `just test expect="HEAP OK"` passes.
+
+### T1.9 — Milestone wrap — S
+Print the final marker, update the harness default marker to
+`M1 FUNDAMENTALS OK`, update GLOSSARY and DECISIONS, and run the five-question
+quiz.
+
+- **Acceptance:** `just test` (no arguments) passes on the new default marker.
 
 ## Milestone acceptance test
 
 ```
-$ just test expect="M1 FUNDAMENTALS OK"
+$ just test
 ```
-passes, and the serial log from `just run` contains, in order: `TRAP OK`,
-`tick 30`, `FRAME OK`, `PAGING OK`, the demonstration page-fault panic is
-**not** present in the final run (it's a per-task check, commented out after
-T1.5), `HEAP OK`, `M1 FUNDAMENTALS OK`, clean exit 0.
+prints `TEST PASS: found "M1 FUNDAMENTALS OK"` and exits 0, and the serial log
+from `just run` contains, in order: `CSR OK`, `TRAP OK`, `tick 10`, `tick 20`,
+`tick 30`, `FRAME OK`, `PAGETABLE OK`, `PAGING OK`, `HEAP OK`,
+`M1 FUNDAMENTALS OK`, then a clean exit 0. The deliberate page-fault probes
+from T1.6 and T1.7 are per-task checks and are **not** present in the final
+run.
 
 ## Risks and likely failure modes
 
-- **T1.2:** `stvec` low bits are a *mode* field — an unaligned handler address
-  silently changes trap mode. A single clobbered register in save/restore
-  causes corruption that surfaces far from the trap — diff the frame in GDB.
-  Taking a trap before `stvec` is set (or inside the handler) = instant hang.
-- **T1.3:** `sie.STIE` vs `sstatus.SIE` confusion (need both); absolute vs.
-  delta timer value; interrupt storm if the pending bit is never cleared by
-  re-arming.
-- **T1.5:** the moment of `satp` write is the project's first cliff — if the
-  currently-executing PC isn't mapped X, you get an instruction page fault
-  whose handler also isn't mapped: silent hang, debuggable only via QEMU
-  `-d int` / `info registers`. Missing A/D bits fault on some QEMU configs.
-  Forgetting `sfence.vma`. Mapping sections with wrong granularity because the
-  linker script didn't 4K-align them. Stack not mapped W. UART page unmapped
-  (only matters if/when we bypass SBI console).
-- **T1.6:** alignment handling in `GlobalAlloc` (must honor `Layout.align()`);
-  heap region overlapping something else because it was carved by hand instead
-  of from the frame allocator.
+- **T1.2:** `stvec`'s low two bits are a *mode* field, so an unaligned handler
+  address silently changes trap mode instead of being rejected. A single
+  clobbered register in save/restore causes corruption that surfaces far from
+  the trap — diff the frame in GDB rather than reading the assembly again.
+  Taking a trap before `stvec` is set, or inside the handler, is an instant
+  hang. Note also that codes 1, 2, 4, 5, 6, and 7 are **not delegated** on
+  this platform (prerequisite concept 9): if you are hunting a fault and our
+  handler is silent while OpenSBI prints a dump, that is why — not a bug in
+  our dispatch.
+- **T1.3:** `sie.STIE` and `sstatus.SIE` are both required and are easy to
+  confuse. The SBI timer argument is an **absolute** counter value, not a
+  delta. `sip.STIP` is not write-clearable from S-mode — re-arming *is* the
+  acknowledgement, so "forgot to re-arm" presents as either one interrupt ever
+  or an interrupt storm depending on which half you got wrong.
+- **T1.4:** the free list lives *inside* the frames it manages, so it depends
+  on all of RAM being addressable (D-0019). The DTB at `0x87e0_0000` sits
+  inside the range handed to the allocator and will eventually be clobbered —
+  which is fine, but only if the D-0023 sanity check runs *before* allocator
+  init.
+- **T1.5:** the guard page shifts the stack and `__kernel_end`; anything that
+  hardcoded a stack address needs to follow.
+- **T1.7:** the project's first cliff. If the currently-executing PC is not
+  mapped X you take an instruction page fault whose handler is also unmapped:
+  a tight trap loop with no output, debuggable only via QEMU `-d int` and the
+  monitor. Missing A/D bits fault on some QEMU configurations. Forgetting
+  `sfence.vma` works until it does not. Wrong `satp.PPN` shift is a
+  factor-of-4096 error. A timer interrupt inside the transition window
+  vectors through a mapping that has not been validated (D-0022).
+- **T1.8:** `GlobalAlloc` must honor `Layout::align()`, not just size. The
+  heap region must come from the reserved carve-out rather than being placed
+  by hand, or it will overlap the frame allocator's range.
 
 ---
 

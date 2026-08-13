@@ -142,6 +142,7 @@ never reached your code. In rough order of likelihood:
 1. The `satp` write with the current PC not identity-mapped X → instruction
    page fault → handler also unmapped → tight trap loop. `-d int` shows
    repeating cause 12 with `epc` = instruction after the `csrw satp`.
+   Full first-response procedure for T1.7 below this list.
 2. `stvec` unset/misaligned when the first trap arrives (low 2 bits of `stvec`
    are a MODE field — a non-4-byte-aligned handler address silently corrupts
    both mode and address). Advancing `sepc` is a separate footgun: `ecall` is
@@ -163,6 +164,38 @@ never reached your code. In rough order of likelihood:
    it. Drop the loop off the M1 suspect list unless the bounds themselves
    change (new sections, a broken `__bss_end`). A later static that reads
    nonzero is then a bug in the reader, not in `_start`.
+
+**T1.7 (activating paging) — first response when it hangs**
+
+The symptom is total silence right after the `satp` write, because the fault
+handler's own page is unmapped and the fault faults. There is no panic to read,
+so both channels here are outside the guest:
+
+1. **`-d int`.** A repeating cause-12 block whose `epc` equals the instruction
+   *after* the `csrw satp` is the signature: the PC is not mapped executable
+   under the new tables. Read the *first* block, not the hundredth — the rest
+   are the loop.
+2. **Monitor `info mem`.** This dumps the decoded Sv39 tables. Compare it
+   against the linker map and against the expected permissions in PLAN.md's
+   M1 memory-map table. Answering "did I map what I think I mapped" takes one
+   command and beats an hour of re-reading the mapping code.
+3. **Work prerequisite concept 11 as a checklist** (PLAN.md, M1). It
+   enumerates the twelve conditions that must hold before the `csrw` retires,
+   in roughly the order they break: `MODE`, the `PPN` shift, the root entry,
+   non-leaf `R=W=X=0`, leaf `X`, leaf `U=0`, `A`/`D`, identity, walker
+   reachability, stack and `ra`, the `stvec` page, and the interrupt window.
+4. **Suspect the two silent ones first.** `satp.MODE=0` means paging never
+   turned on at all (everything "works", nothing is translated), and writing
+   the root table's address instead of its address-shifted-right-12 is a
+   factor-of-4096 error that points the walker at garbage. Neither announces
+   itself.
+5. **If it hangs only sometimes, it is the interrupt window** (D-0022): a tick
+   landing between the `csrw` and the `sfence.vma`. Confirm by checking that
+   `sstatus.SIE` is clear across the switch.
+
+If T1.6's software walk passed and T1.7 still hangs, the disagreement is
+between what the tables say and what the hardware is doing with them — which
+narrows it to the `satp` value itself (items 1, 2) or the fence.
 
 **M2 (expand at milestone start)**
 1. `sret` to U-mode with `sstatus.SPP` still S, or `sepc` bogus.
