@@ -185,9 +185,9 @@ never reached your code. In rough order of likelihood:
     between `__bss_end` and `__boot_stack_bottom`. Paging is still off, so
     that hole is ordinary RAM: a stack overflow still stores into `.bss`.
     T1.6 omits the page from the tables; T1.7 makes the omission a
-    store page fault. Do not treat a boot after T1.5 as proof of overflow
-    protection. T1.6 prints `root_pa` and `satp_would_write` without
-    writing `satp` — T1.7 must write that same value, `MODE=8 << 60 | PPN`.
+    store page fault (`scause=15`). T1.6 prints `root_pa` and
+    `satp_would_write` without writing `satp` — T1.7 writes that same
+    value, `MODE=8 << 60 | PPN`.
 
 **T1.7 (activating paging) — first response when it hangs**
 

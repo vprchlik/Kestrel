@@ -77,6 +77,12 @@ extern "C" {
     fn __trap_entry();
 }
 
+/// Physical/virtual address of `__trap_entry` (identity mapped). Used by
+/// `page::activate` to confirm the `stvec` page is mapped X before `satp`.
+pub fn entry_pa() -> usize {
+    __trap_entry as *const () as usize
+}
+
 /// Point `stvec` at `__trap_entry` in Direct mode. Panics if the symbol is
 /// not 4-byte aligned: writing a misaligned address would silently set MODE
 /// to Vectored (or reserved) instead of erroring (D-0020).
@@ -139,7 +145,28 @@ extern "C" fn trap_handler(frame: &mut TrapFrame) {
             let half = unsafe { core::ptr::read(frame.sepc as *const u16) };
             frame.sepc += instruction_width(half);
         }
+        csr::scause::EXC_INST_PAGE_FAULT
+        | csr::scause::EXC_LOAD_PAGE_FAULT
+        | csr::scause::EXC_STORE_PAGE_FAULT => {
+            panic!(
+                "trap scause={} ({}) sepc={:#x} stval={:#x} sp={:#x}",
+                code,
+                page_fault_name(code),
+                frame.sepc,
+                stval,
+                frame.sp()
+            );
+        }
         _ => unknown_trap(scause, code, false, frame, stval),
+    }
+}
+
+fn page_fault_name(code: usize) -> &'static str {
+    match code {
+        csr::scause::EXC_INST_PAGE_FAULT => "instruction page fault",
+        csr::scause::EXC_LOAD_PAGE_FAULT => "load page fault",
+        csr::scause::EXC_STORE_PAGE_FAULT => "store page fault",
+        _ => "page fault",
     }
 }
 

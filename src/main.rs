@@ -6,8 +6,8 @@
 //! a boot CSR snapshot, installs the trap handler, continues past a
 //! deliberate `ebreak`, waits for 30 timer ticks, runs a frame-allocator
 //! self-test, builds Sv39 page tables and walks them in software
-//! (`PAGETABLE OK`), and `M0 BOOT OK`, then asks OpenSBI to shut the machine
-//! down. A panic prints `PANIC at file:line: message` and parks.
+//! (`PAGETABLE OK`), activates Sv39 (`PAGING OK`), and `M0 BOOT OK`, then
+//! asks OpenSBI to shut the machine down. A panic prints `PANIC at file:line: message` and parks.
 
 #![no_std]
 #![no_main]
@@ -68,7 +68,8 @@ _start:
 /// Prints hello, the boot CSR snapshot (`CSR OK`), installs `stvec`, starts
 /// 10 ms ticks, continues past an `ebreak` (`TRAP OK`), waits for `tick 30`,
 /// checks the DTB then the frame allocator (`FRAME OK`), builds page tables
-/// without writing `satp` (`PAGETABLE OK`), and `M0 BOOT OK`, then shuts
+/// without writing `satp` (`PAGETABLE OK`), activates Sv39 (`PAGING OK`),
+/// and `M0 BOOT OK`, then shuts
 /// down via SRST. The `panic-selftest` / `hang-selftest` features
 /// divert that path so the harness can exercise FAIL and HANG without
 /// editing this file.
@@ -128,6 +129,7 @@ extern "C" fn kmain(hartid: usize, dtb_pa: usize) -> ! {
         frame::init();
         frame::self_test();
         page::init();
+        page::activate();
         println!("M0 BOOT OK");
         let ret = sbi::shutdown();
         println!(
