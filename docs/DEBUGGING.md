@@ -181,6 +181,12 @@ never reached your code. In rough order of likelihood:
    it. Drop the loop off the M1 suspect list unless the bounds themselves
    change (new sections, a broken `__bss_end`). A later static that reads
    nonzero is then a bug in the reader, not in `_start`.
+10. **T1.5 guard page is inert until T1.7.** The linker leaves a 4 KiB hole
+    between `__bss_end` and `__boot_stack_bottom`. Paging is still off, so
+    that hole is ordinary RAM: a stack overflow still stores into `.bss`.
+    T1.6 will omit the page from the tables; T1.7 makes the omission a
+    store page fault. Do not treat a boot after T1.5 as proof of overflow
+    protection.
 
 **T1.7 (activating paging) — first response when it hangs**
 

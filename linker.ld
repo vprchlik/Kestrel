@@ -55,12 +55,19 @@ SECTIONS
     . = ALIGN(4K);
     __bss_end = .;
 
-    /* Boot stack: 64 KiB, NOLOAD (nothing to store in the image; stacks
-     * don't need initialization). Kept outside __bss_start/__bss_end so the
-     * M0 bss-clearing loop doesn't zero the stack it may be standing on.
- * No guard page until paging exists (M1/T1.5, see D-0016): overflow
- * silently corrupts .bss, which sits immediately below. */
-    .boot_stack (NOLOAD) : ALIGN(16) {
+    /* D-0016: 4 KiB hole between .bss and the boot stack.
+     *
+     * Linker-script hole only — not a section, not in the image. Paging is
+     * still off, so this range is ordinary RAM: a stack overflow still
+     * stores into .bss exactly as when __boot_stack_bottom == __bss_end.
+     * The guard is inert until T1.6 leaves this page out of the tables and
+     * T1.7 activates translation. The frame allocator starts at __heap_end
+     * and never hands this page out. */
+    . += 4K;
+
+    /* Boot stack: 64 KiB, NOLOAD. Kept outside __bss_start/__bss_end so the
+     * M0 bss-clearing loop doesn't zero the stack it may be standing on. */
+    .boot_stack (NOLOAD) : {
         __boot_stack_bottom = .;
         . += 64K;
         __boot_stack_top = .;
@@ -68,6 +75,16 @@ SECTIONS
 
     . = ALIGN(4K);
     __kernel_end = .;
+
+    /* D-0024: 1 MiB heap, carved here before the free list. Location-counter
+     * only — nothing is stored in the image.
+     *   __heap_start / __heap_end : T1.6 maps the range R+W; T1.8's
+     *     GlobalAlloc manages blocks inside it.
+     *   __heap_end                : T1.4 free list starts here (and T1.6
+     *     maps [__heap_end, RAM_END) as free frames). */
+    __heap_start = .;
+    . += 1M;
+    __heap_end = .;
 
     /DISCARD/ : {
         *(.eh_frame .eh_frame_hdr)
