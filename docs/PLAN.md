@@ -406,15 +406,17 @@ guard page, which shifts everything above `.bss` up by one page.
 
 | Region | Range | Permissions | Why |
 |---|---|---|---|
-| OpenSBI firmware | `0x8000_0000 – 0x8006_0000` | **not mapped** | PMP already denies S-mode. Unmapped means a stray access is a page fault we decode, not an access fault firmware absorbs. |
-| Kernel `.text` | `0x8020_0000 – 0x8020_2000` | R + X | Executable, never writable. |
-| `.rodata` | `0x8020_2000 – 0x8020_3000` | R | No X, so a jump into a string constant faults. |
-| `.data` + `.bss` | `0x8020_3000 – 0x8020_4000` | R + W | No X. |
-| Stack guard | `0x8020_4000 – 0x8020_5000` | **not mapped** | D-0016. Overflow becomes a store page fault instead of silent `.bss` corruption. |
-| Boot stack | `0x8020_5000 – 0x8021_5000` | R + W | 64 KiB, grows down into the guard. |
-| Heap | 1 MiB above the stack | R + W | Carved before the free list (D-0024). |
-| Free frames | heap end – `0x8800_0000` | R + W | Page tables and, later, task stacks come from here (D-0019). |
+| OpenSBI firmware | `[RAM_START, __kernel_start)` | **not mapped** | PMP already denies S-mode. Unmapped means a stray access is a page fault we decode, not an access fault firmware absorbs. |
+| Kernel `.text` | `[__kernel_start, __rodata_start)` | R + X | Executable, never writable. |
+| `.rodata` | `[__rodata_start, __data_start)` | R | No X, so a jump into a string constant faults. |
+| `.data` + `.bss` | `[__data_start, __bss_end)` | R + W | No X. |
+| Stack guard | `[__bss_end, __boot_stack_bottom)` | **not mapped** | D-0016. Overflow becomes a store page fault instead of silent `.bss` corruption. |
+| Boot stack | `[__boot_stack_bottom, __boot_stack_top)` | R + W | 64 KiB, grows down into the guard. |
+| Heap | `[__heap_start, __heap_end)` | R + W | Carved before the free list (D-0024). |
+| Free frames | `[__heap_end, RAM_END)` | R + W | Page tables and, later, task stacks come from here (D-0019). |
 | MMIO (UART, virtio, sifive_test) | — | **not mapped** | D-0025. Console is an `ecall`; virtio is M3. |
+
+Numeric bounds come from the linker and `frame::RAM_END`, not from literals in this table. T1.6 maps by those symbols. After T1.5: `__kernel_start = 0x8020_0000`, `__boot_stack_bottom = __bss_end + 0x1000`, `__heap_end = __heap_start + 1 MiB`, `RAM_END = 0x8800_0000`.
 
 Every leaf carries A+D. Nothing outside these ranges is mapped at all, which is
 what makes both T1.7 fault probes meaningful: `0x9000_0000` is past the end of
@@ -502,12 +504,15 @@ above shifts up by one page.
 ### T1.6 — Build the page tables *without* activating them — M
 Page-table module: PTE type with flag constants, and `map(root, va, pa, flags)`
 walking and creating intermediate tables from the frame allocator. Build the
-kernel address space per D-0019 and D-0025: `.text` R+X, `.rodata` R,
+kernel address space per D-0019, D-0025, and D-0026: `.text` R+X, `.rodata` R,
 `.data`/`.bss` R+W, guard page absent, stack R+W, heap R+W, all remaining RAM
-R+W, OpenSBI's region and all MMIO unmapped, A+D set on every leaf. Then walk
-the finished tables **in software** and print the resolved translation and
-permissions for a list of probes: kernel entry, a `.rodata` address, a stack
-address, the guard page, and `0x9000_0000`. Nothing touches `satp`.
+R+W, OpenSBI's region and all MMIO unmapped, A+D set on every leaf, 4 KiB
+leaves only. Then walk the finished tables **in software** (raw PTE decode by
+bit position — not the mapper's helpers) and print the resolved translation
+and permissions for a list of probes: kernel entry, a `.text` address, a
+`.rodata` address, a stack address, a heap address, the guard page, and
+`0x9000_0000`. Print the root PA and the `satp` value we would write. Nothing
+touches `satp`.
 
 - **Acceptance:** the printed walk matches expected permissions for every
   probe, the guard page and `0x9000_0000` both resolve to "unmapped", and
