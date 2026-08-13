@@ -564,3 +564,31 @@ D-0011 onward are working decisions made under those constraints.
   resolves at level 1 or 2. Revisit only if a later milestone has a real
   reason to map a huge contiguous R+W region at a coarser grain — and then
   only with an explicit alignment check on the leaf PPN.
+
+## D-0027: Address-sorted heap free list, coalesce on free, first-fit
+- Date: 2026-08-13 — Status: accepted
+- **Decision:** the kernel heap is a first-fit free list of variable-size
+  blocks over `[__heap_start, __heap_end)`, kept sorted by address.
+  `dealloc` coalesces with the previous and next block when they are
+  adjacent. The block header sits immediately before the aligned user
+  pointer. Prefix bytes needed to satisfy `Layout::align` are split back
+  into the free list when they are large enough to hold a header; otherwise
+  they are absorbed into the allocated block (recorded as pad, recovered on
+  free). Exhaustion panics with the requested size and alignment; `alloc`
+  never returns null.
+- **Alternatives considered:** no coalescing (rejected: Vec growth frees
+  each previous buffer next to the last one, and without a merge those
+  holes cannot satisfy the next doubling — the 1 MiB tail would hide it
+  until a later workload). Best-fit (rejected: more walk, same M1
+  workload). A bitmap or buddy over the same 1 MiB (rejected: D-0013 /
+  D-0014 — the linked list is the thing we have to defend). Returning
+  null from `GlobalAlloc` and relying on `handle_alloc_error` (rejected:
+  the panic message would not include size and align).
+- **Rationale:** an address-sorted list makes adjacency a pointer
+  comparison at insert time, so coalescing is the cheap correctness
+  property rather than an extra pass. First-fit plus coalesce is the K&R
+  allocator; that is the interview explanation.
+- **Consequences:** a stream of mixed-size alloc/free that never produces
+  adjacent holes can still fragment until a request fails with free bytes
+  remaining. M1's self-test does not hit that; if M2/M3 does, it is a
+  finding, not a silent crate swap.
