@@ -51,11 +51,15 @@ test expect="M0 BOOT OK" timeout_s="3":
     case "$t" in timeout_s=*) t="${t#timeout_s=}" ;; esac
     EXPECT="$e" TIMEOUT_S="$t" bash scripts/boot-test.sh
 
+# Invert the script's intentional non-zero so just does not print
+# "recipe failed" for a designed FAIL/HANG. `-` would also hide a
+# regression (panic-selftest shutting down cleanly would look green).
+# `just test` is unchanged: it still fails the recipe on a non-pass.
 test-panic:
-    bash scripts/boot-test.sh panic-selftest
+    bash scripts/boot-test.sh panic-selftest; [ $? -eq 1 ]
 
 test-hang:
-    bash scripts/boot-test.sh hang-selftest
+    bash scripts/boot-test.sh hang-selftest; [ $? -eq 2 ]
 
 # Disassemble the kernel. Extra flags as one quoted arg, e.g. just objdump '-d --source'
 objdump flags="-d": build

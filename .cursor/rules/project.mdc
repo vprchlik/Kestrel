@@ -75,6 +75,9 @@ a nontrivial choice silently.
 
 # Git hygiene
 
+- New branches get plain descriptive names with no tool prefix and no random
+  suffix — e.g. `m1-fundamentals`, `m2-execution`. Never create a branch
+  under a `cursor/` namespace.
 - Commits are meaningful units at **task boundaries**, not bulk dumps of a
   whole milestone. One task, one commit (plus a follow-up only if the
   verification step forced a real fix).

@@ -143,21 +143,28 @@ never reached your code. In rough order of likelihood:
    page fault → handler also unmapped → tight trap loop. `-d int` shows
    repeating cause 12 with `epc` = instruction after the `csrw satp`.
    Full first-response procedure for T1.7 below this list.
-2. `stvec` unset/misaligned when the first trap arrives (low 2 bits of `stvec`
+2. **Before T1.2 installs `__trap_entry`:** OpenSBI leaves `stvec =
+   0x80200000` (our `_start`, Direct mode). Any *delegated* exception jumps
+   there, so `_start` re-runs: `gp`/`sp` reset, `.bss` zeroed, `kmain` again.
+   Symptom is a repeating OpenSBI banner plus `kestrel: hello` line — not a
+   hang, not a firmware dump, not a trap report. T1.2's `stvec` write
+   eliminates this. Codes 1/2/4/5/6/7 are still not delegated and still
+   produce a firmware dump if they fire.
+3. `stvec` unset/misaligned when the first trap arrives (low 2 bits of `stvec`
    are a MODE field — a non-4-byte-aligned handler address silently corrupts
    both mode and address). Advancing `sepc` is a separate footgun: `ecall` is
    always 4 bytes, but the trapped instruction in general may be 2 (RVC).
    Hardcoding `sepc += 4` in our handler will skip a byte after a compressed
    trap. Decode width from the instruction at `sepc` (see GLOSSARY: RVC).
-3. Trap handler itself faults (unmapped stack, clobbered register) →
+4. Trap handler itself faults (unmapped stack, clobbered register) →
    recursive trap → loop. `-d int`: alternating/nested causes.
-4. Missing `sfence.vma` after editing PTEs → stale TLB → works, then faults
+5. Missing `sfence.vma` after editing PTEs → stale TLB → works, then faults
    "impossibly" — or works in QEMU and would fail on hardware. Fence after
    every PTE change (project rule).
-5. Missing A/D bits in PTEs → cause 13/15 on first touch, on QEMU configs that
+6. Missing A/D bits in PTEs → cause 13/15 on first touch, on QEMU configs that
    don't set them in hardware. We set A|D on all kernel leaves (PLAN M1/T1.5).
-6. Timer interrupt enabled before `stvec` points at a real handler.
-7. First static introduced = first real exercise of the `.bss` zero loop
+7. Timer interrupt enabled before `stvec` points at a real handler.
+8. First static introduced = first real exercise of the `.bss` zero loop
    (the section is empty until then, so the loop is a no-op). **Confirmed
    working as of T0.4:** `IN_PANIC` at `__bss_start` (`0x80203000`) read
    `false` at `kmain`, `__bss_end` moved to `0x80204000`, stack sat above
