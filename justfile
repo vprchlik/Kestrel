@@ -39,9 +39,17 @@ gdb:
 #   marker + QEMU exit 0     → TEST PASS (exit 0)
 #   anything else            → TEST FAIL (exit 1)
 # Check PANIC before timeout: a panicking kernel parks, so timeout also fires.
-# Override the marker / hang-guard, e.g. `just test expect="CSR OK"`.
+# just 1.58 has no kwargs: `just test expect="CSR OK"` passes the literal
+# string `expect=CSR OK` as the first positional. Strip a matching `name=`
+# prefix so that form, `just test "CSR OK"`, and the defaults all work.
 test expect="M0 BOOT OK" timeout_s="3":
-    EXPECT="{{expect}}" TIMEOUT_S="{{timeout_s}}" bash scripts/boot-test.sh
+    #!/usr/bin/env bash
+    set -u
+    e='{{expect}}'
+    t='{{timeout_s}}'
+    case "$e" in expect=*) e="${e#expect=}" ;; esac
+    case "$t" in timeout_s=*) t="${t#timeout_s=}" ;; esac
+    EXPECT="$e" TIMEOUT_S="$t" bash scripts/boot-test.sh
 
 test-panic:
     bash scripts/boot-test.sh panic-selftest
