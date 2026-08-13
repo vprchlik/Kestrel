@@ -42,7 +42,7 @@ gdb:
 # just 1.58 has no kwargs: `just test expect="CSR OK"` passes the literal
 # string `expect=CSR OK` as the first positional. Strip a matching `name=`
 # prefix so that form, `just test "CSR OK"`, and the defaults all work.
-test expect="M0 BOOT OK" timeout_s="3":
+test expect="M1 FUNDAMENTALS OK" timeout_s="3":
     #!/usr/bin/env bash
     set -u
     e='{{expect}}'

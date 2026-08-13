@@ -7,7 +7,7 @@
 //! deliberate `ebreak`, waits for 30 timer ticks, runs a frame-allocator
 //! self-test, builds Sv39 page tables and walks them in software
 //! (`PAGETABLE OK`), activates Sv39 (`PAGING OK`), runs a heap self-test
-//! (`HEAP OK`), and `M0 BOOT OK`, then asks OpenSBI to shut the machine
+//! (`HEAP OK`), and `M1 FUNDAMENTALS OK`, then asks OpenSBI to shut the machine
 //! down. A panic prints `PANIC at file:line: message` and parks.
 
 #![no_std]
@@ -73,7 +73,7 @@ _start:
 /// 10 ms ticks, continues past an `ebreak` (`TRAP OK`), waits for `tick 30`,
 /// checks the DTB then the frame allocator (`FRAME OK`), builds page tables
 /// without writing `satp` (`PAGETABLE OK`), activates Sv39 (`PAGING OK`),
-/// runs the heap self-test (`HEAP OK`), and `M0 BOOT OK`, then shuts
+/// runs the heap self-test (`HEAP OK`), and `M1 FUNDAMENTALS OK`, then shuts
 /// down via SRST. The `panic-selftest` / `hang-selftest` features
 /// divert that path so the harness can exercise FAIL and HANG without
 /// editing this file.
@@ -136,7 +136,7 @@ extern "C" fn kmain(hartid: usize, dtb_pa: usize) -> ! {
         page::activate();
         heap::init();
         heap::self_test();
-        println!("M0 BOOT OK");
+        println!("M1 FUNDAMENTALS OK");
         let ret = sbi::shutdown();
         println!(
             "shutdown failed: SRST error={} value={}",
