@@ -4,8 +4,8 @@
 //! address of the device tree blob. `_start` sets `gp` and `sp`, zeros `.bss`,
 //! then calls `kmain`, which prints a hello line over the SBI debug console,
 //! a boot CSR snapshot, installs the trap handler, continues past a
-//! deliberate `ebreak`, waits for 30 timer ticks, and `M0 BOOT OK`, then
-//! asks OpenSBI to shut the machine down. A panic prints
+//! deliberate `ebreak`, waits for 30 timer ticks, runs a frame-allocator
+//! self-test, and `M0 BOOT OK`, then asks OpenSBI to shut the machine down. A panic prints
 //! `PANIC at file:line: message` and parks.
 
 #![no_std]
@@ -13,6 +13,7 @@
 
 mod console;
 mod csr;
+mod frame;
 mod sbi;
 mod timer;
 mod trap;
@@ -64,9 +65,10 @@ _start:
 /// Rust entry, called from `_start` with OpenSBI's boot arguments in `a0`/`a1`.
 /// Prints hello, the boot CSR snapshot (`CSR OK`), installs `stvec`, starts
 /// 10 ms ticks, continues past an `ebreak` (`TRAP OK`), waits for `tick 30`,
-/// and `M0 BOOT OK`, then shuts down via SRST. The `panic-selftest` /
-/// `hang-selftest` features divert that path so the harness can exercise
-/// FAIL and HANG without editing this file.
+/// checks the DTB then the frame allocator (`FRAME OK`), and `M0 BOOT OK`,
+/// then shuts down via SRST. The `panic-selftest` / `hang-selftest` features
+/// divert that path so the harness can exercise FAIL and HANG without
+/// editing this file.
 #[no_mangle]
 extern "C" fn kmain(hartid: usize, dtb_pa: usize) -> ! {
     sbi::require_dbcn();
@@ -117,6 +119,11 @@ extern "C" fn kmain(hartid: usize, dtb_pa: usize) -> ! {
         while timer::ticks() < 30 {
             unsafe { asm!("wfi") };
         }
+        // D-0023: header check before init. After this the DTB at
+        // 0x87e00000 is clobberable — it lies inside the free-list range.
+        frame::check_dtb(dtb_pa);
+        frame::init();
+        frame::self_test();
         println!("M0 BOOT OK");
         let ret = sbi::shutdown();
         println!(
