@@ -1,11 +1,12 @@
-//! Sv39 page tables: build the kernel map, walk it in software, do not
+//! Sv39 page tables: build the kernel map, walk it in software, then
 //! activate it.
 //!
 //! Owns the root table and every intermediate table allocated for the M1
 //! identity map (D-0019, D-0025, D-0026). `map` creates those tables from
 //! the frame allocator; `walk` decodes raw PTEs by bit position and does
-//! not call `map`'s helpers. Without this module there is no translation
-//! structure for T1.7 to write into `satp`. This module never writes `satp`.
+//! not call `map`'s helpers. `activate` is the only `satp` write: SIE off,
+//! `csrw satp`, `sfence.vma`, SIE restored (D-0022). Without this module
+//! there is no translation, and W^X / the guard hole are inert.
 
 #![cfg_attr(
     any(feature = "panic-selftest", feature = "hang-selftest"),
@@ -15,6 +16,7 @@
 use crate::csr;
 use crate::frame::{self, PAGE_SIZE, RAM_END, RAM_START};
 use crate::println;
+use core::arch::asm;
 
 /// Number of PTEs in a 4 KiB Sv39 table. Privileged spec 20211203 §4.3.2.
 const PTES: usize = 512;
@@ -509,4 +511,85 @@ pub fn init() {
     );
     verify(root);
     println!("PAGETABLE OK");
+}
+
+/// Panic unless `va` identity-maps at L0 with the given R/W/X (A=1 D=1 U=0).
+fn require_leaf(va: usize, r: bool, w: bool, x: bool, what: &str) {
+    match walk(root_pa(), va) {
+        Walk::Mapped { pa, raw, level } => {
+            if pa != va || level != 0 || !flags_match(raw, r, w, x) {
+                panic!(
+                    "{}: va={:#x} -> pa={:#x} L{} pte={:#x}, want identity L0 R={} W={} X={}",
+                    what, va, pa, level, raw, r, w, x
+                );
+            }
+        }
+        Walk::Unmapped { level, raw } => {
+            panic!(
+                "{}: va={:#x} unmapped at L{} pte={:#x}, want R={} W={} X={}",
+                what, va, level, raw, r, w, x
+            );
+        }
+    }
+}
+
+/// Write `satp`, `sfence.vma`, keep executing. D-0022: SIE is clear across
+/// the four-instruction window so a tick cannot vector through an unfenced
+/// translation. `sfence.vma x0, x0` is *after* the write — QEMU flushes on
+/// `satp` writes in practice, the spec does not promise it.
+#[inline(never)]
+pub fn activate() {
+    let root = root_pa();
+    if root == 0 {
+        panic!("page::activate before init");
+    }
+    let satp = satp_value(root);
+    if (satp >> csr::satp::MODE_SHIFT) != csr::satp::MODE_SV39 {
+        panic!("satp MODE is not 8: {:#x}", satp);
+    }
+    if (satp & csr::satp::PPN_MASK) != (root >> OFF_BITS) {
+        panic!(
+            "satp PPN={:#x} != root>>12 {:#x}",
+            satp & csr::satp::PPN_MASK,
+            root >> OFF_BITS
+        );
+    }
+
+    let sp: usize;
+    unsafe {
+        asm!(
+            "mv {sp}, sp",
+            sp = out(reg) sp,
+            options(nomem, nostack, preserves_flags)
+        );
+    }
+    require_leaf(
+        activate as *const () as usize,
+        true,
+        false,
+        true,
+        "activate PC",
+    );
+    require_leaf(crate::trap::entry_pa(), true, false, true, "stvec");
+    require_leaf(sp, true, true, false, "sp");
+
+    let sie_bit = csr::sstatus::SIE;
+    let sie_was = csr::sstatus::read() & sie_bit;
+    unsafe {
+        asm!(
+            "csrc sstatus, {sie}",
+            "csrw satp, {satp}",
+            "sfence.vma x0, x0",
+            "csrs sstatus, {sie_was}",
+            sie = in(reg) sie_bit,
+            satp = in(reg) satp,
+            sie_was = in(reg) sie_was,
+            options(nostack, preserves_flags),
+        );
+    }
+    let got = csr::satp::read();
+    if got != satp {
+        panic!("satp wrote {:#x}, read {:#x}", satp, got);
+    }
+    println!("PAGING OK");
 }
