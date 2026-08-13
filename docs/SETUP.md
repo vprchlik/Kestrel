@@ -63,11 +63,11 @@ monitor, `Ctrl-a h` lists the rest.)
 
 ```bash
 just build   # cross-compiles the scaffold kernel
-just test    # boots it headless, asserts on serial output (OpenSBI banner for now)
+just test    # boots it headless, asserts on kernel marker
 ```
 
-Expected: `TEST PASS: found "OpenSBI"`. From M0 onward the expected marker
-moves to kernel output (`just test expect="M0 BOOT OK"`).
+Expected: `TEST PASS: found "M0 BOOT OK"` and exit 0. `just test-panic`
+exits 1; `just test-hang` exits 2.
 
 **3c. Debug loop:** `just debug` in one terminal (QEMU frozen, GDB stub on
 :1234), `just gdb` in another — you should land at a `(gdb)` prompt showing
