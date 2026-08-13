@@ -58,15 +58,17 @@ _start:
 
 /// Rust entry, called from `_start` with OpenSBI's boot arguments in `a0`/`a1`.
 /// Prints hello and `M0 BOOT OK`, then shuts down via SRST. The
-/// `panic-selftest` feature panics instead, so the handler stays reachable
-/// without editing this file.
+/// `panic-selftest` / `hang-selftest` features divert that path so the
+/// harness can exercise FAIL and HANG without editing this file.
 #[no_mangle]
 extern "C" fn kmain(hartid: usize, dtb_pa: usize) -> ! {
     sbi::require_dbcn();
     println!("kestrel: hello from hart {}, dtb at {:#x}", hartid, dtb_pa);
     #[cfg(feature = "panic-selftest")]
     panic!("selftest");
-    #[cfg(not(feature = "panic-selftest"))]
+    #[cfg(feature = "hang-selftest")]
+    park();
+    #[cfg(not(any(feature = "panic-selftest", feature = "hang-selftest")))]
     {
         println!("M0 BOOT OK");
         let ret = sbi::shutdown();

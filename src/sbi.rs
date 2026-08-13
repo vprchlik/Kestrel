@@ -22,16 +22,28 @@ pub const EID_DBCN: usize = 0x4442_434E;
 pub const FID_DBCN_WRITE_BYTE: usize = 2;
 
 /// System Reset extension. SBI spec, EID ASCII `"SRST"`.
-#[cfg_attr(feature = "panic-selftest", allow(dead_code))]
+#[cfg_attr(
+    any(feature = "panic-selftest", feature = "hang-selftest"),
+    allow(dead_code)
+)]
 pub const EID_SRST: usize = 0x5352_5354;
 /// `sbi_system_reset`. SBI spec SRST, FID 0.
-#[cfg_attr(feature = "panic-selftest", allow(dead_code))]
+#[cfg_attr(
+    any(feature = "panic-selftest", feature = "hang-selftest"),
+    allow(dead_code)
+)]
 pub const FID_SRST_RESET: usize = 0;
 /// Shutdown. SBI spec SRST, `reset_type`.
-#[cfg_attr(feature = "panic-selftest", allow(dead_code))]
+#[cfg_attr(
+    any(feature = "panic-selftest", feature = "hang-selftest"),
+    allow(dead_code)
+)]
 pub const SRST_TYPE_SHUTDOWN: usize = 0;
 /// No recorded reason. SBI spec SRST, `reset_reason`.
-#[cfg_attr(feature = "panic-selftest", allow(dead_code))]
+#[cfg_attr(
+    any(feature = "panic-selftest", feature = "hang-selftest"),
+    allow(dead_code)
+)]
 pub const SRST_REASON_NONE: usize = 0;
 
 /// Return of an SBI call: `a0` = error, `a1` = value.
@@ -109,7 +121,10 @@ pub fn console_write_byte(byte: u8) {
 /// Probes SRST first (same BASE probe as DBCN). If the extension is absent
 /// or `ecall` returns, returns that `Sbiret` so the caller can print and
 /// park — never fall off into whatever follows `call kmain`.
-#[cfg_attr(feature = "panic-selftest", allow(dead_code))]
+#[cfg_attr(
+    any(feature = "panic-selftest", feature = "hang-selftest"),
+    allow(dead_code)
+)]
 pub fn shutdown() -> Sbiret {
     let probe = probe_extension(EID_SRST);
     if probe.error != SBI_SUCCESS {
