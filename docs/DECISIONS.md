@@ -292,9 +292,9 @@ D-0011 onward are working decisions made under those constraints.
   Overflow walks downward into `.bss` (and then into `.data` / `.rodata` /
   `.text`) with no trap. That is undetectable until some static is impossibly
   wrong. Paging is the first moment the hardware can tell us.
-- **Consequences:** do **not** implement this in M0. T1.5's kernel map must
-  skip that page; the frame allocator must not hand it out. Revisit the
-  linker script then if the gap needs to be a named symbol.
+- **Consequences:** do **not** implement this in M0. The linker hole lands in
+  M1/T1.5 and the mapping in M1/T1.6; the frame allocator must not hand that
+  page out. Revisit the linker script then if the gap needs a named symbol.
 
 ## D-0017: Shut down via SBI SRST; harness parses serial, not exit codes
 - Date: 2026-08-13 — Status: accepted (supersedes D-0011)
@@ -318,3 +318,227 @@ D-0011 onward are working decisions made under those constraints.
   `TEST HANG` (exit 2). A failed SRST call prints a reason and parks
   (HANG, with that line). Revisit sifive_test only if a later harness
   truly cannot parse serial.
+
+## D-0018: Arm timers through the SBI TIME extension, not Sstc `stimecmp`
+- Date: 2026-08-13 — Status: accepted
+- **Decision:** M1 arms the timer with the SBI TIME extension
+  (EID `0x54494D45` `"TIME"`, FID 0, `sbi_set_timer(absolute_deadline)`),
+  probed via BASE exactly like DBCN and SRST. The arm lives in **one
+  function** so that M4 can add an Sstc variant behind a build flag as a
+  one-site change and report both numbers.
+- **Alternatives considered:** writing `mtimecmp` in the CLINT directly
+  (impossible, not merely discouraged: OpenSBI's PMP prints
+  `Region00: 0x02000000-0x0200ffff M: (I,R,W) S/U: ()`, so the store raises an
+  access fault, and access faults are not delegated — our handler would never
+  see it). Sstc's `stimecmp` CSR (one `csrw`, no trap, and what Linux uses on
+  this platform — rejected for M1: it cannot be probed from S-mode. `misa` and
+  `menvcfg.STCE` are M-mode-only, a write to an unimplemented or disabled CSR
+  raises illegal instruction, and code 2 is **not delegated**, so we cannot
+  catch our own probe failing. The boot banner's `sstc` line is a log message,
+  not a runtime API, and the only programmatic source is the device tree,
+  which D-0012 declines to parse). Implementing both with runtime selection
+  (rejected: needs the same unavailable probe, and doubles the code path in
+  the milestone whose purpose is learning traps).
+- **Rationale:** the deciding asymmetry is observability, not cost. At a 10 ms
+  tick the firmware round trip is on the order of 0.01% of a core, and even a
+  1 ms M2 timeslice leaves it under 0.2% — anyone calling SBI TIME "too slow"
+  here is arguing from intuition rather than a number. What differs is failure
+  behavior: a missing TIME extension is a probe returning zero, which we print
+  and abort on in the same idiom as DBCN and SRST; a missing Sstc is an
+  illegal-instruction trap that OpenSBI absorbs into a dump we did not write
+  and cannot annotate. Committing to an unprobeable capability during the
+  milestone about handling traps correctly is backwards.
+- **Consequences:** every arm costs an `ecall` round trip through M-mode. The
+  M4 report must either match the Linux baseline's mechanism or treat the
+  difference as a measured quantity — we choose the latter, which is strictly
+  more informative ("we measured the cost of the firmware round trip on our
+  own kernel" is a finding, whereas silently matching Linux is only a
+  control). `sip.STIP` is not write-clearable from S-mode under either
+  mechanism: re-arming is the acknowledgement.
+
+## D-0019: Map all of RAM R+W once; keep the intrusive frame free list
+- Date: 2026-08-13 — Status: accepted
+- **Decision:** the kernel address space identity-maps all of RAM except
+  OpenSBI's region and the D-0016 guard page: `.text` R+X, `.rodata` R,
+  everything else R+W, A+D set on every leaf. The frame allocator stores each
+  free frame's successor in that frame's own first 8 bytes, so its total
+  metadata is one head pointer in `.bss`.
+- **Alternatives considered:** mapping only allocated frames, with a bitmap
+  instead of an intrusive list (rejected: it reintroduces a genuine recursion
+  — mapping a page requires allocating a table frame, which requires mapping
+  it, which may require allocating another table frame — and it adds a map
+  call to every allocation path). Pairing map-on-demand *with* the intrusive
+  free list (rejected as incoherent: the list lives inside the memory it
+  manages, so traversing it dereferences unmapped frames; if you want
+  map-on-demand you must take the 4 KiB bitmap with it).
+- **Rationale:** the isolation that map-on-demand buys is isolation of the
+  kernel from itself, and with a single address space and one application
+  (D-0006, D-0010) there is no second principal to protect against. What we
+  get in exchange is that the hardest step in the milestone — activating
+  paging — happens over a map with no ordering dependencies inside it, and
+  page-table frames are addressable the moment they are allocated. D-0014
+  points the same way.
+- **Consequences:** a stray kernel pointer into an unallocated frame succeeds
+  silently instead of faulting; the guard page is the one deliberate
+  exception, and W^X still holds for text and rodata. Page tables live in the
+  R+W region they describe, which is self-referential but harmless — we are
+  not defending against a malicious kernel.
+
+## D-0020: Register-indexed `TrapFrame` on the kernel stack, `stvec` Direct
+- Date: 2026-08-13 — Status: accepted
+- **Decision:** `#[repr(C)] struct TrapFrame { x: [usize; 32], sepc: usize,
+  sstatus: usize }` — all 31 GPRs (`x0` is hardwired zero and never saved,
+  its slot stays unused) plus `sepc` and `sstatus`, at offsets `8 * regnum`,
+  272 bytes total (already 16-byte aligned as the ABI requires). The frame is
+  built on the current kernel stack. `stvec` is set in **Direct** mode. Named
+  accessors wrap the array for the registers we discuss by name (`a0`–`a7`
+  are `x10`–`x17`). `x2` holds the *pre-trap* `sp`, computed with one extra
+  `addi`, so fault reports show the stack pointer at the moment of the fault.
+- **Alternatives considered:** named struct fields (`ra`, `sp`, `t0`, `a0`, …
+  — reads better in Rust, but desynchronizes silently the first time someone
+  reorders the struct without editing the assembly offsets; register-indexed
+  offsets are derivable from the register name, so drift is not expressible).
+  Saving only the caller-saved set (rejected: whether that is sufficient
+  depends on whether we arrived by interrupt or by a call-like exception, and
+  getting that reasoning wrong produces corruption that surfaces far from the
+  trap; 31 stores cost nanoseconds). Vectored `stvec` (rejected: spreads
+  dispatch across a table of entry points that M2's rework would then have to
+  touch individually).
+- **Rationale:** the hardware saves `sepc`, `scause`, `stval`, and two
+  `sstatus` bits, and nothing else — all 31 GPRs still hold the interrupted
+  code's values, so preserving them is entirely ours, which is why entry and
+  exit are assembly. `sepc` and `sstatus` are saved despite being CSRs
+  because a trap taken *inside* the handler (an unknown-cause panic that
+  itself page-faults) overwrites them.
+- **M2-proofing constraints — these are constraints on M2's design session,
+  not suggestions:**
+  1. **Entry is four separable blocks:** establish the kernel stack pointer,
+     save the frame, call Rust, restore and return. In M1 the first block is
+     *empty with a comment saying so*; in M2 it becomes the `sscratch` swap
+     (`csrrw sp, sscratch, sp`) and nothing else in the entry changes.
+  2. **`sstatus` is saved in the frame** partly so M2 can read `SPP` to learn
+     whether the trap came from U-mode or S-mode.
+  3. **Instruction-width decoding takes the instruction bits as an argument**,
+     never dereferencing `sepc` internally (see D-0021 for why).
+  4. **`sscratch` is left meaningless in M1.** M2 decides whether it holds the
+     kernel stack pointer or the current task's frame pointer, and that
+     depends on a task-control-block design that does not exist yet.
+- **Consequences:** `stvec`'s target must be 4-byte aligned or the low two
+  bits silently become a mode field. The handler never enables interrupts
+  inside itself — hardware already cleared `sstatus.SIE` on entry and we do
+  not set it, so there is exactly one trap level in M1.
+
+## D-0021: Advance `sepc` by decoded instruction width, never on interrupts
+- Date: 2026-08-13 — Status: accepted
+- **Decision:** for exceptions we resume *past*, the handler adds the trapped
+  instruction's width, decoded from the low two bits of the instruction
+  halfword (`0b11` ⇒ 4 bytes, otherwise 2). The decode helper **takes the
+  instruction bits as an argument**; the read stays at the call site, where
+  the address space is known. For interrupts, `sepc` is never modified. In M2
+  the `ecall` path uses the constant 4 with a comment citing that `ecall` has
+  no compressed encoding, so the syscall path never reads user memory at all.
+- **Alternatives considered:** always `sepc += 4` (rejected: correct for
+  `ecall` and `ebreak`, wrong for any compressed instruction — OpenSBI can
+  hardcode 4 after an S-mode `ecall` precisely because that instruction has
+  no RVC form, and copying the shortcut to a general handler skips a byte and
+  lands a later `sret` mid-instruction). A helper that dereferences `sepc`
+  itself (rejected: in M2 `sepc` on an `ecall` trap is a *user* virtual
+  address, and an S-mode load from a U=1 page faults unless `sstatus.SUM` is
+  set — that design inherits either a fault or a hidden SUM dependency in the
+  syscall hot path).
+- **Rationale:** `sepc` points *at* the faulting instruction for exceptions,
+  so returning without advancing re-executes it forever; for interrupts it
+  points at an instruction that has not run yet, so advancing skips it
+  silently until the consequence is inexplicable. Two rules, one CSR.
+- **Consequences:** the width decode is exercised in M1 only by the `ebreak`
+  continue-past test, which is enough to prove it; M2's syscall path
+  deliberately avoids needing it.
+
+## D-0022: Clear `sstatus.SIE` across the `satp` switch
+- Date: 2026-08-13 — Status: accepted
+- **Decision:** T1.7 clears `sstatus.SIE`, writes `satp`, executes
+  `sfence.vma`, then restores the previous `SIE`.
+- **Alternatives considered:** reordering M1 so paging (T1.7) precedes timer
+  interrupts (T1.3) (rejected: traps and timers are the natural teaching
+  order, and the frame allocator that paging depends on wants the trap handler
+  working first). Leaving interrupts enabled and trusting the window to be
+  short (rejected: it is exactly the window in which an unvalidated mapping
+  would be exercised, and the failure is the silent trap loop).
+- **Rationale:** ticks have been arriving every 10 ms since T1.3. A timer
+  interrupt taken between the `csrw satp` and the `sfence.vma` vectors through
+  `stvec` under a translation regime we have not yet validated — precondition
+  12 of prerequisite concept 11. Three lines of CSR manipulation remove an
+  entire class of nondeterministic hang.
+- **Consequences:** a tick can be missed across the switch, which is
+  irrelevant to any M1 acceptance criterion. Any future code that changes the
+  active address space inherits the same requirement.
+
+## D-0023: Hardcode RAM end, validate the DTB header, treat the DTB as clobberable
+- Date: 2026-08-13 — Status: accepted (refines D-0012)
+- **Decision:** `RAM_END = 0x8800_0000` stays a named constant (D-0012). At
+  boot, before the frame allocator is initialized, read two big-endian `u32`s
+  from the DTB pointer in `a1`: the magic (`0xd00dfeed`) and `totalsize`. If
+  the magic is wrong, or `a1 + totalsize` falls outside the assumed RAM
+  window, panic printing both values. The DTB region is then **explicitly
+  clobberable** — it sits at `0x87e0_0000`, inside the range handed to the
+  frame allocator, and we never parse it.
+- **Alternatives considered:** the heuristic D-0012 originally suggested,
+  "the DTB pointer looks like it is near the top of RAM" (rejected: that is a
+  coincidence of QEMU's loader, not a guarantee, so it can pass while being
+  meaningless). A real `/memory` parse (rejected: 150–250 lines of
+  structure-block walking, strings block, big-endian decoding, and
+  `#address-cells` handling, to buy portability D-0003 already declined).
+  Probing memory by touching it (rejected, and the reason is instructive:
+  with paging off and PMP's catch-all region permitting everything, a load
+  above RAM end on QEMU `virt` hits unassigned space, which logs a
+  `guest_errors` line and returns zero rather than faulting — a probe that
+  cannot fail cannot find the boundary).
+- **Rationale:** ten lines of header check catch the realistic failure (`-m`
+  changed, or `a1` is not what we think) without a parser, and they fail
+  loudly with the numbers needed to diagnose.
+- **Consequences:** **ordering constraint** — the sanity check must run before
+  allocator init, because afterwards the blob may be handed out as frames and
+  the check would read heap. Written here so that nobody in M3 wonders why the
+  device tree turned into allocated memory. The `justfile` must continue never
+  passing `-m`.
+
+## D-0024: Reserve a fixed 1 MiB heap region before building the free list
+- Date: 2026-08-13 — Status: accepted
+- **Decision:** the heap is a fixed 1 MiB region carved immediately above
+  `__kernel_end`, reserved *before* the frame free list is built, so the free
+  list simply starts above it. The heap is mapped R+W like the rest of RAM
+  (D-0019); the `GlobalAlloc` implementation manages blocks inside it.
+- **Alternatives considered:** popping 256 frames from the allocator at init
+  (rejected: contiguity would depend on the order the free list happened to be
+  built in — a correctness property resting on an allocator implementation
+  detail). A `static` array in `.bss` (rejected: inflates the image's `.bss`
+  and hides the heap from the physical-memory accounting we want to report).
+  Growing the heap on demand (rejected: `sbrk` in M2 is the app's break, not
+  the kernel heap's; a fixed kernel heap is one fewer moving part).
+- **Rationale:** carving first makes both regions trivially non-overlapping by
+  construction, and 1 MiB is far more than M1's `Box`/`Vec`/`String` self-test
+  or M2's task structures need, while leaving ~125 MiB of frames.
+- **Consequences:** heap exhaustion panics rather than growing (there is no
+  OOM recovery story in a unikernel). If M3's network buffers want more, the
+  constant changes and the decision gets an amendment.
+
+## D-0025: Map no MMIO in M1
+- Date: 2026-08-13 — Status: accepted (amends the pre-M0 T1.5 plan text)
+- **Decision:** the M1 kernel address space maps no device memory at all — no
+  UART page, no virtio-mmio range, no sifive_test.
+- **Alternatives considered:** mapping the UART and the virtio slots "for
+  later", as the original pre-M0 plan text said (rejected: we never touch the
+  UART because D-0004 routes the console through SBI, and virtio belongs to
+  M3; mapping devices we do not use contradicts the standing rule against
+  implementing beyond the current milestone, and every unused mapping is a
+  window a stray pointer can hit without faulting).
+- **Rationale:** the console is an `ecall`, which needs no virtual address,
+  and OpenSBI's region stays unmapped deliberately so a stray access there is
+  a page fault we decode rather than an access fault firmware absorbs. M3 adds
+  the virtio pages in the same task that adds the driver, where the
+  permissions can be justified against the code that uses them.
+- **Consequences:** the sifive_test escape hatch that D-0017 keeps in the
+  debugging toolbox is unusable after paging is on until someone maps that
+  page by hand; the supported emergency exit post-T1.7 is SBI SRST, which is
+  an `ecall` and needs no mapping. Note this in DEBUGGING.md if it ever comes
+  up in practice.
