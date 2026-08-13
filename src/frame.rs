@@ -1,10 +1,10 @@
-//! Physical frame allocator: intrusive free list over `[heap_end, RAM_END)`.
+//! Physical frame allocator: intrusive free list over `[__heap_end, RAM_END)`.
 //!
-//! Owns every 4 KiB frame above the 1 MiB heap carve-out (D-0024). Each free
-//! frame stores the next-free pointer in its own first 8 bytes; the only
-//! metadata in `.bss` is the list head (D-0019). Page tables, and later task
-//! stacks, come from here. Without it there is no allocatable physical memory
-//! beyond the static image.
+//! Owns every 4 KiB frame above the linker heap carve-out (D-0024,
+//! `__heap_start`..`__heap_end`). Each free frame stores the next-free
+//! pointer in its own first 8 bytes; the only metadata in `.bss` is the list
+//! head (D-0019). Page tables, and later task stacks, come from here. Without
+//! it there is no allocatable physical memory beyond the static image.
 
 #![cfg_attr(
     any(feature = "panic-selftest", feature = "hang-selftest"),
@@ -19,21 +19,24 @@ pub const RAM_START: usize = 0x8000_0000;
 pub const RAM_END: usize = 0x8800_0000;
 /// Sv39 page size.
 pub const PAGE_SIZE: usize = 4096;
-/// Kernel heap carve-out above `__kernel_end`. D-0024. Not managed here.
-const HEAP_SIZE: usize = 0x10_0000;
 /// Flattened DT magic, big-endian. Devicetree spec §5.2.
 const DTB_MAGIC: u32 = 0xd00d_feed;
 
 extern "C" {
-    static __kernel_end: u8;
+    static __heap_start: u8;
+    static __heap_end: u8;
 }
 
 static mut HEAD: usize = 0;
 static mut HEAP_END: usize = 0;
 static mut TOTAL: usize = 0;
 
-fn kernel_end() -> usize {
-    core::ptr::addr_of!(__kernel_end) as usize
+fn heap_start() -> usize {
+    core::ptr::addr_of!(__heap_start) as usize
+}
+
+fn heap_end() -> usize {
+    core::ptr::addr_of!(__heap_end) as usize
 }
 
 fn read_be_u32(pa: usize) -> u32 {
@@ -63,27 +66,22 @@ pub fn check_dtb(dtb_pa: usize) {
     }
 }
 
-/// Carve the 1 MiB heap above `__kernel_end`, then link every remaining
-/// frame into the free list. Call `check_dtb` first (D-0023).
+/// Link every frame in `[__heap_end, RAM_END)` into the free list.
+/// Heap bounds come from the linker (D-0024); do not re-derive them.
+/// Call `check_dtb` first (D-0023).
 pub fn init() {
-    let heap_start = kernel_end();
-    if heap_start % PAGE_SIZE != 0 {
-        panic!("__kernel_end {:#x} is not page-aligned", heap_start);
+    let start = heap_start();
+    let end = heap_end();
+    if start % PAGE_SIZE != 0 || end % PAGE_SIZE != 0 || end <= start || end > RAM_END {
+        panic!("heap symbols unusable: start={:#x} end={:#x}", start, end);
     }
-    let heap_end = match heap_start.checked_add(HEAP_SIZE) {
-        Some(e) if e <= RAM_END && e % PAGE_SIZE == 0 => e,
-        _ => panic!(
-            "heap carve overflows RAM: kernel_end={:#x} heap_size={:#x}",
-            heap_start, HEAP_SIZE
-        ),
-    };
     unsafe {
-        HEAP_END = heap_end;
+        HEAP_END = end;
         HEAD = 0;
         TOTAL = 0;
     }
 
-    let mut pa = heap_end;
+    let mut pa = end;
     let mut n = 0usize;
     while pa < RAM_END {
         unsafe { core::ptr::write(pa as *mut usize, HEAD) };
@@ -154,8 +152,9 @@ pub fn self_test() {
         panic!("LIFO broken: freed {:#x}, got {:#x}", a, c);
     }
     println!(
-        "frames {} heap_end={:#x} ram_end={:#x}",
+        "frames {} heap_start={:#x} heap_end={:#x} ram_end={:#x}",
         total_frames(),
+        heap_start(),
         unsafe { HEAP_END },
         RAM_END
     );
