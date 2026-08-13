@@ -18,7 +18,7 @@ run qemu_extra="": build
     {{qemu}} {{qemu_args}} {{qemu_extra}} -kernel {{kernel}}
 
 # Boot a build that panics in kmain. Parks after the PANIC line (no SRST).
-# Prefer `just test features=panic-selftest` for a FAIL verdict; this recipe
+# Prefer `just test-panic` for a FAIL verdict; this recipe
 # is the live serial view. Timeout is a hang-guard; its status is not swallowed.
 panic timeout_s="5":
     cargo build --features panic-selftest
@@ -39,8 +39,9 @@ gdb:
 #   marker + QEMU exit 0     → TEST PASS (exit 0)
 #   anything else            → TEST FAIL (exit 1)
 # Check PANIC before timeout: a panicking kernel parks, so timeout also fires.
-test:
-    bash scripts/boot-test.sh
+# Override the marker / hang-guard, e.g. `just test expect="CSR OK"`.
+test expect="M0 BOOT OK" timeout_s="3":
+    EXPECT="{{expect}}" TIMEOUT_S="{{timeout_s}}" bash scripts/boot-test.sh
 
 test-panic:
     bash scripts/boot-test.sh panic-selftest
