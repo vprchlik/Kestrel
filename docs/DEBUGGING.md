@@ -221,6 +221,17 @@ If T1.6's software walk passed and T1.7 still hangs, the disagreement is
 between what the tables say and what the hardware is doing with them — which
 narrows it to the `satp` value itself (items 1, 2) or the fence.
 
+**What actually made T1.7 work.** T1.6 walked a *sample* of the map: kernel
+entry, the last byte of `.text`, stack top, and so on. Interior `.text`
+pages were filled by the same `map_range` loop but never probed. The
+instruction after `csrw satp` (`sfence.vma` at `0x802036d0`) sat on one of
+those interior pages (`0x80203000`, L0[3] of the `0x80200000–0x80400000`
+slot). `require_leaf` on that function’s PC, on `__trap_entry`, and on the
+live `sp`, immediately before the SIE window, closed preconditions 5–8, 10,
+and 11 for the entries the transition actually uses. The general lesson:
+verify the specific translations the cliff depends on, not a representative
+sample of the range.
+
 **M2 (expand at milestone start)**
 1. `sret` to U-mode with `sstatus.SPP` still S, or `sepc` bogus.
 2. User page lacking the U bit → instruction page fault at the first user
