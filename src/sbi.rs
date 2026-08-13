@@ -1,8 +1,9 @@
 //! SBI ecall wrapper: the only path from S-mode into OpenSBI.
 //!
 //! Owns the calling convention (EID in `a7`, FID in `a6`, args in `a0..a5`,
-//! `ecall`; error in `a0`, value in `a1` on return), DBCN console-byte, and
-//! SRST shutdown. Without this module the kernel cannot talk to firmware.
+//! `ecall`; error in `a0`, value in `a1` on return), DBCN console-byte, SRST
+//! shutdown, and TIME set-timer. Without this module the kernel cannot talk
+//! to firmware.
 
 use core::arch::asm;
 
@@ -21,11 +22,12 @@ pub const EID_DBCN: usize = 0x4442_434E;
 /// `sbi_debug_console_write_byte`. SBI spec DBCN, FID 2.
 pub const FID_DBCN_WRITE_BYTE: usize = 2;
 
+/// Timer extension. SBI spec, EID ASCII `"TIME"`. D-0018.
+pub const EID_TIME: usize = 0x5449_4D45;
+/// `sbi_set_timer`. SBI spec TIME, FID 0.
+pub const FID_TIME_SET_TIMER: usize = 0;
+
 /// System Reset extension. SBI spec, EID ASCII `"SRST"`.
-#[cfg_attr(
-    any(feature = "panic-selftest", feature = "hang-selftest"),
-    allow(dead_code)
-)]
 pub const EID_SRST: usize = 0x5352_5354;
 /// `sbi_system_reset`. SBI spec SRST, FID 0.
 #[cfg_attr(
@@ -105,6 +107,31 @@ pub fn require_dbcn() {
     }
     if ret.value == 0 {
         abort_sbi(SBI_ERR_NOT_SUPPORTED);
+    }
+}
+
+/// Abort if TIME is missing. Console already works, so panic with the probe
+/// result rather than a silent `ebreak` — D-0018's argument was that a
+/// missing TIME extension is observable, unlike an unprobeable `stimecmp`.
+pub fn require_time() {
+    let ret = probe_extension(EID_TIME);
+    if ret.error != SBI_SUCCESS {
+        panic!("SBI TIME probe error={}", ret.error);
+    }
+    if ret.value == 0 {
+        panic!("SBI TIME extension absent");
+    }
+}
+
+/// Absolute-deadline timer. SBI spec TIME FID 0. Also the STIP ack: a
+/// future deadline is the only S-mode way to clear `sip.STIP`.
+pub fn set_timer(stime_value: usize) {
+    let ret = ecall(EID_TIME, FID_TIME_SET_TIMER, stime_value, 0, 0);
+    if ret.error != SBI_SUCCESS {
+        panic!(
+            "sbi_set_timer({:#x}) error={} value={}",
+            stime_value, ret.error, ret.value
+        );
     }
 }
 

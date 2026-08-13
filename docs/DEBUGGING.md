@@ -95,7 +95,7 @@ from our panic printout, from gdb, or from `-d int`, it's the same three:
 | 0 | instruction address misaligned | jump to odd address (corrupted function pointer / return address) |
 | 1 | instruction access fault | PC in a PMP-protected region (OpenSBI RAM!) or outside RAM |
 | 2 | illegal instruction | executing data; CSR access not permitted; FP use with FPU off |
-| 3 | breakpoint | `ebreak` — ours (T1.2 test) or a debugger's |
+| 3 | breakpoint | `ebreak` — ours (T1.2 test) or a debugger's. **Observed:** the T1.2 self-test assembled as `c.ebreak` (`0x9002`, 2 bytes) at `sepc=0x8020114a`. |
 | 4 / 6 | load / store misaligned | should not happen (rv64gc allows misaligned in QEMU) — suspect wild pointer |
 | 5 / 7 | load / store access fault | PMP violation (OpenSBI region) or nonexistent physical address |
 | 8 | ecall from U-mode | a syscall (M2+) — not an error |
@@ -142,27 +142,95 @@ never reached your code. In rough order of likelihood:
 1. The `satp` write with the current PC not identity-mapped X → instruction
    page fault → handler also unmapped → tight trap loop. `-d int` shows
    repeating cause 12 with `epc` = instruction after the `csrw satp`.
-2. `stvec` unset/misaligned when the first trap arrives (low 2 bits of `stvec`
+   Full first-response procedure for T1.7 below this list.
+2. **Before T1.2 installs `__trap_entry`:** OpenSBI leaves `stvec =
+   0x80200000` (our `_start`, Direct mode). Any *delegated* exception jumps
+   there, so `_start` re-runs: `gp`/`sp` reset, `.bss` zeroed, `kmain` again.
+   Symptom is a repeating OpenSBI banner plus `kestrel: hello` line — not a
+   hang, not a firmware dump, not a trap report. T1.2's `stvec` write
+   eliminates this. Codes 1/2/4/5/6/7 are still not delegated and still
+   produce a firmware dump if they fire.
+3. `stvec` unset/misaligned when the first trap arrives (low 2 bits of `stvec`
    are a MODE field — a non-4-byte-aligned handler address silently corrupts
    both mode and address). Advancing `sepc` is a separate footgun: `ecall` is
    always 4 bytes, but the trapped instruction in general may be 2 (RVC).
    Hardcoding `sepc += 4` in our handler will skip a byte after a compressed
    trap. Decode width from the instruction at `sepc` (see GLOSSARY: RVC).
-3. Trap handler itself faults (unmapped stack, clobbered register) →
+   **Observed T1.2:** the self-test `ebreak` was emitted as `c.ebreak`
+   (encoding `0x9002`, width 2) at `sepc=0x8020114a`. A hardcoded `+4` would
+   have `sret`'d into the middle of the next instruction. D-0021's decode is
+   load-bearing, not theoretical.
+4. Trap handler itself faults (unmapped stack, clobbered register) →
    recursive trap → loop. `-d int`: alternating/nested causes.
-4. Missing `sfence.vma` after editing PTEs → stale TLB → works, then faults
+5. Missing `sfence.vma` after editing PTEs → stale TLB → works, then faults
    "impossibly" — or works in QEMU and would fail on hardware. Fence after
    every PTE change (project rule).
-5. Missing A/D bits in PTEs → cause 13/15 on first touch, on QEMU configs that
+6. Missing A/D bits in PTEs → cause 13/15 on first touch, on QEMU configs that
    don't set them in hardware. We set A|D on all kernel leaves (PLAN M1/T1.5).
-6. Timer interrupt enabled before `stvec` points at a real handler.
-7. First static introduced = first real exercise of the `.bss` zero loop
+7. Timer interrupt enabled before `stvec` points at a real handler.
+8. **Post-T1.3, `park()` is not quiescence.** `park` is `wfi`. With `sie.STIE`
+   set, the hart wakes every 10 ms, runs the timer handler, and `sret`s into
+   the next `wfi` — a "parked" panic prints `PANIC` and then keeps emitting
+   `tick N` lines. Leave `park` as `wfi`. True quiescence (a panic that must
+   not be interrupted, or the T1.7 `satp` window) clears `sie.STIE` first
+   (T1.7 also clears `sstatus.SIE`, D-0022 — same effect on ticks).
+9. First static introduced = first real exercise of the `.bss` zero loop
    (the section is empty until then, so the loop is a no-op). **Confirmed
    working as of T0.4:** `IN_PANIC` at `__bss_start` (`0x80203000`) read
    `false` at `kmain`, `__bss_end` moved to `0x80204000`, stack sat above
    it. Drop the loop off the M1 suspect list unless the bounds themselves
    change (new sections, a broken `__bss_end`). A later static that reads
    nonzero is then a bug in the reader, not in `_start`.
+10. **T1.5 guard page is inert until T1.7.** The linker leaves a 4 KiB hole
+    between `__bss_end` and `__boot_stack_bottom`. Paging is still off, so
+    that hole is ordinary RAM: a stack overflow still stores into `.bss`.
+    T1.6 omits the page from the tables; T1.7 makes the omission a
+    store page fault (`scause=15`). T1.6 prints `root_pa` and
+    `satp_would_write` without writing `satp` — T1.7 writes that same
+    value, `MODE=8 << 60 | PPN`.
+
+**T1.7 (activating paging) — first response when it hangs**
+
+The symptom is total silence right after the `satp` write, because the fault
+handler's own page is unmapped and the fault faults. There is no panic to read,
+so both channels here are outside the guest:
+
+1. **`-d int`.** A repeating cause-12 block whose `epc` equals the instruction
+   *after* the `csrw satp` is the signature: the PC is not mapped executable
+   under the new tables. Read the *first* block, not the hundredth — the rest
+   are the loop.
+2. **Monitor `info mem`.** This dumps the decoded Sv39 tables. Compare it
+   against the linker map and against the expected permissions in PLAN.md's
+   M1 memory-map table. Answering "did I map what I think I mapped" takes one
+   command and beats an hour of re-reading the mapping code.
+3. **Work prerequisite concept 11 as a checklist** (PLAN.md, M1). It
+   enumerates the twelve conditions that must hold before the `csrw` retires,
+   in roughly the order they break: `MODE`, the `PPN` shift, the root entry,
+   non-leaf `R=W=X=0`, leaf `X`, leaf `U=0`, `A`/`D`, identity, walker
+   reachability, stack and `ra`, the `stvec` page, and the interrupt window.
+4. **Suspect the two silent ones first.** `satp.MODE=0` means paging never
+   turned on at all (everything "works", nothing is translated), and writing
+   the root table's address instead of its address-shifted-right-12 is a
+   factor-of-4096 error that points the walker at garbage. Neither announces
+   itself.
+5. **If it hangs only sometimes, it is the interrupt window** (D-0022): a tick
+   landing between the `csrw` and the `sfence.vma`. Confirm by checking that
+   `sstatus.SIE` is clear across the switch.
+
+If T1.6's software walk passed and T1.7 still hangs, the disagreement is
+between what the tables say and what the hardware is doing with them — which
+narrows it to the `satp` value itself (items 1, 2) or the fence.
+
+**What actually made T1.7 work.** T1.6 walked a *sample* of the map: kernel
+entry, the last byte of `.text`, stack top, and so on. Interior `.text`
+pages were filled by the same `map_range` loop but never probed. The
+instruction after `csrw satp` (`sfence.vma` at `0x802036d0`) sat on one of
+those interior pages (`0x80203000`, L0[3] of the `0x80200000–0x80400000`
+slot). `require_leaf` on that function’s PC, on `__trap_entry`, and on the
+live `sp`, immediately before the SIE window, closed preconditions 5–8, 10,
+and 11 for the entries the transition actually uses. The general lesson:
+verify the specific translations the cliff depends on, not a representative
+sample of the range.
 
 **M2 (expand at milestone start)**
 1. `sret` to U-mode with `sstatus.SPP` still S, or `sepc` bogus.

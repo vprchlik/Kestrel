@@ -2,15 +2,27 @@
 //!
 //! OpenSBI enters `_start` in S-mode with `a0` = hartid and `a1` = physical
 //! address of the device tree blob. `_start` sets `gp` and `sp`, zeros `.bss`,
-//! then calls `kmain`, which prints a hello line over the SBI debug console
-//! and `M0 BOOT OK`, then asks OpenSBI to shut the machine down. A panic
-//! prints `PANIC at file:line: message` and parks.
+//! then calls `kmain`, which prints a hello line over the SBI debug console,
+//! a boot CSR snapshot, installs the trap handler, continues past a
+//! deliberate `ebreak`, waits for 30 timer ticks, runs a frame-allocator
+//! self-test, builds Sv39 page tables and walks them in software
+//! (`PAGETABLE OK`), activates Sv39 (`PAGING OK`), runs a heap self-test
+//! (`HEAP OK`), and `M1 FUNDAMENTALS OK`, then asks OpenSBI to shut the machine
+//! down. A panic prints `PANIC at file:line: message` and parks.
 
 #![no_std]
 #![no_main]
 
+extern crate alloc;
+
 mod console;
+mod csr;
+mod frame;
+mod heap;
+mod page;
 mod sbi;
+mod timer;
+mod trap;
 
 use core::arch::{asm, global_asm};
 
@@ -57,20 +69,74 @@ _start:
 );
 
 /// Rust entry, called from `_start` with OpenSBI's boot arguments in `a0`/`a1`.
-/// Prints hello and `M0 BOOT OK`, then shuts down via SRST. The
-/// `panic-selftest` / `hang-selftest` features divert that path so the
-/// harness can exercise FAIL and HANG without editing this file.
+/// Prints hello, the boot CSR snapshot (`CSR OK`), installs `stvec`, starts
+/// 10 ms ticks, continues past an `ebreak` (`TRAP OK`), waits for `tick 30`,
+/// checks the DTB then the frame allocator (`FRAME OK`), builds page tables
+/// without writing `satp` (`PAGETABLE OK`), activates Sv39 (`PAGING OK`),
+/// runs the heap self-test (`HEAP OK`), and `M1 FUNDAMENTALS OK`, then shuts
+/// down via SRST. The `panic-selftest` / `hang-selftest` features
+/// divert that path so the harness can exercise FAIL and HANG without
+/// editing this file.
 #[no_mangle]
 extern "C" fn kmain(hartid: usize, dtb_pa: usize) -> ! {
     sbi::require_dbcn();
     println!("kestrel: hello from hart {}, dtb at {:#x}", hartid, dtb_pa);
+    {
+        let sstatus = csr::sstatus::read();
+        let sie = csr::sie::read();
+        let stvec = csr::stvec::read();
+        let satp = csr::satp::read();
+        println!("sstatus {:#x}", sstatus);
+        println!("sie {:#x}", sie);
+        println!("stvec {:#x}", stvec);
+        println!("satp {:#x}", satp);
+        if satp != 0 {
+            panic!("satp={:#x}, expected Bare (0)", satp);
+        }
+        println!("CSR OK");
+    }
+    trap::install();
+    timer::init();
     #[cfg(feature = "panic-selftest")]
     panic!("selftest");
     #[cfg(feature = "hang-selftest")]
     park();
     #[cfg(not(any(feature = "panic-selftest", feature = "hang-selftest")))]
     {
-        println!("M0 BOOT OK");
+        let ebreak_pc: usize;
+        unsafe {
+            asm!(
+                "lla {pc}, 1f",
+                "1: ebreak",
+                pc = out(reg) ebreak_pc,
+                options(nostack),
+            );
+        }
+        let half = unsafe { core::ptr::read(ebreak_pc as *const u16) };
+        let width = trap::instruction_width(half);
+        let sepc = csr::sepc::read();
+        if sepc != ebreak_pc + width {
+            panic!(
+                "ebreak continued at sepc={:#x}, expected {:#x} (ebreak was {:#x})",
+                sepc,
+                ebreak_pc + width,
+                ebreak_pc
+            );
+        }
+        println!("TRAP OK");
+        while timer::ticks() < 30 {
+            unsafe { asm!("wfi") };
+        }
+        // D-0023: header check before init. After this the DTB at
+        // 0x87e00000 is clobberable — it lies inside the free-list range.
+        frame::check_dtb(dtb_pa);
+        frame::init();
+        frame::self_test();
+        page::init();
+        page::activate();
+        heap::init();
+        heap::self_test();
+        println!("M1 FUNDAMENTALS OK");
         let ret = sbi::shutdown();
         println!(
             "shutdown failed: SRST error={} value={}",
@@ -101,12 +167,7 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     if nested {
         // Already printing a panic. Do not call println! or panic! again.
         unsafe {
-            asm!(
-                "ebreak",
-                "1: wfi",
-                "j 1b",
-                options(noreturn),
-            );
+            asm!("ebreak", "1: wfi", "j 1b", options(noreturn),);
         }
     }
 

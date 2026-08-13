@@ -18,7 +18,7 @@ run qemu_extra="": build
     {{qemu}} {{qemu_args}} {{qemu_extra}} -kernel {{kernel}}
 
 # Boot a build that panics in kmain. Parks after the PANIC line (no SRST).
-# Prefer `just test features=panic-selftest` for a FAIL verdict; this recipe
+# Prefer `just test-panic` for a FAIL verdict; this recipe
 # is the live serial view. Timeout is a hang-guard; its status is not swallowed.
 panic timeout_s="5":
     cargo build --features panic-selftest
@@ -39,14 +39,27 @@ gdb:
 #   marker + QEMU exit 0     → TEST PASS (exit 0)
 #   anything else            → TEST FAIL (exit 1)
 # Check PANIC before timeout: a panicking kernel parks, so timeout also fires.
-test:
-    bash scripts/boot-test.sh
+# just 1.58 has no kwargs: `just test expect="CSR OK"` passes the literal
+# string `expect=CSR OK` as the first positional. Strip a matching `name=`
+# prefix so that form, `just test "CSR OK"`, and the defaults all work.
+test expect="M1 FUNDAMENTALS OK" timeout_s="3":
+    #!/usr/bin/env bash
+    set -u
+    e='{{expect}}'
+    t='{{timeout_s}}'
+    case "$e" in expect=*) e="${e#expect=}" ;; esac
+    case "$t" in timeout_s=*) t="${t#timeout_s=}" ;; esac
+    EXPECT="$e" TIMEOUT_S="$t" bash scripts/boot-test.sh
 
+# Invert the script's intentional non-zero so just does not print
+# "recipe failed" for a designed FAIL/HANG. `-` would also hide a
+# regression (panic-selftest shutting down cleanly would look green).
+# `just test` is unchanged: it still fails the recipe on a non-pass.
 test-panic:
-    bash scripts/boot-test.sh panic-selftest
+    bash scripts/boot-test.sh panic-selftest; [ $? -eq 1 ]
 
 test-hang:
-    bash scripts/boot-test.sh hang-selftest
+    bash scripts/boot-test.sh hang-selftest; [ $? -eq 2 ]
 
 # Disassemble the kernel. Extra flags as one quoted arg, e.g. just objdump '-d --source'
 objdump flags="-d": build

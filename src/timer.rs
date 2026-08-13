@@ -1,0 +1,62 @@
+//! Supervisor timer: 10 ms ticks via SBI TIME (D-0018).
+//!
+//! Owns the tick counter and the only site that programs the next deadline
+//! (`arm`). Trap dispatch calls `on_interrupt`; without this module there
+//! are no timer interrupts and `sip.STIP` can never be acknowledged from
+//! S-mode. M4's Sstc comparison replaces the body of `arm`, nothing else.
+
+use crate::csr;
+use crate::println;
+use crate::sbi;
+
+/// QEMU `virt` timebase is 10 MHz (`aclint-mtimer @ 10000000Hz`). 100_000
+/// ticks = 10 ms. PLAN T1.3 / D-0018.
+pub const PERIOD: usize = 100_000;
+
+static mut TICKS: usize = 0;
+
+/// Probe TIME, arm the first deadline, then enable `sie.STIE` and
+/// `sstatus.SIE`. Arm *before* SIE so a leftover `STIP` cannot fire with
+/// no future deadline programmed.
+pub fn init() {
+    sbi::require_time();
+    csr::sie::set(csr::sie::STIE);
+    arm();
+    csr::sstatus::set(csr::sstatus::SIE);
+}
+
+/// The one arm site (D-0018). Next deadline is `rdtime() + PERIOD`, not
+/// `last_deadline + PERIOD`: a long handler cannot leave the comparator in
+/// the past (`STIP` stuck, interrupt storm). The cost is a few microseconds
+/// of drift per tick, which 10 ms ticks do not care about.
+///
+/// This call is also the STIP acknowledgement. `sip.STIP` is not
+/// write-clearable from S-mode; OpenSBI clears it when the new deadline is
+/// in the future.
+pub fn arm() {
+    sbi::set_timer(csr::time::read().wrapping_add(PERIOD));
+}
+
+/// Tick count. Volatile: the compiler cannot see that `__trap_entry`
+/// writes this, and a `wfi` wait loop would otherwise CSE a single load.
+#[cfg_attr(
+    any(feature = "panic-selftest", feature = "hang-selftest"),
+    allow(dead_code)
+)]
+pub fn ticks() -> usize {
+    unsafe { core::ptr::read_volatile(&raw const TICKS) }
+}
+
+/// Supervisor-timer interrupt. Re-arm (ack STIP) before printing so a slow
+/// DBCN `ecall` cannot delay the acknowledgement until after `sret`.
+pub fn on_interrupt() {
+    let n = unsafe {
+        let n = core::ptr::read_volatile(&raw const TICKS).wrapping_add(1);
+        core::ptr::write_volatile(&raw mut TICKS, n);
+        n
+    };
+    arm();
+    if n % 10 == 0 {
+        println!("tick {}", n);
+    }
+}
