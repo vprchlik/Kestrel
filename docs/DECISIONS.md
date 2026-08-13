@@ -542,3 +542,25 @@ D-0011 onward are working decisions made under those constraints.
   page by hand; the supported emergency exit post-T1.7 is SBI SRST, which is
   an `ecall` and needs no mapping. Note this in DEBUGGING.md if it ever comes
   up in practice.
+
+## D-0026: Map every region with 4 KiB leaves; no superpages
+- Date: 2026-08-13 — Status: accepted
+- **Decision:** the M1 kernel address space is built entirely from 4 KiB
+  (level-0) leaves. No 2 MiB or 1 GiB superpage leaves.
+- **Alternatives considered:** 1 GiB leaves for the RAM window (rejected: a
+  1 GiB page at `0x8000_0000` would cover OpenSBI, the guard hole, and every
+  W^X boundary in one PTE — the permissions in the PLAN memory-map table
+  cannot be expressed). 2 MiB leaves for the aligned interior of
+  `[__heap_end, RAM_END)` with 4 KiB leaves everywhere else (rejected: it is
+  a second mapping path whose failure mode is concept 11.4 — a non-leaf with
+  any of R/W/X set *is* a superpage, and a misaligned PPN on that leaf
+  faults). `__heap_end` is not 2 MiB-aligned (`0x8031_8000` after T1.5), so
+  the mixed path is mandatory if superpages are used at all, not optional.
+- **Rationale:** kernel W^X and the 4 KiB guard already force 4 KiB
+  granularity across the image. One leaf size means one walk, one verifier,
+  and one PPN-shift. ~32k identity maps at boot are cheap next to that.
+  D-0014.
+- **Consequences:** the software walker in T1.6 panics if a translation
+  resolves at level 1 or 2. Revisit only if a later milestone has a real
+  reason to map a huge contiguous R+W region at a coarser grain — and then
+  only with an explicit alignment check on the leaf PPN.
