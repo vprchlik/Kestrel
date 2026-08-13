@@ -2,14 +2,15 @@
 //!
 //! OpenSBI enters `_start` in S-mode with `a0` = hartid and `a1` = physical
 //! address of the device tree blob. `_start` sets `gp` and `sp`, zeros `.bss`,
-//! then calls `kmain`, which prints a hello line over the SBI debug console
-//! and `M0 BOOT OK`, then asks OpenSBI to shut the machine down. A panic
-//! prints `PANIC at file:line: message` and parks.
+//! then calls `kmain`, which prints a hello line over the SBI debug console,
+//! a boot CSR snapshot, and `M0 BOOT OK`, then asks OpenSBI to shut the
+//! machine down. A panic prints `PANIC at file:line: message` and parks.
 
 #![no_std]
 #![no_main]
 
 mod console;
+mod csr;
 mod sbi;
 
 use core::arch::{asm, global_asm};
@@ -57,9 +58,10 @@ _start:
 );
 
 /// Rust entry, called from `_start` with OpenSBI's boot arguments in `a0`/`a1`.
-/// Prints hello and `M0 BOOT OK`, then shuts down via SRST. The
-/// `panic-selftest` / `hang-selftest` features divert that path so the
-/// harness can exercise FAIL and HANG without editing this file.
+/// Prints hello, the boot CSR snapshot (`CSR OK`), and `M0 BOOT OK`, then
+/// shuts down via SRST. The `panic-selftest` / `hang-selftest` features
+/// divert that path so the harness can exercise FAIL and HANG without
+/// editing this file.
 #[no_mangle]
 extern "C" fn kmain(hartid: usize, dtb_pa: usize) -> ! {
     sbi::require_dbcn();
@@ -70,6 +72,18 @@ extern "C" fn kmain(hartid: usize, dtb_pa: usize) -> ! {
     park();
     #[cfg(not(any(feature = "panic-selftest", feature = "hang-selftest")))]
     {
+        let sstatus = csr::sstatus::read();
+        let sie = csr::sie::read();
+        let stvec = csr::stvec::read();
+        let satp = csr::satp::read();
+        println!("sstatus {:#x}", sstatus);
+        println!("sie {:#x}", sie);
+        println!("stvec {:#x}", stvec);
+        println!("satp {:#x}", satp);
+        if satp != 0 {
+            panic!("satp={:#x}, expected Bare (0)", satp);
+        }
+        println!("CSR OK");
         println!("M0 BOOT OK");
         let ret = sbi::shutdown();
         println!(
@@ -101,12 +115,7 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     if nested {
         // Already printing a panic. Do not call println! or panic! again.
         unsafe {
-            asm!(
-                "ebreak",
-                "1: wfi",
-                "j 1b",
-                options(noreturn),
-            );
+            asm!("ebreak", "1: wfi", "j 1b", options(noreturn),);
         }
     }
 
