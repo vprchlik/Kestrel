@@ -32,7 +32,8 @@ pub const FID_TIME_SET_TIMER: usize = 0;
     any(
         feature = "panic-selftest",
         feature = "hang-selftest",
-        feature = "frame-exhaust-selftest"
+        feature = "frame-exhaust-selftest",
+        feature = "freeze-selftest"
     ),
     allow(dead_code)
 )]
@@ -42,7 +43,8 @@ pub const EID_SRST: usize = 0x5352_5354;
     any(
         feature = "panic-selftest",
         feature = "hang-selftest",
-        feature = "frame-exhaust-selftest"
+        feature = "frame-exhaust-selftest",
+        feature = "freeze-selftest"
     ),
     allow(dead_code)
 )]
@@ -52,7 +54,8 @@ pub const FID_SRST_RESET: usize = 0;
     any(
         feature = "panic-selftest",
         feature = "hang-selftest",
-        feature = "frame-exhaust-selftest"
+        feature = "frame-exhaust-selftest",
+        feature = "freeze-selftest"
     ),
     allow(dead_code)
 )]
@@ -62,7 +65,8 @@ pub const SRST_TYPE_SHUTDOWN: usize = 0;
     any(
         feature = "panic-selftest",
         feature = "hang-selftest",
-        feature = "frame-exhaust-selftest"
+        feature = "frame-exhaust-selftest",
+        feature = "freeze-selftest"
     ),
     allow(dead_code)
 )]
@@ -172,7 +176,8 @@ pub fn console_write_byte(byte: u8) {
     any(
         feature = "panic-selftest",
         feature = "hang-selftest",
-        feature = "frame-exhaust-selftest"
+        feature = "frame-exhaust-selftest",
+        feature = "freeze-selftest"
     ),
     allow(dead_code)
 )]

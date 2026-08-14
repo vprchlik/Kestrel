@@ -19,6 +19,8 @@ userptr-kernel-selftest = []
 userptr-span-selftest = []
 # T2.10: U-mode load page fault; the other task continues (D-0034).
 user-fault-selftest = []
+# T2.11: freeze, then a deliberate alloc_frame that must panic.
+freeze-selftest = []
 
 [dependencies]
 

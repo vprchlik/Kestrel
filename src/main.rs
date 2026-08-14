@@ -157,7 +157,11 @@ extern "C" fn kmain(hartid: usize, dtb_pa: usize) -> ! {
             crate::stress::run();
             println!("STRESS OK");
         }
-        #[cfg(not(any(feature = "frame-exhaust-selftest", feature = "stress")))]
+        #[cfg(not(any(
+            feature = "frame-exhaust-selftest",
+            feature = "stress",
+            feature = "freeze-selftest"
+        )))]
         {
             // D-0035: kmain does not return after the first sret to U.
             #[cfg(any(
@@ -173,6 +177,12 @@ extern "C" fn kmain(hartid: usize, dtb_pa: usize) -> ! {
                 feature = "user-fault-selftest"
             )))]
             task::enter(1);
+        }
+        #[cfg(feature = "freeze-selftest")]
+        {
+            frame::freeze();
+            let _ = frame::alloc_frame();
+            panic!("alloc_frame after freeze returned");
         }
         #[cfg(feature = "stress")]
         {

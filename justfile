@@ -154,6 +154,30 @@ test-user-fault:
     fi
     echo 'TEST PASS: user fault contained, survivor finished'
 
+# T2.11: freeze then a deliberate alloc_frame. Designed PANIC (same harness
+# shape as test-panic).
+test-freeze:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    set +e
+    TIMEOUT_S=5 bash scripts/boot-test.sh freeze-selftest
+    code=$?
+    set -e
+    if [ "$code" -ne 1 ]; then
+        echo "TEST FAIL: freeze-selftest expected panic (exit 1), got ${code}"
+        exit 1
+    fi
+    if ! grep -a -q 'frames frozen: free=' serial.log; then
+        echo 'TEST FAIL: missing "frames frozen: free=N"'
+        exit 1
+    fi
+    if ! grep -a -q 'alloc_frame after freeze' serial.log; then
+        echo 'TEST FAIL: missing "alloc_frame after freeze" panic'
+        grep -a 'PANIC' serial.log || true
+        exit 1
+    fi
+    echo 'TEST PASS: freeze then alloc_frame panicked'
+
 # Disassemble the kernel. Extra flags as one quoted arg, e.g. just objdump '-d --source'
 objdump flags="-d": build
     cargo objdump -- {{flags}}

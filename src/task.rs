@@ -539,11 +539,27 @@ pub fn init() {
         feature = "panic-selftest",
         feature = "hang-selftest",
         feature = "stress",
-        feature = "frame-exhaust-selftest"
+        feature = "frame-exhaust-selftest",
+        feature = "freeze-selftest"
     ),
     allow(dead_code)
 )]
 pub fn enter(id: usize) -> ! {
+    // D-0036: freeze before the first `sret`. Two independent reasons the
+    // D-0028 hazard is gone (they fail independently, which is why both
+    // are recorded):
+    //
+    // 1. Nothing in the trap path allocates. Kernel stacks and user
+    //    sections are linker-placed (D-0030, D-0031); the map is complete
+    //    and never edited (D-0031); `sbrk` moves a pointer inside a
+    //    preallocated window.
+    // 2. After `kmain` stops returning, no kernel code runs with `SIE=1`.
+    //    The scheduler does not change that: `preempt` / `yield_cpu` /
+    //    `after_exit` only return a frame pointer. Hardware cleared `SIE`
+    //    on trap; we never set it in the handler (D-0020). `sret` restores
+    //    `SIE` from `SPIE` in U only. The handler is the only kernel code
+    //    that runs at all.
+    crate::frame::freeze();
     let t = get(id);
     let sepc = unsafe { (*t.frame).sepc };
     println!(
@@ -750,7 +766,8 @@ pub fn kill_and_reschedule(cause: &str, sepc: usize, stval: usize) -> &'static m
         feature = "panic-selftest",
         feature = "hang-selftest",
         feature = "stress",
-        feature = "frame-exhaust-selftest"
+        feature = "frame-exhaust-selftest",
+        feature = "freeze-selftest"
     ),
     allow(dead_code)
 )]
@@ -770,7 +787,8 @@ pub fn kill_unknown_syscall(num: usize, sepc: usize, stval: usize) -> usize {
         feature = "panic-selftest",
         feature = "hang-selftest",
         feature = "stress",
-        feature = "frame-exhaust-selftest"
+        feature = "frame-exhaust-selftest",
+        feature = "freeze-selftest"
     ),
     allow(dead_code)
 )]
@@ -790,7 +808,8 @@ pub fn kill_invalid_user_ptr(sepc: usize, ptr: usize) {
         feature = "panic-selftest",
         feature = "hang-selftest",
         feature = "stress",
-        feature = "frame-exhaust-selftest"
+        feature = "frame-exhaust-selftest",
+        feature = "freeze-selftest"
     ),
     allow(dead_code)
 )]
@@ -810,7 +829,8 @@ pub fn exit_current(code: usize) {
         feature = "panic-selftest",
         feature = "hang-selftest",
         feature = "stress",
-        feature = "frame-exhaust-selftest"
+        feature = "frame-exhaust-selftest",
+        feature = "freeze-selftest"
     ),
     allow(dead_code)
 )]

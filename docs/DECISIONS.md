@@ -1049,8 +1049,16 @@ D-0011 onward are working decisions made under those constraints.
   "unenforced invariant held by the handler's current contents" into a loud
   runtime assertion.
 - **Consequences:** `just test-stress` still passes because the storm runs
-  before the freeze. Any M3 requirement to allocate after boot must reopen
-  this entry explicitly rather than quietly calling `unfreeze()`; the likely
-  answer there is `SIE` masking plus preallocated pools, and it would amend
-  D-0028 rather than replace it. Boot prints `frames frozen: free=N` so the
-  transition is visible in every serial log.
+  before the freeze (`stress` never calls `enter`, so it never freezes). Any
+  M3 requirement to allocate after boot must reopen this entry explicitly
+  rather than quietly calling `unfreeze()`; the likely answer there is `SIE`
+  masking plus preallocated pools, and it would amend D-0028 rather than
+  replace it. Boot prints `frames frozen: free=N` so the transition is
+  visible in every serial log.
+
+  T2.9's scheduler does not break reason 2. After `kmain` the only kernel
+  code that runs is `trap_handler` and what it calls (`preempt`, `yield_cpu`,
+  `after_exit`, syscall bodies). Hardware clears `SIE` on trap; those
+  functions return a frame pointer and never `sstatus::set(SIE)`. `sret`
+  restores `SIE` from `SPIE` in U only. There is still no interruptible
+  kernel-side allocator caller.

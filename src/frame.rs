@@ -30,6 +30,7 @@ extern "C" {
 static mut HEAD: usize = 0;
 static mut HEAP_END: usize = 0;
 static mut TOTAL: usize = 0;
+static mut FROZEN: bool = false;
 
 fn heap_start() -> usize {
     core::ptr::addr_of!(__heap_start) as usize
@@ -97,7 +98,6 @@ pub fn total_frames() -> usize {
 }
 
 /// Length of the free list. Read-only: does not allocate or free.
-#[cfg_attr(not(feature = "stress"), allow(dead_code))]
 pub fn free_count() -> usize {
     let mut n = 0usize;
     let mut pa = unsafe { HEAD };
@@ -112,11 +112,31 @@ pub fn free_count() -> usize {
     n
 }
 
+/// D-0036: after this, `alloc_frame` / `free_frame` panic printing the
+/// request. Called immediately before the first `sret` to U. Prints
+/// `frames frozen: free=N`.
+#[cfg_attr(
+    any(
+        feature = "panic-selftest",
+        feature = "hang-selftest",
+        feature = "stress",
+        feature = "frame-exhaust-selftest"
+    ),
+    allow(dead_code)
+)]
+pub fn freeze() {
+    unsafe { FROZEN = true };
+    println!("frames frozen: free={}", free_count());
+}
+
 /// Pop the head, **then** zero the frame. The next-pointer lives in the
 /// first 8 bytes; it must be copied into `HEAD` before `write_bytes` wipes
 /// it. Zero-on-free would erase that pointer while the frame is still on
 /// the list.
 pub fn alloc_frame() -> usize {
+    if unsafe { FROZEN } {
+        panic!("alloc_frame after freeze");
+    }
     let pa = unsafe { HEAD };
     if pa == 0 {
         panic!("out of frames (total {})", unsafe { TOTAL });
@@ -134,6 +154,9 @@ pub fn alloc_frame() -> usize {
 /// (the latter is a live frame being freed, not a double-free of a listed
 /// one). O(n) would catch those; we are not doing O(n).
 pub fn free_frame(pa: usize) {
+    if unsafe { FROZEN } {
+        panic!("free_frame after freeze {:#x}", pa);
+    }
     if pa % PAGE_SIZE != 0 || pa < unsafe { HEAP_END } || pa >= RAM_END {
         panic!("free_frame: {:#x} is not a managed frame", pa);
     }

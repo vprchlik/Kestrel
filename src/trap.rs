@@ -96,7 +96,8 @@ extern "C" {
         feature = "panic-selftest",
         feature = "hang-selftest",
         feature = "stress",
-        feature = "frame-exhaust-selftest"
+        feature = "frame-exhaust-selftest",
+        feature = "freeze-selftest"
     ),
     allow(dead_code)
 )]
