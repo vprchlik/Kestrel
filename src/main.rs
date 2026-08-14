@@ -26,6 +26,7 @@ mod stress;
 mod task;
 mod timer;
 mod trap;
+mod user;
 
 use core::arch::{asm, global_asm};
 
@@ -154,7 +155,12 @@ extern "C" fn kmain(hartid: usize, dtb_pa: usize) -> ! {
             crate::stress::run();
             println!("STRESS OK");
         }
-        #[cfg(not(feature = "frame-exhaust-selftest"))]
+        #[cfg(not(any(feature = "frame-exhaust-selftest", feature = "stress")))]
+        {
+            // D-0035: kmain does not return after the first sret to U.
+            task::enter(0);
+        }
+        #[cfg(feature = "stress")]
         {
             let ret = sbi::shutdown();
             println!(

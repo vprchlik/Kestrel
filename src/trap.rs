@@ -15,8 +15,9 @@
 
 use crate::csr;
 use crate::println;
+use crate::sbi;
 use crate::timer;
-use core::arch::global_asm;
+use core::arch::{asm, global_asm};
 
 /// `TrapFrame` size in bytes. 32 GPRs + `sepc` + `sstatus`.
 pub const FRAME_SIZE: usize = 272;
@@ -79,6 +80,28 @@ impl TrapFrame {
 
 extern "C" {
     fn __trap_entry();
+    fn __trap_return();
+}
+
+/// Jump to `__trap_return` with `a0` = frame. Used for the first `sret`
+/// into U-mode (T2.5) and later for every resume. Does not return.
+#[cfg_attr(
+    any(
+        feature = "panic-selftest",
+        feature = "hang-selftest",
+        feature = "stress",
+        feature = "frame-exhaust-selftest"
+    ),
+    allow(dead_code)
+)]
+pub fn resume(frame: *mut TrapFrame) -> ! {
+    unsafe {
+        asm!(
+            "j __trap_return",
+            in("a0") frame,
+            options(noreturn),
+        );
+    }
 }
 
 /// Physical/virtual address of `__trap_entry` (identity mapped). Used by
@@ -130,8 +153,9 @@ pub fn instruction_width(halfword: u16) -> usize {
 }
 
 /// Called from `__trap_entry` with `a0` = frame pointer on the kernel stack.
-/// Returns the frame `__trap_return` should resume (D-0032). Every M1 path
-/// returns the same `frame` it was given — there is no other task yet.
+/// Returns the frame `__trap_return` should resume (D-0032). M1 traps and
+/// the timer still return the same `frame` they were given. The T2.5
+/// `ecall` path shuts down instead of resuming.
 #[no_mangle]
 extern "C" fn trap_handler(frame: &mut TrapFrame) -> &mut TrapFrame {
     // D-0029: Rust runs in S-mode, so sscratch must be 0. A nonzero value
@@ -155,6 +179,20 @@ extern "C" fn trap_handler(frame: &mut TrapFrame) -> &mut TrapFrame {
     }
 
     match code {
+        csr::scause::EXC_ECALL_U => {
+            println!(
+                "syscall {} not implemented yet sepc={:#x} sp={:#x}",
+                frame.a7(),
+                frame.sepc,
+                frame.sp()
+            );
+            println!("USER OK");
+            let ret = sbi::shutdown();
+            panic!(
+                "shutdown failed: SRST error={} value={}",
+                ret.error, ret.value
+            );
+        }
         csr::scause::EXC_BREAKPOINT => {
             println!(
                 "trap scause={} (breakpoint) sepc={:#x} stval={:#x} sp={:#x}",

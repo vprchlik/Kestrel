@@ -78,9 +78,10 @@ SECTIONS
 
     . = ALIGN(4K);
 
-    /* T2.1 / D-0031: user sections. Empty until T2.5. Each is 4 KiB-aligned
-     * so T2.2 can give it its own U-bit permissions. Empty + already
-     * aligned means start == end and no pages are consumed. */
+    /* T2.1 / D-0031: user sections. T2.5 puts code in `.utext`; the rest
+     * stay empty. Each is 4 KiB-aligned so it can have its own U-bit
+     * permissions. Content advances `.` before `__tasks_start = .`, so
+     * the 88 KiB slots move up rather than overlapping. */
     __utext_start = .;
     .utext : {
         *(.utext .utext.*)

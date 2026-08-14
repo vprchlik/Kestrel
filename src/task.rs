@@ -367,7 +367,6 @@ const _: () = assert!((FABRICATED_SSTATUS & csr::sstatus::UXL) == csr::sstatus::
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum State {
     Ready,
-    /// Set when the scheduler first `sret`s into the task (T2.5).
     #[allow(dead_code)]
     Running,
     /// Set by `exit` (T2.6).
@@ -467,10 +466,13 @@ pub fn create(id: usize, entry: usize) {
     }
 }
 
-/// Create every slot with `sepc = 0` (placeholder; T2.5 overwrites before
-/// `sret`) and print the table. Asserts `frame == kstack_top - 272`.
+/// Create slot 0 with `sepc` = the `.utext` entry; the rest keep `sepc = 0`
+/// so a mistaken `sret` into them faults at address 0 (instruction page
+/// fault, `sepc = stval = 0`). Print the table. Asserts
+/// `frame == kstack_top - 272`.
 pub fn init() {
-    for id in 0..MAX_TASKS {
+    create(0, crate::user::entry());
+    for id in 1..MAX_TASKS {
         create(id, 0);
     }
     println!(
@@ -489,11 +491,13 @@ pub fn init() {
                 trap::FRAME_SIZE
             );
         }
+        let sepc = unsafe { (*t.frame).sepc };
         println!(
-            "task {} {} frame={:#x} kstack_top={:#x} ustack_top={:#x} brk={:#x}..{:#x} (at {:#x}) exit={}",
+            "task {} {} frame={:#x} sepc={:#x} kstack_top={:#x} ustack_top={:#x} brk={:#x}..{:#x} (at {:#x}) exit={}",
             t.id,
             state_name(t.state),
             frame,
+            sepc,
             t.kstack_top,
             t.ustack_top,
             t.brk_base,
@@ -502,4 +506,27 @@ pub fn init() {
             t.exit_code
         );
     }
+}
+
+/// Mark `id` Running and `sret` into its fabricated frame. Does not return
+/// (D-0035). `sscratch` is still 0 here; `__trap_return`'s U tail parks the
+/// user `sp` and swaps `kstack_top` into `sscratch` immediately before `sret`.
+#[cfg_attr(
+    any(
+        feature = "panic-selftest",
+        feature = "hang-selftest",
+        feature = "stress",
+        feature = "frame-exhaust-selftest"
+    ),
+    allow(dead_code)
+)]
+pub fn enter(id: usize) -> ! {
+    let t = get(id);
+    let sepc = unsafe { (*t.frame).sepc };
+    println!(
+        "enter task {} sepc={:#x} frame={:#x} kstack_top={:#x}",
+        t.id, sepc, t.frame as usize, t.kstack_top
+    );
+    t.state = State::Running;
+    trap::resume(t.frame);
 }
