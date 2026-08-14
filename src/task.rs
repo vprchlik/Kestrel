@@ -559,6 +559,26 @@ pub fn enter(id: usize) -> ! {
     //    on trap; we never set it in the handler (D-0020). `sret` restores
     //    `SIE` from `SPIE` in U only. The handler is the only kernel code
     //    that runs at all.
+    //
+    // Consumed frames are 65 tables (root + L1 + 63 L0) plus the two
+    // FRAME OK self-test leftovers (D-0036). Feature images can shift
+    // `total` with `__heap_end`; the split must still hold.
+    {
+        let total = crate::frame::total_frames();
+        let free = crate::frame::free_count();
+        let tables = crate::page::tables_used();
+        let held = total - free;
+        if tables != 65 || held != tables + 2 {
+            panic!(
+                "frames held {} tables {} want tables=65 held=67 (root+L1+63 L0 + FRAME OK pair)",
+                held, tables
+            );
+        }
+        println!(
+            "frames consumed: tables={} selftest=2 held={}",
+            tables, held
+        );
+    }
     crate::frame::freeze();
     let t = get(id);
     let sepc = unsafe { (*t.frame).sepc };
@@ -671,6 +691,9 @@ fn finish_sched() -> ! {
                 t1.yields, t2.yields
             );
         }
+        if t2.brk == t2.brk_base {
+            panic!("sched: task 2 never sbrk'd");
+        }
         if sw12 == 0 || sw21 == 0 {
             panic!(
                 "sched: switches 1->2={} 2->1={} (need at least one each way)",
@@ -692,6 +715,7 @@ fn finish_sched() -> ! {
             t1.yields + t2.yields
         );
         println!("SCHED OK");
+        println!("M2 EXECUTION OK");
         stop_until_scheduler();
     }
 }
@@ -820,10 +844,8 @@ pub fn exit_current(code: usize) {
     let _ = mark_exited();
 }
 
-/// No running task and no scheduler yet (T2.9). Printed, then SRST — a
-/// park would make `just test` hang after the marker, and silently
-/// resuming task 1 (`sepc = 0`) would be an instruction page fault that
-/// looks like a map bug. T2.9 replaces this with "pick the next Ready".
+/// Empty ready set after the last `exit` (or kill): SRST. No idle loop
+/// (D-0035) — this *is* the scheduler's empty-set behavior.
 #[cfg_attr(
     any(
         feature = "panic-selftest",
@@ -835,7 +857,7 @@ pub fn exit_current(code: usize) {
     allow(dead_code)
 )]
 pub fn stop_until_scheduler() -> ! {
-    println!("no running task; shutting down (T2.9 replaces this with the scheduler)");
+    println!("no ready task; shutting down");
     let ret = crate::sbi::shutdown();
     panic!(
         "shutdown failed: SRST error={} value={}",

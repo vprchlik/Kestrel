@@ -960,6 +960,18 @@ D-0011 onward are working decisions made under those constraints.
   (M3's app sections) must be added to the validator, or legitimate pointers
   start failing.
 
+  **"User faults never panic the kernel" holds only for the delegated
+  subset.** OpenSBI sets `MEDELEG = 0xf0b509`, so codes 1, 2, 4, 5, 6, 7, 9
+  never reach S-mode (PLAN M1 concept 9). Cause 2 — illegal instruction —
+  is the one a task can actually raise: `unimp`, or an FP op with `FS=Off`
+  (fabricated `sstatus` leaves FS Off, D-0032). That trap goes to M-mode.
+  OpenSBI dumps `mcause`/`mepc`/`mtval` and parks the hart. Our handler
+  never runs, so there is no `task N killed` line and no reschedule; the
+  machine looks dead. That is outside our containment **by platform design,
+  not by choice** — we do not control `medeleg`. Symptom and first-response
+  are in DEBUGGING.md §4 (M2). The user-fault selftest therefore loads from
+  VA 0 (cause 13, delegated) rather than executing `unimp`.
+
 ## D-0035: One tick per slice; no idle loop in M2
 - Date: 2026-08-14 — Status: accepted
 - **Decision:** the timeslice is exactly one timer interrupt at the existing
@@ -1062,3 +1074,16 @@ D-0011 onward are working decisions made under those constraints.
   functions return a frame pointer and never `sstatus::set(SIE)`. `sret`
   restores `SIE` from `SPIE` in U only. There is still no interruptible
   kernel-side allocator caller.
+
+  **67 frames consumed before freeze.** `frames frozen: free=N` compared
+  with the `FRAME OK` total is a gap of 67 on the default image: 65 page
+  tables plus 2. The 65 are `page::tables_used()` — one Sv39 root, one L1
+  (VPN[2]=2 covers `0x8000_0000..0xC000_0000`; we do not allocate an L0 for
+  the unmapped OpenSBI 2 MiB at `0x8000_0000`), and 63 L0 tables for
+  `0x8020_0000..0x8800_0000`. The other two are the `FRAME OK` self-test's
+  leftover pair: it allocates `a` and `b`, frees `a`, reallocates `c==a`,
+  and never frees `b` or `c`. That is a deliberate LIFO check, not a leak
+  to plug; freeze then pins them. Feature images can print a different
+  `FRAME OK` total (`__heap_end` moves with code size) — `just test-stress`
+  compares exhaust's panic against **that boot's** `FRAME OK` line, not
+  against `just run`.

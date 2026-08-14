@@ -250,6 +250,16 @@ sample of the range.
    is an impossible value in a static, seen inside the handler.
 6. **Kernel stack overflow — a hang with no output. Known unrecoverable.**
    See below.
+7. **Undelegated illegal instruction from U — firmware dump, hart parked,
+   no `task N killed` line.** Cause 2 is not in `MEDELEG` (PLAN M1 concept 9,
+   D-0034). A task that executes `unimp`, or an FP op with `FS=Off`, traps
+   to OpenSBI, not to us. Symptom: an OpenSBI "unhandled trap" dump
+   (`mcause=2`, `mepc` in `.utext`) and a parked hart; QEMU may sit there
+   until the hang-guard. There is no kernel `PANIC`, no `task N killed`,
+   and no reschedule — containment never ran. This is not a scheduler bug
+   and not a missed kill in `trap_handler`. Confirm with `-d int`: `async:0
+   cause:2` going to M-mode. The user-fault selftest uses a load page fault
+   (cause 13, delegated) for exactly this reason.
 
 **Kernel stack overflow (M2 onward) — known unrecoverable failure**
 

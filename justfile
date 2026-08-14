@@ -48,7 +48,7 @@ check-utext: build
 # just 1.58 has no kwargs: `just test expect="CSR OK"` passes the literal
 # string `expect=CSR OK` as the first positional. Strip a matching `name=`
 # prefix so that form, `just test "CSR OK"`, and the defaults all work.
-test expect="M1 FUNDAMENTALS OK" timeout_s="3":
+test expect="M2 EXECUTION OK" timeout_s="5":
     #!/usr/bin/env bash
     set -u
     e='{{expect}}'
@@ -56,8 +56,32 @@ test expect="M1 FUNDAMENTALS OK" timeout_s="3":
     case "$e" in expect=*) e="${e#expect=}" ;; esac
     case "$t" in timeout_s=*) t="${t#timeout_s=}" ;; esac
     EXPECT="$e" TIMEOUT_S="$t" bash scripts/boot-test.sh
-    if [ "$e" = "SCHED OK" ]; then
+    if [ "$e" = "SCHED OK" ] || [ "$e" = "M2 EXECUTION OK" ]; then
         log=serial.log
+        if ! grep -a -q 'frames frozen: free=' "$log"; then
+            echo 'TEST FAIL: missing "frames frozen: free=N"'
+            exit 1
+        fi
+        if ! grep -a -q 'USER OK' "$log"; then
+            echo 'TEST FAIL: missing USER OK'
+            exit 1
+        fi
+        if ! grep -a -q 'SYSCALL OK' "$log"; then
+            echo 'TEST FAIL: missing SYSCALL OK'
+            exit 1
+        fi
+        if ! grep -a -q 'SBRK OK' "$log"; then
+            echo 'TEST FAIL: missing SBRK OK'
+            exit 1
+        fi
+        if ! grep -a -q 'task 1 exit 0' "$log"; then
+            echo 'TEST FAIL: missing "task 1 exit 0"'
+            exit 1
+        fi
+        if ! grep -a -q 'task 2 exit 0' "$log"; then
+            echo 'TEST FAIL: missing "task 2 exit 0"'
+            exit 1
+        fi
         if ! grep -aE -q 'task 1 done writes=[0-9]* yields=0' "$log"; then
             echo 'TEST FAIL: missing "task 1 done writes=… yields=0"'
             exit 1
@@ -84,6 +108,22 @@ test expect="M1 FUNDAMENTALS OK" timeout_s="3":
         fi
         echo 'TEST PASS: sched greps and awk order'
     fi
+    if [ "$e" = "M2 EXECUTION OK" ]; then
+        log=serial.log
+        if ! awk '
+            /frames frozen: free=/ { f=NR }
+            /USER OK/ { u=NR }
+            /SYSCALL OK/ { s=NR }
+            /SBRK OK/ { b=NR }
+            /SCHED OK/ { c=NR }
+            /M2 EXECUTION OK/ { m=NR }
+            END { if (!(f && u && s && b && c && m) || !(f<u && u<s && s<b && b<c && c<m)) exit 1 }
+        ' "$log"; then
+            echo 'TEST FAIL: marker order (frozen, USER, SYSCALL, SBRK, SCHED, M2)'
+            exit 1
+        fi
+        echo 'TEST PASS: M2 marker order'
+    fi
 
 # Invert the script's intentional non-zero so just does not print
 # "recipe failed" for a designed FAIL/HANG. `-` would also hide a
@@ -97,6 +137,9 @@ test-hang:
 
 # Allocator storm at 10 ms then 1 ms ticks, then frame-exhaust panic.
 # Exhaust is a designed PANIC (same harness shape as test-panic).
+# The `frames N` total is taken from **this exhaust boot's** FRAME OK line,
+# not from `just run`. Feature images shift `__heap_end`, so the default
+# kernel can print 31866 while exhaust prints 31867 — that is not a mismatch.
 test-stress:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -109,7 +152,7 @@ test-stress:
         echo "TEST FAIL: frame exhaust expected panic (exit 1), got ${code}"
         exit 1
     fi
-    n=$(grep -aE 'frames [0-9]+' serial.log | head -n1 | awk '{print $2}')
+    n=$(grep -aE '^frames [0-9]+ heap_start=' serial.log | head -n1 | awk '{print $2}')
     if [ -z "$n" ]; then
         echo 'TEST FAIL: no FRAME OK frame count in serial.log'
         exit 1
@@ -122,7 +165,7 @@ test-stress:
     echo "TEST PASS: frame exhaust total=${n}"
 
 # Both invalid-pointer shapes, each in its own image so the kill of one
-# cannot hide the other (D-0034). Default boot is T2.8 (SBRK OK).
+# cannot hide the other (D-0034).
 test-userptr:
     #!/usr/bin/env bash
     set -euo pipefail

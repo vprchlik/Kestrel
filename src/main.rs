@@ -7,8 +7,8 @@
 //! deliberate `ebreak`, waits for 30 timer ticks, runs a frame-allocator
 //! self-test, builds Sv39 page tables and walks them in software
 //! (`PAGETABLE OK`), activates Sv39 (`PAGING OK`), runs a heap self-test
-//! (`HEAP OK`), and `M1 FUNDAMENTALS OK`, then asks OpenSBI to shut the machine
-//! down. A panic prints `PANIC at file:line: message` and parks.
+//! (`HEAP OK`), and `M1 FUNDAMENTALS OK`. M2 then `sret`s into U-mode tasks,
+//! prints `M2 EXECUTION OK`, and asks OpenSBI to shut the machine down.
 
 #![no_std]
 #![no_main]
@@ -79,10 +79,10 @@ _start:
 /// 10 ms ticks, continues past an `ebreak` (`TRAP OK`), waits for `tick 30`,
 /// checks the DTB then the frame allocator (`FRAME OK`), builds page tables
 /// without writing `satp` (`PAGETABLE OK`), activates Sv39 (`PAGING OK`),
-/// runs the heap self-test (`HEAP OK`), and `M1 FUNDAMENTALS OK`, then shuts
-/// down via SRST. The `panic-selftest` / `hang-selftest` features
-/// divert that path so the harness can exercise FAIL and HANG without
-/// editing this file.
+/// runs the heap self-test (`HEAP OK`), and `M1 FUNDAMENTALS OK`, then
+/// `sret`s into U-mode (D-0035: does not return). The `panic-selftest` /
+/// `hang-selftest` features divert that path so the harness can exercise
+/// FAIL and HANG without editing this file.
 #[no_mangle]
 extern "C" fn kmain(hartid: usize, dtb_pa: usize) -> ! {
     sbi::require_dbcn();

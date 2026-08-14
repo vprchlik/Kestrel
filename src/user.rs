@@ -65,9 +65,11 @@ pub fn task2() -> usize {
     task2_entry as *const () as usize
 }
 
-// T2.9 demo: two tasks, each spins until its own gettime has advanced
-// 2 × PERIOD (200_000 ticks = 20 ms). Progress write every 5 ms, then
-// exit. No yield — the kernel asserts yields == 0.
+// T2.12 demo: two tasks spin on their own gettime for 2 × PERIOD (20 ms)
+// so preemption is bounded below by the wall clock, then exit. No yield.
+// Task 1 writes every 5 ms (4 progress lines). Task 2 writes every 10 ms
+// (2 progress lines) after growing its break, storing a message there,
+// and write()ing it — that is the sbrk-uses-the-memory check.
 #[cfg(not(any(
     feature = "userptr-kernel-selftest",
     feature = "userptr-span-selftest",
@@ -82,22 +84,41 @@ global_asm!(
     .globl task1_entry
 task1_entry:
     addi    s1, zero, 1
-    j       task_body
-    .globl task2_entry
-task2_entry:
-    addi    s1, zero, 2
-    j       task_body
-
-task_body:
-    addi    a7, zero, 4
-    ecall
-    mv      s2, a1
     lui     s3, 0xc
     addi    s3, s3, 0x350
     lui     s4, 0x31
     addi    s4, s4, -0x2C0
     lui     s5, 0xc
     addi    s5, s5, 0x350
+    j       task_body
+    .globl task2_entry
+task2_entry:
+    addi    s1, zero, 2
+    addi    a0, zero, 16
+    addi    a7, zero, 3
+    ecall
+    mv      s6, a1
+    la      t0, sbrkmsg
+    ld      t1, 0(t0)
+    sd      t1, 0(s6)
+    ld      t1, 8(t0)
+    sd      t1, 8(s6)
+    mv      a0, s6
+    addi    a1, zero, 16
+    addi    a7, zero, 1
+    ecall
+    lui     s3, 0x18
+    addi    s3, s3, 0x6A0
+    lui     s4, 0x31
+    addi    s4, s4, -0x2C0
+    lui     s5, 0x18
+    addi    s5, s5, 0x6A0
+    j       task_body
+
+task_body:
+    addi    a7, zero, 4
+    ecall
+    mv      s2, a1
 loop:
     addi    a7, zero, 4
     ecall
@@ -123,6 +144,9 @@ done:
     unimp
 
     .section .urodata, "a"
+    .balign 8
+sbrkmsg:
+    .ascii  "sbrk from task2\n"
     .balign 4
 msg1:
     .ascii  "task 1 progress\n"

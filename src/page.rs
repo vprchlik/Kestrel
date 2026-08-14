@@ -104,6 +104,9 @@ pub fn root_pa() -> usize {
 }
 
 /// Table frames consumed by `init` (root + intermediates).
+/// On QEMU `virt` 128 MiB identity-mapped from `0x8020_0000` this is 65:
+/// 1 root + 1 L1 (VPN[2]=2) + 63 L0 (2 MiB slots from L1[1] through L1[63]).
+/// The OpenSBI 2 MiB at `0x8000_0000` is unmapped, so L1[0] has no L0.
 pub fn tables_used() -> usize {
     unsafe { TABLES }
 }

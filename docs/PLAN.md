@@ -917,7 +917,7 @@ what T2.1/T2.8 arrange by construction: nothing in the trap path allocates.
 ### T2.12 — Two demo tasks and milestone wrap — M
 Two counters writing at different rates, one of them using `sbrk`, both
 exiting; the last `exit` shuts down. Marker `M2 EXECUTION OK`, harness default
-updated, GLOSSARY and DECISIONS updated, five-question quiz.
+updated, GLOSSARY and DECISIONS updated. Quiz is separate.
 
 - **Acceptance:** `just test` (no arguments) passes on the new default marker.
 
@@ -928,11 +928,39 @@ $ just test
 ```
 prints `TEST PASS: found "M2 EXECUTION OK"` and exits 0, and the serial log
 from `just run` contains, in order: the M1 markers, `frames frozen`,
-`USER OK`, `SYSCALL OK`, `SBRK OK`, the two tasks' progress lines, both
-`task N done … yields=0` lines, the `sched switches` line, `SCHED OK`, two
-`task N exit 0` lines, `M2 EXECUTION OK`, then a clean exit 0.
-`just test-panic`, `just test-hang`, `just test-stress`, and the new
-`just test-user-fault` all still hold their verdicts.
+`USER OK`, `SYSCALL OK`, `SBRK OK`, the two tasks' progress lines (and the
+sbrk-backed write), both `task N exit 0` lines, both `task N done … yields=0`
+lines, the `sched switches` line, `SCHED OK`, `M2 EXECUTION OK`, then a clean
+exit 0.
+`just test-panic`, `just test-hang`, `just test-stress`, `just test-userptr`,
+`just test-user-fault`, and `just test-freeze` all still hold their verdicts.
+
+## M2 summary
+
+**Produced:** an S-mode kernel that `sret`s into U-mode tasks over a 5-syscall
+ABI, copies user pointers through a `SUM` window after a static-interval
+check, round-robins on every tick (`mv sp, a0` is the switch), kills a
+delegated U-mode fault without panicking, and freezes the frame allocator
+before the first `sret` so the trap path cannot allocate. Two demo tasks
+write at different rates; task 2 grows its break and uses the memory; the
+last `exit` shuts the machine down. Containment does not cover undelegated
+causes (illegal instruction → OpenSBI).
+
+**Acceptance proves:** `just test` finds `M2 EXECUTION OK` and exits 0.
+`just run` prints the M1 markers, then `frames frozen`, `USER OK`,
+`SYSCALL OK`, `SBRK OK`, interleaved progress with `yields=0`, both
+`task N exit 0` lines, `SCHED OK`, `M2 EXECUTION OK`, and QEMU exits 0.
+Sibling selftests keep their verdicts.
+
+**Decisions this milestone:** D-0029 `sscratch` protocol; D-0030 static
+per-task stacks with guard holes; D-0031 user map built before `satp`, no
+PTE edits after; D-0032 switch at trap exit, the trap frame *is* the task
+context; D-0033 syscall ABI; D-0034 user-pointer validation, `SUM` window,
+user faults kill the task (delegated subset only); D-0035 slice = one tick,
+no idle loop, known fairness of `SIE=0` in S; D-0036 D-0028 resolved by
+preallocation plus `frame::freeze()`.
+
+---
 
 ## Risks and likely failure modes
 

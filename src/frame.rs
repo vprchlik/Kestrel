@@ -170,7 +170,8 @@ pub fn free_frame(pa: usize) {
 }
 
 /// Allocate two, free the first, get it back (LIFO). Prints the total and
-/// `FRAME OK`.
+/// `FRAME OK`. Deliberately leaves `b` and `c` allocated: those two are
+/// still outstanding at `freeze()` (D-0036) and are not a leak to plug.
 pub fn self_test() {
     let a = alloc_frame();
     let b = alloc_frame();

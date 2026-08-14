@@ -39,6 +39,8 @@ const _: () = assert!(SYS_RESERVED == 0);
 const _: () = assert!(SYS_WRITE + 4 == SYS_YIELD);
 
 static mut USER_OK: bool = false;
+static mut SYSCALL_OK: bool = false;
+static mut SBRK_OK: bool = false;
 
 /// `ecall` has no compressed encoding: RVC has `c.ebreak` but not
 /// `c.ecall` (unprivileged spec 20211203 §16.8, Table 16.5; D-0021,
@@ -62,6 +64,15 @@ pub fn from_ecall(frame: &mut TrapFrame) -> &mut TrapFrame {
     }
 
     let num = frame.a7();
+    match num {
+        SYS_WRITE | SYS_EXIT | SYS_SBRK | SYS_GETTIME | SYS_YIELD => {
+            if !unsafe { SYSCALL_OK } {
+                println!("SYSCALL OK");
+                unsafe { SYSCALL_OK = true };
+            }
+        }
+        _ => {}
+    }
     match num {
         SYS_WRITE => sys_write(frame),
         SYS_EXIT => sys_exit(frame),
@@ -148,6 +159,10 @@ fn sys_sbrk(frame: &mut TrapFrame) -> &mut TrapFrame {
     advance_ecall(frame);
     frame.set_retval(OK, old);
     println!("sbrk {:#x} -> {:#x}", old, new);
+    if delta > 0 && !unsafe { SBRK_OK } {
+        println!("SBRK OK");
+        unsafe { SBRK_OK = true };
+    }
     frame
 }
 
