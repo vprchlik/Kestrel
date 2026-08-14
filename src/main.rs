@@ -21,6 +21,8 @@ mod frame;
 mod heap;
 mod page;
 mod sbi;
+#[cfg(feature = "stress")]
+mod stress;
 mod timer;
 mod trap;
 
@@ -137,12 +139,24 @@ extern "C" fn kmain(hartid: usize, dtb_pa: usize) -> ! {
         heap::init();
         heap::self_test();
         println!("M1 FUNDAMENTALS OK");
-        let ret = sbi::shutdown();
-        println!(
-            "shutdown failed: SRST error={} value={}",
-            ret.error, ret.value
-        );
-        park()
+        #[cfg(feature = "frame-exhaust-selftest")]
+        loop {
+            let _ = frame::alloc_frame();
+        }
+        #[cfg(feature = "stress")]
+        {
+            crate::stress::run();
+            println!("STRESS OK");
+        }
+        #[cfg(not(feature = "frame-exhaust-selftest"))]
+        {
+            let ret = sbi::shutdown();
+            println!(
+                "shutdown failed: SRST error={} value={}",
+                ret.error, ret.value
+            );
+            park()
+        }
     }
 }
 

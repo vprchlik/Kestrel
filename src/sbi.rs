@@ -28,22 +28,42 @@ pub const EID_TIME: usize = 0x5449_4D45;
 pub const FID_TIME_SET_TIMER: usize = 0;
 
 /// System Reset extension. SBI spec, EID ASCII `"SRST"`.
+#[cfg_attr(
+    any(
+        feature = "panic-selftest",
+        feature = "hang-selftest",
+        feature = "frame-exhaust-selftest"
+    ),
+    allow(dead_code)
+)]
 pub const EID_SRST: usize = 0x5352_5354;
 /// `sbi_system_reset`. SBI spec SRST, FID 0.
 #[cfg_attr(
-    any(feature = "panic-selftest", feature = "hang-selftest"),
+    any(
+        feature = "panic-selftest",
+        feature = "hang-selftest",
+        feature = "frame-exhaust-selftest"
+    ),
     allow(dead_code)
 )]
 pub const FID_SRST_RESET: usize = 0;
 /// Shutdown. SBI spec SRST, `reset_type`.
 #[cfg_attr(
-    any(feature = "panic-selftest", feature = "hang-selftest"),
+    any(
+        feature = "panic-selftest",
+        feature = "hang-selftest",
+        feature = "frame-exhaust-selftest"
+    ),
     allow(dead_code)
 )]
 pub const SRST_TYPE_SHUTDOWN: usize = 0;
 /// No recorded reason. SBI spec SRST, `reset_reason`.
 #[cfg_attr(
-    any(feature = "panic-selftest", feature = "hang-selftest"),
+    any(
+        feature = "panic-selftest",
+        feature = "hang-selftest",
+        feature = "frame-exhaust-selftest"
+    ),
     allow(dead_code)
 )]
 pub const SRST_REASON_NONE: usize = 0;
@@ -149,7 +169,11 @@ pub fn console_write_byte(byte: u8) {
 /// or `ecall` returns, returns that `Sbiret` so the caller can print and
 /// park — never fall off into whatever follows `call kmain`.
 #[cfg_attr(
-    any(feature = "panic-selftest", feature = "hang-selftest"),
+    any(
+        feature = "panic-selftest",
+        feature = "hang-selftest",
+        feature = "frame-exhaust-selftest"
+    ),
     allow(dead_code)
 )]
 pub fn shutdown() -> Sbiret {

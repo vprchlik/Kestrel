@@ -9,6 +9,10 @@ edition = "2021"
 panic-selftest = []
 # Park after hello with no marker and no panic — exercises TEST HANG.
 hang-selftest = []
+# Allocator storm after the M1 markers (just test-stress).
+stress = []
+# Boot through HEAP OK, then alloc frames until the free list is empty.
+frame-exhaust-selftest = []
 
 [dependencies]
 

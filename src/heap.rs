@@ -250,6 +250,28 @@ unsafe fn dealloc_raw(ptr: *mut u8, _layout: Layout) {
     insert_coalesced(start, size);
 }
 
+/// `(free_blocks, free_bytes)`. Read-only walk of the coalesced list.
+#[cfg_attr(not(feature = "stress"), allow(dead_code))]
+pub fn free_stats() -> (usize, usize) {
+    let mut n = 0usize;
+    let mut bytes = 0usize;
+    let mut cur = unsafe { HEAD };
+    while !cur.is_null() {
+        bytes += unsafe { (*cur).size };
+        n += 1;
+        if n > 1024 {
+            panic!("heap free list looks cyclic");
+        }
+        cur = unsafe { next(cur) };
+    }
+    (n, bytes)
+}
+
+#[cfg_attr(not(feature = "stress"), allow(dead_code))]
+pub fn region_size() -> usize {
+    unsafe { HEAP_END - HEAP_START }
+}
+
 fn dump(tag: &str) {
     let mut n = 0usize;
     let mut bytes = 0usize;

@@ -12,6 +12,11 @@ use crate::sbi;
 /// QEMU `virt` timebase is 10 MHz (`aclint-mtimer @ 10000000Hz`). 100_000
 /// ticks = 10 ms. PLAN T1.3 / D-0018.
 pub const PERIOD: usize = 100_000;
+/// 1 ms at the same timebase. Stress widens the interrupt-during-alloc window.
+#[cfg_attr(not(feature = "stress"), allow(dead_code))]
+pub const PERIOD_1MS: usize = 10_000;
+
+static mut PERIOD_NOW: usize = PERIOD;
 
 static mut TICKS: usize = 0;
 
@@ -34,7 +39,18 @@ pub fn init() {
 /// write-clearable from S-mode; OpenSBI clears it when the new deadline is
 /// in the future.
 pub fn arm() {
-    sbi::set_timer(csr::time::read().wrapping_add(PERIOD));
+    sbi::set_timer(csr::time::read().wrapping_add(unsafe { PERIOD_NOW }));
+}
+
+/// Next `arm` uses this many `rdtime` ticks. Re-arms immediately so the new
+/// period takes effect. Stress only; default boot never calls this.
+#[cfg_attr(not(feature = "stress"), allow(dead_code))]
+pub fn set_period(ticks: usize) {
+    if ticks == 0 {
+        panic!("timer period 0");
+    }
+    unsafe { PERIOD_NOW = ticks };
+    arm();
 }
 
 /// Tick count. Volatile: the compiler cannot see that `__trap_entry`

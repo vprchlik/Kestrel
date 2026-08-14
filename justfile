@@ -61,6 +61,32 @@ test-panic:
 test-hang:
     bash scripts/boot-test.sh hang-selftest; [ $? -eq 2 ]
 
+# Allocator storm at 10 ms then 1 ms ticks, then frame-exhaust panic.
+# Exhaust is a designed PANIC (same harness shape as test-panic).
+test-stress:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    EXPECT="STRESS OK" TIMEOUT_S=30 bash scripts/boot-test.sh stress
+    set +e
+    TIMEOUT_S=20 bash scripts/boot-test.sh frame-exhaust-selftest
+    code=$?
+    set -e
+    if [ "$code" -ne 1 ]; then
+        echo "TEST FAIL: frame exhaust expected panic (exit 1), got ${code}"
+        exit 1
+    fi
+    n=$(grep -aE 'frames [0-9]+' serial.log | head -n1 | awk '{print $2}')
+    if [ -z "$n" ]; then
+        echo 'TEST FAIL: no FRAME OK frame count in serial.log'
+        exit 1
+    fi
+    if ! grep -a -q "out of frames (total ${n})" serial.log; then
+        echo "TEST FAIL: exhaust panic did not report total ${n}"
+        grep -a 'PANIC' serial.log || true
+        exit 1
+    fi
+    echo "TEST PASS: frame exhaust total=${n}"
+
 # Disassemble the kernel. Extra flags as one quoted arg, e.g. just objdump '-d --source'
 objdump flags="-d": build
     cargo objdump -- {{flags}}

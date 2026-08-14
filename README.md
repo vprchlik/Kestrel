@@ -31,6 +31,7 @@ just run       # build + boot; QEMU exits 0 after M1 FUNDAMENTALS OK
 just test      # headless PASS (exit 0) on M1 FUNDAMENTALS OK
 just test-panic
 just test-hang # FAIL (1) / HANG (2) — same harness, diverted builds
+just test-stress # allocator storm + 1 ms ticks; frame-exhaust panic
 just debug   # boot frozen with GDB stub; then `just gdb` or F5 in the editor
 just objdump # disassemble the kernel image
 ```

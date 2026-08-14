@@ -96,6 +96,22 @@ pub fn total_frames() -> usize {
     unsafe { TOTAL }
 }
 
+/// Length of the free list. Read-only: does not allocate or free.
+#[cfg_attr(not(feature = "stress"), allow(dead_code))]
+pub fn free_count() -> usize {
+    let mut n = 0usize;
+    let mut pa = unsafe { HEAD };
+    let cap = unsafe { TOTAL }.saturating_add(1);
+    while pa != 0 {
+        n += 1;
+        if n > cap {
+            panic!("frame free list looks cyclic after {} nodes", n);
+        }
+        pa = unsafe { core::ptr::read(pa as *const usize) };
+    }
+    n
+}
+
 /// Pop the head, **then** zero the frame. The next-pointer lives in the
 /// first 8 bytes; it must be copied into `HEAD` before `write_bytes` wipes
 /// it. Zero-on-free would erase that pointer while the frame is still on
