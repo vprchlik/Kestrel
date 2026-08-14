@@ -139,6 +139,7 @@ extern "C" fn kmain(hartid: usize, dtb_pa: usize) -> ! {
         frame::init();
         frame::self_test();
         task::check_layout();
+        task::init();
         page::init();
         page::activate();
         heap::init();

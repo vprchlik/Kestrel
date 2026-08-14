@@ -104,6 +104,8 @@ rw_csr!(sstatus, write_opts: [nostack, preserves_flags], {
     pub const MXR: usize = 1 << 19;
     /// User XLEN, bits 33:32. §4.1.1. Value `2` means UXLEN = 64.
     pub const UXL: usize = 0b11 << 32;
+    /// `sstatus.UXL` field value 2: UXLEN = 64. §4.1.1.
+    pub const UXL_64: usize = 2 << 32;
     /// Dirty: FS/XS/VS some-dirty summary. §4.1.1, bit 63 on RV64.
     pub const SD: usize = 1 << 63;
 });

@@ -1,18 +1,23 @@
-//! Per-task layout symbols and the `MAX_TASKS` count.
+//! Per-task layout and the static task table.
 //!
-//! Owns the compile-time task-slot count and the linker symbols for user
-//! sections, per-task stacks, guard holes, and break windows (D-0030,
-//! D-0031). T2.4 puts the TCB on top of this. Without the count assert, the
-//! linker script and Rust can drift and a later `sscratch` would point at
-//! the wrong stack.
+//! Owns the compile-time task-slot count, the linker symbols for user
+//! sections / stacks / guards / break windows (D-0030, D-0031), and the
+//! TCB array (D-0032). The TCB stores a pointer to the trap frame at
+//! `kstack_top - 272`, not an inline copy — the frame *is* the task
+//! context. `create` writes that frame onto a linker-reserved kernel
+//! stack and touches neither the frame allocator nor the heap (D-0036).
+//! Without the count assert, the linker script and Rust can drift and a
+//! later `sscratch` would point at the wrong stack.
 
 #![cfg_attr(
     any(feature = "panic-selftest", feature = "hang-selftest"),
     allow(dead_code)
 )]
 
+use crate::csr;
 use crate::frame::PAGE_SIZE;
 use crate::println;
+use crate::trap::{self, TrapFrame};
 
 /// Compile-time task slots. Demo uses 2. D-0030.
 pub const MAX_TASKS: usize = 4;
@@ -324,4 +329,177 @@ pub fn check_layout() {
         tasks_s,
         tasks_e
     );
+}
+
+// ---------------------------------------------------------------------------
+// TCB. The trap frame lives on the task's kernel stack, not in this struct
+// (D-0032). `frame` is `kstack_top - FRAME_SIZE`.
+// ---------------------------------------------------------------------------
+
+/// RISC-V `x2` / `sp`.
+const REG_SP: usize = 2;
+/// RISC-V `x3` / `gp`.
+const REG_GP: usize = 3;
+/// RISC-V `x4` / `tp`.
+const REG_TP: usize = 4;
+
+/// Fabricated `sstatus` for a new task (D-0032).
+///
+/// - `SPP` = 0 → `sret` enters U-mode
+/// - `SPIE` = 1 → `sret` sets `SIE` from `SPIE`, so SIE becomes 1 in U
+/// - `SIE` = 0 → the `csrw sstatus` in `__trap_return` must not enable
+///   interrupts in S-mode in the window before `sret`
+/// - `FS` = Off (0) → an FP instruction from U is an undelegated illegal
+///   instruction (OpenSBI dump), not a silent FP op. Boot `sstatus` has
+///   FS=Dirty (`0x8000000200006000`); we do not copy it.
+/// - `UXL` = 64, matching OpenSBI. Clearing it would change UXLEN.
+///
+/// Value: `SPIE | UXL_64` = `0x20 | (2 << 32)` = `0x200000020`.
+const FABRICATED_SSTATUS: usize = csr::sstatus::SPIE | csr::sstatus::UXL_64;
+
+const _: () = assert!(FABRICATED_SSTATUS & csr::sstatus::SIE == 0);
+const _: () = assert!(FABRICATED_SSTATUS & csr::sstatus::SPP == 0);
+const _: () = assert!(FABRICATED_SSTATUS & csr::sstatus::SPIE != 0);
+const _: () = assert!(FABRICATED_SSTATUS & csr::sstatus::FS == 0);
+const _: () = assert!(FABRICATED_SSTATUS & csr::sstatus::SUM == 0);
+const _: () = assert!((FABRICATED_SSTATUS & csr::sstatus::UXL) == csr::sstatus::UXL_64);
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum State {
+    Ready,
+    /// Set when the scheduler first `sret`s into the task (T2.5).
+    #[allow(dead_code)]
+    Running,
+    /// Set by `exit` (T2.6).
+    #[allow(dead_code)]
+    Exited,
+}
+
+/// Task control block. Register state lives in `*frame`, not here.
+#[derive(Clone, Copy)]
+pub struct Task {
+    pub id: usize,
+    pub state: State,
+    pub frame: *mut TrapFrame,
+    pub kstack_top: usize,
+    pub ustack_top: usize,
+    pub brk_base: usize,
+    pub brk: usize,
+    pub brk_wall: usize,
+    pub exit_code: usize,
+}
+
+static mut TASKS: [Option<Task>; MAX_TASKS] = [None; MAX_TASKS];
+
+fn state_name(s: State) -> &'static str {
+    match s {
+        State::Ready => "Ready",
+        State::Running => "Running",
+        State::Exited => "Exited",
+    }
+}
+
+/// Panic unless `id` names a created task.
+pub fn get(id: usize) -> &'static mut Task {
+    if id >= MAX_TASKS {
+        panic!("task {} >= MAX_TASKS {}", id, MAX_TASKS);
+    }
+    match unsafe { TASKS[id].as_mut() } {
+        Some(t) => t,
+        None => panic!("task {} not created", id),
+    }
+}
+
+/// Fabricate a trap frame at `kstack_top - 272` and record the TCB.
+///
+/// No allocation (D-0036): writes a `static` slot and `ptr::write`s 272
+/// bytes onto a linker-reserved kernel stack that has never been used
+/// (boot runs on `__boot_stack`). This module does not import `alloc` or
+/// `frame`; a later `Box`/`Vec` would fail to compile without adding
+/// `alloc::`, a heap alloc before `heap::init` panics `heap alloc before
+/// init`, and `frame::alloc_frame` would be an explicit call (T2.11's
+/// `freeze()` will panic if create ever runs after the freeze).
+pub fn create(id: usize, entry: usize) {
+    if id >= MAX_TASKS {
+        panic!("create: id {} >= MAX_TASKS {}", id, MAX_TASKS);
+    }
+    if unsafe { TASKS[id].is_some() } {
+        panic!("create: task {} already exists", id);
+    }
+
+    let s = slot(id);
+    let frame_pa = s.kstack_top - trap::FRAME_SIZE;
+    if frame_pa < s.kstack_bottom {
+        panic!(
+            "create: task {} frame {:#x} below kstack {:#x}..{:#x}",
+            id, frame_pa, s.kstack_bottom, s.kstack_top
+        );
+    }
+
+    // Virgin kernel stack: NOLOAD, never executed on. First store here.
+    let mut x = [0usize; 32];
+    x[REG_SP] = s.ustack_top;
+    // REG_GP and REG_TP stay 0 (D-0032): a gp-/tp-relative user access
+    // faults near 0 instead of reading kernel data.
+    debug_assert!(x[REG_GP] == 0 && x[REG_TP] == 0);
+
+    let frame = frame_pa as *mut TrapFrame;
+    unsafe {
+        core::ptr::write(
+            frame,
+            TrapFrame {
+                x,
+                sepc: entry,
+                sstatus: FABRICATED_SSTATUS,
+            },
+        );
+        TASKS[id] = Some(Task {
+            id,
+            state: State::Ready,
+            frame,
+            kstack_top: s.kstack_top,
+            ustack_top: s.ustack_top,
+            brk_base: s.brk_base,
+            brk: s.brk_base,
+            brk_wall: s.brk_wall,
+            exit_code: 0,
+        });
+    }
+}
+
+/// Create every slot with `sepc = 0` (placeholder; T2.5 overwrites before
+/// `sret`) and print the table. Asserts `frame == kstack_top - 272`.
+pub fn init() {
+    for id in 0..MAX_TASKS {
+        create(id, 0);
+    }
+    println!(
+        "fabricated sstatus {:#x} (SPIE=1 SPP=U SIE=0 FS=Off UXL=64)",
+        FABRICATED_SSTATUS
+    );
+    for id in 0..MAX_TASKS {
+        let t = get(id);
+        let frame = t.frame as usize;
+        if frame != t.kstack_top - trap::FRAME_SIZE {
+            panic!(
+                "task {} frame {:#x} != kstack_top {:#x} - {}",
+                t.id,
+                frame,
+                t.kstack_top,
+                trap::FRAME_SIZE
+            );
+        }
+        println!(
+            "task {} {} frame={:#x} kstack_top={:#x} ustack_top={:#x} brk={:#x}..{:#x} (at {:#x}) exit={}",
+            t.id,
+            state_name(t.state),
+            frame,
+            t.kstack_top,
+            t.ustack_top,
+            t.brk_base,
+            t.brk_wall,
+            t.brk,
+            t.exit_code
+        );
+    }
 }

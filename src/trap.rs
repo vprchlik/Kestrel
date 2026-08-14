@@ -19,7 +19,7 @@ use crate::timer;
 use core::arch::global_asm;
 
 /// `TrapFrame` size in bytes. 32 GPRs + `sepc` + `sstatus`.
-const FRAME_SIZE: usize = 272;
+pub const FRAME_SIZE: usize = 272;
 
 #[repr(C)]
 pub struct TrapFrame {
