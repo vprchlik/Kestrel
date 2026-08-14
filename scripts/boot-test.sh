@@ -20,7 +20,11 @@ if [ -n "$FEATURE" ]; then
 fi
 
 cargo build "${feat[@]}"
-bash scripts/check-utext.sh "$KERNEL"
+# Feature builds (panic/hang/stress) never enter U-mode; .utext can be
+# GC'd. The check is for the default image, which must have it.
+if [ -z "$FEATURE" ]; then
+    bash scripts/check-utext.sh "$KERNEL"
+fi
 rm -f serial.log
 
 set +e

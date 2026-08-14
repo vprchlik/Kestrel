@@ -29,8 +29,8 @@ pub fn entry() -> usize {
 // (D-0033). `write(ptr, len)` is a0/a1 (D-0033: no fd).
 //
 // Four calls: valid stack source (SUM window), cap → short count, span
-// past the stack top, then a kernel address. The `lui` of 0x80200000 is
-// a *value*, not a symbol reference — check-utext must allow it.
+// past the stack top, then a kernel address. The address 0x80200000 is
+// built from immediates, not a symbol — check-utext must allow that.
 // `unimp` is only reached if the kill fails to stop the task.
 global_asm!(
     r#"
@@ -63,8 +63,12 @@ user_entry:
     ecall
 
     # write(0x80200000, 8): kernel .text, in no user interval. Error
-    # return and kill. lui immediate is a value, not a relocation.
-    lui     a0, 0x80200
+    # return and kill. RV64 `lui rd, 0x80200` sign-extends bit 31 to
+    # 0xffffffff80200000 — the wrong address — so build 0x80200000 from
+    # a positive lui. These immediates are values, not a relocation.
+    lui     a0, 0x80
+    addi    a0, a0, 0x200
+    slli    a0, a0, 12
     addi    a1, zero, 8
     addi    a7, zero, 1
     ecall

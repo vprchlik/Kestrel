@@ -177,6 +177,10 @@ def check_addr(pc, insn, addr, how):
     )
 
 
+if not insns:
+    print("check-utext FAIL: .utext is empty or missing", file=sys.stderr)
+    sys.exit(1)
+
 paired = set()
 for i, (pc, op, args, raw) in enumerate(insns):
     if i in paired:

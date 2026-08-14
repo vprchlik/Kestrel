@@ -848,8 +848,8 @@ past its interval is `ERR_INVALID_ADDRESS`, not a short copy of the prefix.
   spanning pointer (error return, continues — no scheduler yet) and then a
   kernel address (error return and kill). The kernel neither faults nor
   panics. `SUM` is clear again on the next trap (asserted at dispatcher
-  entry). `just check-utext` still passes: the `lui` of the kernel address
-  is a value, not a symbol reference.
+  entry). `just check-utext` still passes: the kernel address is built from
+  immediates (`lui`/`addi`/`slli`), not a symbol reference.
 - **Gap:** `.urodata` is still empty, so the read-only-source arm of
   `user_range_ok` and `copy_to_user` are compiled but not exercised. They
   wait on T2.8 putting a buffer in `.urodata` (and, for `copy_to_user`, a
