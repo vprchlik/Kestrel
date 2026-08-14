@@ -7,7 +7,9 @@
 # a buffer in `.urodata`). A `lui`/`li` immediate used as a *value* (T2.7
 # passing a kernel address to `write`) is not a reference and is allowed.
 # `gp`/`tp` as an addressing base is still rejected: those registers are
-# kernel-owned (D-0032).
+# kernel-owned (D-0032). Unknown instruction forms are a hard error (fail
+# closed): an unmatched objdump line or an unhandled mnemonic fails
+# naming the instruction, rather than skipping it.
 set -euo pipefail
 
 KERNEL="${1:-target/riscv64gc-unknown-none-elf/debug/whimbrel}"
@@ -86,7 +88,10 @@ def fail(pc, insn, reason):
     print(f"  {reason}", file=sys.stderr)
     sys.exit(1)
 
-# llvm-objdump: "80228000: 00100513     	li	a0, 0x1"
+# Instruction-like: "80228000: 00100513     	li	a0, 0x1"
+# Labels: "0000000080228000 <user_entry>:"
+label_re = re.compile(r"^\s*[0-9a-fA-F]+ <")
+insn_like_re = re.compile(r"^\s*[0-9a-fA-F]+:")
 # One hex encoding field, not a repeating byte dump — mnemonics like
 # `add`/`sub` are themselves hex digit strings and would be swallowed.
 line_re = re.compile(
@@ -95,13 +100,22 @@ line_re = re.compile(
 
 insns = []
 for line in dump.splitlines():
-    m = line_re.match(line)
-    if not m:
+    raw_line = line.rstrip()
+    if not raw_line or label_re.match(raw_line):
         continue
-    pc = int(m.group(1), 16)
-    op = m.group(2)
-    args = (m.group(3) or "").strip()
-    insns.append((pc, op, args, line.strip()))
+    if insn_like_re.match(raw_line):
+        m = line_re.match(raw_line)
+        if not m:
+            print(
+                f"check-utext FAIL: unrecognized instruction form:\n  {raw_line}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        pc = int(m.group(1), 16)
+        op = m.group(2)
+        args = (m.group(3) or "").strip()
+        insns.append((pc, op, args, raw_line.strip()))
+
 
 GP_TP = re.compile(r"(?:^|[^a-z0-9])(gp|tp)(?:[^a-z0-9]|$)")
 LOAD_STORE = {
@@ -119,6 +133,11 @@ SKIP = {
     "and", "or", "xor", "andi", "ori", "xori",
     "sll", "srl", "sra", "sllw", "srlw", "sraw",
     "addw", "subw",
+}
+BRANCH = {
+    "beq", "bne", "blt", "bge", "bltu", "bgeu",
+    "beqz", "bnez", "blez", "bgez", "bltz", "bgtz",
+    "bgt", "ble", "bgtu", "bleu",
 }
 
 
@@ -196,6 +215,11 @@ for i, (pc, op, args, raw) in enumerate(insns):
         fail(pc, raw, "gp/tp used from .utext (kernel-owned; D-0032)")
 
     if op in SKIP:
+        if op in BRANCH:
+            ts = hex_targets(args)
+            if not ts:
+                fail(pc, raw, f"unrecognized {op} form (no resolvable target)")
+            check_addr(pc, raw, ts[-1], op)
         continue
 
     if op in LOAD_STORE:
