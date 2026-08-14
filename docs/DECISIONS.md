@@ -695,15 +695,32 @@ D-0011 onward are working decisions made under those constraints.
   emits, so the kernel never reads it and saving/restoring it as an ordinary
   GPR is sufficient.
 - **Exit-path ordering is part of this decision.** Any instruction executed
-  while `sscratch` is nonzero in S-mode would misclassify a kernel exception,
-  so the exit writes it last: early in block 4 (branching once on the saved
-  `sstatus.SPP`) the user `sp` is parked in `sscratch`; after all 31 GPRs are
-  restored, `addi sp, sp, 272` yields the kernel stack top — and, on the S
-  path, the pre-trap `sp`, identically — and a single
-  `csrrw sp, sscratch, sp` immediately before `sret` swaps both into place.
-  That leaves a one-instruction window that touches no memory and cannot
-  fault. `x[2]` stays in the frame as the diagnostic copy the panic printer
-  already reports.
+  while `sscratch` holds the *user* `sp` in S-mode would misclassify a kernel
+  exception as a trap-from-U and push a frame at that address. The exit
+  therefore writes user `sp` into `sscratch` as late as it can: after all
+  GPRs except `t0` are restored, and after `addi sp, sp, 272` (which
+  reconstructs the pre-trap `sp` on the S path and yields `kstack_top` on
+  the U path), a branch on saved `sstatus.SPP` covers the two `sscratch`
+  instructions. The S path restores `t0` and `sret` with `sscratch` still 0.
+  The U path is:
+
+      ld      t0, -256(sp)       # x[2] = user sp; sscratch still 0
+      csrw    sscratch, t0       # park — window starts
+      ld      t0, -232(sp)       # restore t0 from the frame
+      csrrw   sp, sscratch, sp   # swap; sscratch = kstack_top
+      sret
+
+  The S-mode-with-user-`sscratch` window is **three instructions, not one**.
+  It cannot be shorter: `t0` must be reloaded from the frame *before* the
+  `csrrw`, because afterward `sp` points at the user stack and the frame is
+  no longer at a known offset from `sp`, and every other GPR already holds
+  the interrupted context so there is no spare register to hoist the load.
+  The `ld` can only fault if the kernel stack is already blown, which is
+  the D-0030 unrecoverable hang — so the window is **safe but not
+  fault-free**. `csrw` / `csrrw` touch no memory. After the swap, `sret`
+  also runs with `sscratch != 0`, but that value is `kstack_top` (the
+  U-mode-ready one) and `sret` cannot fault. `x[2]` stays in the frame as
+  the diagnostic copy the panic printer already reports.
 - **Consequences:** `sscratch = 0` is now a kernel-wide invariant that any
   future S-mode code path must preserve; the boot CSR snapshot prints
   `sscratch` so firmware garbage is visible rather than assumed. The S path
