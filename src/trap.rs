@@ -15,7 +15,6 @@
 
 use crate::csr;
 use crate::println;
-use crate::sbi;
 use crate::timer;
 use core::arch::{asm, global_asm};
 
@@ -75,6 +74,13 @@ impl TrapFrame {
     #[inline]
     pub fn a7(&self) -> usize {
         self.x[17]
+    }
+
+    /// Syscall return pair (D-0033). `__trap_return` restores `a0`/`a1`
+    /// from `x[10]`/`x[11]`; writing the CPU registers here is a no-op.
+    pub fn set_retval(&mut self, error: isize, value: usize) {
+        self.x[10] = error as usize;
+        self.x[11] = value;
     }
 }
 
@@ -154,8 +160,9 @@ pub fn instruction_width(halfword: u16) -> usize {
 
 /// Called from `__trap_entry` with `a0` = frame pointer on the kernel stack.
 /// Returns the frame `__trap_return` should resume (D-0032). M1 traps and
-/// the timer still return the same `frame` they were given. The T2.5
-/// `ecall` path shuts down instead of resuming.
+/// the timer still return the same `frame` they were given. An `ecall` from
+/// U is dispatched by `syscall::from_ecall`; unknown numbers kill the task
+/// and do not return.
 #[no_mangle]
 extern "C" fn trap_handler(frame: &mut TrapFrame) -> &mut TrapFrame {
     // D-0029: Rust runs in S-mode, so sscratch must be 0. A nonzero value
@@ -180,18 +187,7 @@ extern "C" fn trap_handler(frame: &mut TrapFrame) -> &mut TrapFrame {
 
     match code {
         csr::scause::EXC_ECALL_U => {
-            println!(
-                "syscall {} not implemented yet sepc={:#x} sp={:#x}",
-                frame.a7(),
-                frame.sepc,
-                frame.sp()
-            );
-            println!("USER OK");
-            let ret = sbi::shutdown();
-            panic!(
-                "shutdown failed: SRST error={} value={}",
-                ret.error, ret.value
-            );
+            return crate::syscall::from_ecall(frame);
         }
         csr::scause::EXC_BREAKPOINT => {
             println!(

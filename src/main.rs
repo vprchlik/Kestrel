@@ -23,6 +23,7 @@ mod page;
 mod sbi;
 #[cfg(feature = "stress")]
 mod stress;
+mod syscall;
 mod task;
 mod timer;
 mod trap;

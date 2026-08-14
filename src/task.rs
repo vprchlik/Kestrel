@@ -369,8 +369,6 @@ pub enum State {
     Ready,
     #[allow(dead_code)]
     Running,
-    /// Set by `exit` (T2.6).
-    #[allow(dead_code)]
     Exited,
 }
 
@@ -389,6 +387,8 @@ pub struct Task {
 }
 
 static mut TASKS: [Option<Task>; MAX_TASKS] = [None; MAX_TASKS];
+/// Running task id, or `None` in S-mode with no user task (boot, after kill).
+static mut CURRENT: Option<usize> = None;
 
 fn state_name(s: State) -> &'static str {
     match s {
@@ -528,5 +528,57 @@ pub fn enter(id: usize) -> ! {
         t.id, sepc, t.frame as usize, t.kstack_top
     );
     t.state = State::Running;
+    unsafe { CURRENT = Some(id) };
     trap::resume(t.frame);
+}
+
+/// The task `enter` last `sret`'d into. Panics if called with none running.
+pub fn current() -> &'static mut Task {
+    match unsafe { CURRENT } {
+        Some(id) => get(id),
+        None => panic!("no current task"),
+    }
+}
+
+/// Mark the current task `Exited` and drop `CURRENT`. Does not resume anyone
+/// — T2.9's scheduler picks the next Ready task here.
+#[cfg_attr(
+    any(
+        feature = "panic-selftest",
+        feature = "hang-selftest",
+        feature = "stress",
+        feature = "frame-exhaust-selftest"
+    ),
+    allow(dead_code)
+)]
+pub fn kill_unknown_syscall(num: usize, sepc: usize, stval: usize) {
+    let t = current();
+    println!(
+        "task {} killed: unknown syscall {} sepc={:#x} stval={:#x}",
+        t.id, num, sepc, stval
+    );
+    t.state = State::Exited;
+    unsafe { CURRENT = None };
+}
+
+/// No running task and no scheduler yet (T2.9). Printed, then SRST — a
+/// park would make `just test` hang after the marker, and silently
+/// resuming task 1 (`sepc = 0`) would be an instruction page fault that
+/// looks like a map bug. T2.9 replaces this with "pick the next Ready".
+#[cfg_attr(
+    any(
+        feature = "panic-selftest",
+        feature = "hang-selftest",
+        feature = "stress",
+        feature = "frame-exhaust-selftest"
+    ),
+    allow(dead_code)
+)]
+pub fn stop_until_scheduler() -> ! {
+    println!("no running task; shutting down (T2.9 replaces this with the scheduler)");
+    let ret = crate::sbi::shutdown();
+    panic!(
+        "shutdown failed: SRST error={} value={}",
+        ret.error, ret.value
+    );
 }
