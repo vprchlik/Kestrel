@@ -472,6 +472,8 @@ pub fn create(id: usize, entry: usize) {
 /// Create the static table. Default boot: tasks 1 and 2 are the T2.9
 /// demo (Ready); 0 and 3 are Exited so round-robin cannot `sret` into
 /// `sepc = 0`. Userptr selftests keep a single Ready task in slot 0.
+/// `user-fault-selftest` uses the same two-task table; `kmain` `enter`s
+/// task 2 so the load page fault is the first U-mode work.
 pub fn init() {
     #[cfg(any(
         feature = "userptr-kernel-selftest",
@@ -624,48 +626,79 @@ pub fn yield_cpu(frame: &mut TrapFrame) -> &mut TrapFrame {
 }
 
 /// Last `exit` with an empty ready set: assert the T2.9 predicate, print
-/// `SCHED OK`, shut down. No idle loop (D-0035).
+/// `SCHED OK`, shut down. No idle loop (D-0035). The user-fault selftest
+/// has a different last-task path: task 2 is killed before it ever writes,
+/// so the 1→2 switch never happens and the T2.9 switch counts would panic.
 fn finish_sched() -> ! {
+    #[cfg(feature = "user-fault-selftest")]
+    {
+        finish_user_fault();
+    }
+    #[cfg(not(feature = "user-fault-selftest"))]
+    {
+        let t1 = get(1);
+        let t2 = get(2);
+        let sw12 = unsafe { SWITCH_12 };
+        let sw21 = unsafe { SWITCH_21 };
+        if t1.state != State::Exited || t2.state != State::Exited {
+            panic!(
+                "sched: task1 {} task2 {} switches 1->2={} 2->1={}",
+                state_name(t1.state),
+                state_name(t2.state),
+                sw12,
+                sw21
+            );
+        }
+        if t1.yields != 0 || t2.yields != 0 {
+            panic!(
+                "sched: yields task1={} task2={} want 0",
+                t1.yields, t2.yields
+            );
+        }
+        if sw12 == 0 || sw21 == 0 {
+            panic!(
+                "sched: switches 1->2={} 2->1={} (need at least one each way)",
+                sw12, sw21
+            );
+        }
+        println!(
+            "task 1 done writes={} yields={}",
+            t1.writes, t1.yields
+        );
+        println!(
+            "task 2 done writes={} yields={}",
+            t2.writes, t2.yields
+        );
+        println!(
+            "sched switches 1->2={} 2->1={} yields={}",
+            sw12,
+            sw21,
+            t1.yields + t2.yields
+        );
+        println!("SCHED OK");
+        stop_until_scheduler();
+    }
+}
+
+#[cfg(feature = "user-fault-selftest")]
+fn finish_user_fault() -> ! {
     let t1 = get(1);
     let t2 = get(2);
-    let sw12 = unsafe { SWITCH_12 };
-    let sw21 = unsafe { SWITCH_21 };
     if t1.state != State::Exited || t2.state != State::Exited {
         panic!(
-            "sched: task1 {} task2 {} switches 1->2={} 2->1={}",
+            "userfault: task1 {} task2 {}",
             state_name(t1.state),
-            state_name(t2.state),
-            sw12,
-            sw21
+            state_name(t2.state)
         );
     }
-    if t1.yields != 0 || t2.yields != 0 {
-        panic!(
-            "sched: yields task1={} task2={} want 0",
-            t1.yields, t2.yields
-        );
-    }
-    if sw12 == 0 || sw21 == 0 {
-        panic!(
-            "sched: switches 1->2={} 2->1={} (need at least one each way)",
-            sw12, sw21
-        );
+    if t1.writes == 0 {
+        panic!("userfault: survivor wrote nothing");
     }
     println!(
         "task 1 done writes={} yields={}",
         t1.writes, t1.yields
     );
-    println!(
-        "task 2 done writes={} yields={}",
-        t2.writes, t2.yields
-    );
-    println!(
-        "sched switches 1->2={} 2->1={} yields={}",
-        sw12,
-        sw21,
-        t1.yields + t2.yields
-    );
-    println!("SCHED OK");
+    println!("USERFAULT OK");
     stop_until_scheduler();
 }
 
@@ -680,6 +713,36 @@ pub fn after_exit(exited_id: usize) -> &'static mut TrapFrame {
     }
 }
 
+/// Mark the current task `Exited` and drop `CURRENT`. Does not resume anyone.
+fn mark_exited() -> usize {
+    let t = current();
+    let id = t.id;
+    t.state = State::Exited;
+    unsafe { CURRENT = None };
+    id
+}
+
+/// Kill the running task from a U-mode fault and return the next Ready
+/// frame (D-0034).
+///
+/// We are on this task's kernel stack when we decide to kill it: `__trap_entry`
+/// pushed the frame at `kstack_top - 272` and `trap_handler` is a Rust call
+/// on that stack. `after_exit` returns a *different* slot's `frame` pointer
+/// (`kstack_top - 272` of a still-Ready task). The handler returns normally,
+/// so Rust pops its frames on the **dead** kstack — that is safe because the
+/// slot is `Exited` and `next_ready_after` will never pick it. `__trap_return`
+/// then `mv sp, a0` onto the survivor before any restore/`sret`. Returning
+/// the dying task's own frame would `sret` into a dead task.
+pub fn kill_and_reschedule(cause: &str, sepc: usize, stval: usize) -> &'static mut TrapFrame {
+    let t = current();
+    println!(
+        "task {} killed: {} sepc={:#x} stval={:#x}",
+        t.id, cause, sepc, stval
+    );
+    let id = mark_exited();
+    after_exit(id)
+}
+
 /// Mark the current task `Exited` and drop `CURRENT`. Does not resume anyone
 /// — T2.9's scheduler picks the next Ready task here.
 #[cfg_attr(
@@ -691,14 +754,13 @@ pub fn after_exit(exited_id: usize) -> &'static mut TrapFrame {
     ),
     allow(dead_code)
 )]
-pub fn kill_unknown_syscall(num: usize, sepc: usize, stval: usize) {
+pub fn kill_unknown_syscall(num: usize, sepc: usize, stval: usize) -> usize {
     let t = current();
     println!(
         "task {} killed: unknown syscall {} sepc={:#x} stval={:#x}",
         t.id, num, sepc, stval
     );
-    t.state = State::Exited;
-    unsafe { CURRENT = None };
+    mark_exited()
 }
 
 /// Invalid user pointer (D-0034). `stval` is the pointer the task named;
@@ -718,8 +780,7 @@ pub fn kill_invalid_user_ptr(sepc: usize, ptr: usize) {
         "task {} killed: invalid user pointer sepc={:#x} stval={:#x}",
         t.id, sepc, ptr
     );
-    t.state = State::Exited;
-    unsafe { CURRENT = None };
+    let _ = mark_exited();
 }
 
 /// Voluntary `exit`. Same Exited/CURRENT drop as a kill; the cause line
@@ -737,8 +798,7 @@ pub fn exit_current(code: usize) {
     let t = current();
     println!("task {} exit {}", t.id, code);
     t.exit_code = code;
-    t.state = State::Exited;
-    unsafe { CURRENT = None };
+    let _ = mark_exited();
 }
 
 /// No running task and no scheduler yet (T2.9). Printed, then SRST — a

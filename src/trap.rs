@@ -161,7 +161,9 @@ pub fn instruction_width(halfword: u16) -> usize {
 /// Called from `__trap_entry` with `a0` = frame pointer on the kernel stack.
 /// Returns the frame `__trap_return` should resume (D-0032). A timer tick
 /// or `yield` returns the next Ready task's frame; `mv sp, a0` is the
-/// switch. An `ecall` from U is dispatched by `syscall::from_ecall`.
+/// switch. An `ecall` from U is dispatched by `syscall::from_ecall`. A
+/// U-mode fault kills that task and returns a survivor's frame (D-0034);
+/// the same fault from S still panics.
 #[no_mangle]
 extern "C" fn trap_handler(frame: &mut TrapFrame) -> &mut TrapFrame {
     // D-0029: Rust runs in S-mode, so sscratch must be 0. A nonzero value
@@ -205,29 +207,56 @@ extern "C" fn trap_handler(frame: &mut TrapFrame) -> &mut TrapFrame {
             let half = unsafe { core::ptr::read(frame.sepc as *const u16) };
             frame.sepc += instruction_width(half);
         }
-        csr::scause::EXC_INST_PAGE_FAULT
+        csr::scause::EXC_INST_ADDR_MISALIGNED
+        | csr::scause::EXC_INST_PAGE_FAULT
         | csr::scause::EXC_LOAD_PAGE_FAULT
         | csr::scause::EXC_STORE_PAGE_FAULT => {
+            if from_user(frame) {
+                // D-0034: a U-mode fault kills the task, never the kernel.
+                // We are on this task's kernel stack; kill_and_reschedule
+                // returns a *different* task's frame. `__trap_return` then
+                // `mv sp, a0` onto the survivor. Returning `frame` here
+                // would `sret` into a dead task.
+                return crate::task::kill_and_reschedule(
+                    user_fault_cause(code),
+                    frame.sepc,
+                    stval,
+                );
+            }
             panic!(
                 "trap scause={} ({}) sepc={:#x} stval={:#x} sp={:#x}",
                 code,
-                page_fault_name(code),
+                user_fault_cause(code),
                 frame.sepc,
                 stval,
                 frame.sp()
             );
         }
-        _ => unknown_trap(scause, code, false, frame, stval),
+        _ => {
+            if from_user(frame) {
+                return crate::task::kill_and_reschedule(
+                    user_fault_cause(code),
+                    frame.sepc,
+                    stval,
+                );
+            }
+            unknown_trap(scause, code, false, frame, stval);
+        }
     }
     frame
 }
 
-fn page_fault_name(code: usize) -> &'static str {
+fn from_user(frame: &TrapFrame) -> bool {
+    frame.sstatus & csr::sstatus::SPP == 0
+}
+
+fn user_fault_cause(code: usize) -> &'static str {
     match code {
+        csr::scause::EXC_INST_ADDR_MISALIGNED => "instruction address misaligned",
         csr::scause::EXC_INST_PAGE_FAULT => "instruction page fault",
         csr::scause::EXC_LOAD_PAGE_FAULT => "load page fault",
         csr::scause::EXC_STORE_PAGE_FAULT => "store page fault",
-        _ => "page fault",
+        _ => "unexpected exception",
     }
 }
 
@@ -240,9 +269,12 @@ fn page_fault_name(code: usize) -> &'static str {
 ///   12/13/15 instruction/load/store page fault (T1.7+)
 ///   20–23 guest-page / virtual-instruction faults (H-extension)
 /// Codes 1, 2, 4, 5, 6, 7, 9 are **not** delegated: they never reach this
-/// function; they produce an OpenSBI dump. `MIDELEG = 0x1666` includes
-/// supervisor timer (bit 5), so a timer interrupt can arrive once T1.3
-/// enables it. Other interrupt codes still panic here.
+/// function; they produce an OpenSBI dump. An illegal instruction from a
+/// task (`unimp`, or an FP op with `FS=Off`) is code 2 — firmware handles
+/// it, we never see it. The user-fault selftest therefore loads from VA 0
+/// (cause 13, delegated) rather than executing `unimp`. `MIDELEG = 0x1666`
+/// includes supervisor timer (bit 5), so a timer interrupt can arrive once
+/// T1.3 enables it. Other interrupt codes still panic here.
 fn unknown_trap(scause: usize, code: usize, interrupt: bool, frame: &TrapFrame, stval: usize) -> ! {
     panic!(
         "unknown trap scause={:#x} ({} code {}) sepc={:#x} stval={:#x} sp={:#x}",

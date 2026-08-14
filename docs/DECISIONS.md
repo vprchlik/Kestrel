@@ -984,6 +984,18 @@ D-0011 onward are working decisions made under those constraints.
   reopen together: a `Blocked` state and an idle loop arrive with it, and
   D-0032's resume path is the third piece.
 
+  **Known fairness property, not a bug.** A syscall-heavy task gets more CPU
+  than a compute-heavy one under "slice = one tick". Kernel code runs with
+  `SIE = 0` (D-0020), so a pending `STIP` cannot preempt until `sret`. The
+  tick is not lost — it fires immediately after `sret` (PLAN M1 concept 3) —
+  but the slice has already been stretched by however long the syscall ran.
+  Two standard fixes we are **deliberately not doing:**
+  1. Charge elapsed time (`rdtime` delta) rather than ticks, so a syscall
+     that ate part of the 10 ms slice leaves the remainder.
+  2. Make the kernel preemptible (`SIE = 1` in S), so a tick can switch
+     mid-syscall.
+  Either one reopens D-0020 / D-0028 / D-0036. M2 keeps tick accounting.
+
 ## D-0036: Resolve D-0028 by preallocation, enforced with `frame::freeze()`
 - Date: 2026-08-14 — Status: accepted (resolves D-0028 for M2)
 - **Decision:** M2 takes D-0028's third option — preallocate everything the

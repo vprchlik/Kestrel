@@ -138,6 +138,22 @@ test-userptr:
     fi
     echo 'TEST PASS: both invalid-pointer shapes killed'
 
+# T2.10: one task takes a U-mode load page fault; the other continues and
+# the kernel shuts down cleanly (exit 0, not the inverted panic recipes).
+test-user-fault:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    EXPECT="USERFAULT OK" TIMEOUT_S=5 bash scripts/boot-test.sh user-fault-selftest
+    if ! grep -a -q 'task 2 killed: load page fault' serial.log; then
+        echo 'TEST FAIL: missing "task 2 killed: load page fault"'
+        exit 1
+    fi
+    if ! grep -aE -q 'task 1 done writes=[0-9]+ yields=0' serial.log; then
+        echo 'TEST FAIL: survivor did not run to completion'
+        exit 1
+    fi
+    echo 'TEST PASS: user fault contained, survivor finished'
+
 # Disassemble the kernel. Extra flags as one quoted arg, e.g. just objdump '-d --source'
 objdump flags="-d": build
     cargo objdump -- {{flags}}

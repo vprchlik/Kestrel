@@ -17,6 +17,8 @@ frame-exhaust-selftest = []
 userptr-kernel-selftest = []
 # T2.7/T2.8: write a pointer that starts valid and runs past its interval.
 userptr-span-selftest = []
+# T2.10: U-mode load page fault; the other task continues (D-0034).
+user-fault-selftest = []
 
 [dependencies]
 

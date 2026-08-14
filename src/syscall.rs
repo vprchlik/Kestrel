@@ -47,8 +47,8 @@ fn advance_ecall(frame: &mut TrapFrame) {
     frame.sepc += 4;
 }
 
-/// Dispatch one `ecall` from U. Returns the frame to resume, or never
-/// returns after killing the task and shutting down (no scheduler yet).
+/// Dispatch one `ecall` from U. Returns the frame to resume. An unknown
+/// number kills the task and reschedules (D-0034).
 pub fn from_ecall(frame: &mut TrapFrame) -> &mut TrapFrame {
     // A leaked SUM window would make every subsequent kernel load of a
     // U=1 page succeed. The copy path drops SUM before returning here.
@@ -69,9 +69,8 @@ pub fn from_ecall(frame: &mut TrapFrame) -> &mut TrapFrame {
         SYS_GETTIME => sys_gettime(frame),
         SYS_YIELD => sys_yield(frame),
         _ => {
-            task::kill_unknown_syscall(num, frame.sepc, 0);
-            println!("SYSCALL OK");
-            task::stop_until_scheduler();
+            let id = task::kill_unknown_syscall(num, frame.sepc, 0);
+            task::after_exit(id)
         }
     }
 }

@@ -165,9 +165,12 @@ extern "C" fn kmain(hartid: usize, dtb_pa: usize) -> ! {
                 feature = "userptr-span-selftest"
             ))]
             task::enter(0);
+            #[cfg(feature = "user-fault-selftest")]
+            task::enter(2);
             #[cfg(not(any(
                 feature = "userptr-kernel-selftest",
-                feature = "userptr-span-selftest"
+                feature = "userptr-span-selftest",
+                feature = "user-fault-selftest"
             )))]
             task::enter(1);
         }
