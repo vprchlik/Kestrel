@@ -77,6 +77,97 @@ fn pa(sym: *const u8) -> usize {
     sym as usize
 }
 
+/// One task slot's linker addresses. All 4 KiB-aligned. D-0030.
+#[derive(Clone, Copy)]
+pub struct Slot {
+    pub ustack_guard: usize,
+    pub ustack_bottom: usize,
+    pub ustack_top: usize,
+    pub brk_base: usize,
+    pub brk_wall: usize,
+    pub kstack_guard: usize,
+    pub kstack_bottom: usize,
+    pub kstack_top: usize,
+}
+
+pub fn utext() -> (usize, usize) {
+    (
+        pa(core::ptr::addr_of!(__utext_start)),
+        pa(core::ptr::addr_of!(__utext_end)),
+    )
+}
+pub fn urodata() -> (usize, usize) {
+    (
+        pa(core::ptr::addr_of!(__urodata_start)),
+        pa(core::ptr::addr_of!(__urodata_end)),
+    )
+}
+pub fn udata() -> (usize, usize) {
+    (
+        pa(core::ptr::addr_of!(__udata_start)),
+        pa(core::ptr::addr_of!(__udata_end)),
+    )
+}
+pub fn ubss() -> (usize, usize) {
+    (
+        pa(core::ptr::addr_of!(__ubss_start)),
+        pa(core::ptr::addr_of!(__ubss_end)),
+    )
+}
+pub fn tasks_span() -> (usize, usize) {
+    (
+        pa(core::ptr::addr_of!(__tasks_start)),
+        pa(core::ptr::addr_of!(__tasks_end)),
+    )
+}
+
+/// Panic if `id >= MAX_TASKS`.
+pub fn slot(id: usize) -> Slot {
+    match id {
+        0 => Slot {
+            ustack_guard: pa(core::ptr::addr_of!(__ustack0_guard)),
+            ustack_bottom: pa(core::ptr::addr_of!(__ustack0_bottom)),
+            ustack_top: pa(core::ptr::addr_of!(__ustack0_top)),
+            brk_base: pa(core::ptr::addr_of!(__ubrk0_base)),
+            brk_wall: pa(core::ptr::addr_of!(__ubrk0_wall)),
+            kstack_guard: pa(core::ptr::addr_of!(__kstack0_guard)),
+            kstack_bottom: pa(core::ptr::addr_of!(__kstack0_bottom)),
+            kstack_top: pa(core::ptr::addr_of!(__kstack0_top)),
+        },
+        1 => Slot {
+            ustack_guard: pa(core::ptr::addr_of!(__ustack1_guard)),
+            ustack_bottom: pa(core::ptr::addr_of!(__ustack1_bottom)),
+            ustack_top: pa(core::ptr::addr_of!(__ustack1_top)),
+            brk_base: pa(core::ptr::addr_of!(__ubrk1_base)),
+            brk_wall: pa(core::ptr::addr_of!(__ubrk1_wall)),
+            kstack_guard: pa(core::ptr::addr_of!(__kstack1_guard)),
+            kstack_bottom: pa(core::ptr::addr_of!(__kstack1_bottom)),
+            kstack_top: pa(core::ptr::addr_of!(__kstack1_top)),
+        },
+        2 => Slot {
+            ustack_guard: pa(core::ptr::addr_of!(__ustack2_guard)),
+            ustack_bottom: pa(core::ptr::addr_of!(__ustack2_bottom)),
+            ustack_top: pa(core::ptr::addr_of!(__ustack2_top)),
+            brk_base: pa(core::ptr::addr_of!(__ubrk2_base)),
+            brk_wall: pa(core::ptr::addr_of!(__ubrk2_wall)),
+            kstack_guard: pa(core::ptr::addr_of!(__kstack2_guard)),
+            kstack_bottom: pa(core::ptr::addr_of!(__kstack2_bottom)),
+            kstack_top: pa(core::ptr::addr_of!(__kstack2_top)),
+        },
+        3 => Slot {
+            ustack_guard: pa(core::ptr::addr_of!(__ustack3_guard)),
+            ustack_bottom: pa(core::ptr::addr_of!(__ustack3_bottom)),
+            ustack_top: pa(core::ptr::addr_of!(__ustack3_top)),
+            brk_base: pa(core::ptr::addr_of!(__ubrk3_base)),
+            brk_wall: pa(core::ptr::addr_of!(__ubrk3_wall)),
+            kstack_guard: pa(core::ptr::addr_of!(__kstack3_guard)),
+            kstack_bottom: pa(core::ptr::addr_of!(__kstack3_bottom)),
+            kstack_top: pa(core::ptr::addr_of!(__kstack3_top)),
+        },
+        _ => panic!("task slot {} >= MAX_TASKS {}", id, MAX_TASKS),
+    }
+}
+
 fn require(name: &str, got: usize, want: usize) {
     if got != want {
         panic!("{}: {:#x} want {:#x}", name, got, want);
@@ -181,47 +272,47 @@ pub fn check_layout() {
 
     check_slot(
         0,
-        pa(core::ptr::addr_of!(__ustack0_guard)),
-        pa(core::ptr::addr_of!(__ustack0_bottom)),
-        pa(core::ptr::addr_of!(__ustack0_top)),
-        pa(core::ptr::addr_of!(__ubrk0_base)),
-        pa(core::ptr::addr_of!(__ubrk0_wall)),
-        pa(core::ptr::addr_of!(__kstack0_guard)),
-        pa(core::ptr::addr_of!(__kstack0_bottom)),
-        pa(core::ptr::addr_of!(__kstack0_top)),
+        slot(0).ustack_guard,
+        slot(0).ustack_bottom,
+        slot(0).ustack_top,
+        slot(0).brk_base,
+        slot(0).brk_wall,
+        slot(0).kstack_guard,
+        slot(0).kstack_bottom,
+        slot(0).kstack_top,
     );
     check_slot(
         1,
-        pa(core::ptr::addr_of!(__ustack1_guard)),
-        pa(core::ptr::addr_of!(__ustack1_bottom)),
-        pa(core::ptr::addr_of!(__ustack1_top)),
-        pa(core::ptr::addr_of!(__ubrk1_base)),
-        pa(core::ptr::addr_of!(__ubrk1_wall)),
-        pa(core::ptr::addr_of!(__kstack1_guard)),
-        pa(core::ptr::addr_of!(__kstack1_bottom)),
-        pa(core::ptr::addr_of!(__kstack1_top)),
+        slot(1).ustack_guard,
+        slot(1).ustack_bottom,
+        slot(1).ustack_top,
+        slot(1).brk_base,
+        slot(1).brk_wall,
+        slot(1).kstack_guard,
+        slot(1).kstack_bottom,
+        slot(1).kstack_top,
     );
     check_slot(
         2,
-        pa(core::ptr::addr_of!(__ustack2_guard)),
-        pa(core::ptr::addr_of!(__ustack2_bottom)),
-        pa(core::ptr::addr_of!(__ustack2_top)),
-        pa(core::ptr::addr_of!(__ubrk2_base)),
-        pa(core::ptr::addr_of!(__ubrk2_wall)),
-        pa(core::ptr::addr_of!(__kstack2_guard)),
-        pa(core::ptr::addr_of!(__kstack2_bottom)),
-        pa(core::ptr::addr_of!(__kstack2_top)),
+        slot(2).ustack_guard,
+        slot(2).ustack_bottom,
+        slot(2).ustack_top,
+        slot(2).brk_base,
+        slot(2).brk_wall,
+        slot(2).kstack_guard,
+        slot(2).kstack_bottom,
+        slot(2).kstack_top,
     );
     check_slot(
         3,
-        pa(core::ptr::addr_of!(__ustack3_guard)),
-        pa(core::ptr::addr_of!(__ustack3_bottom)),
-        pa(core::ptr::addr_of!(__ustack3_top)),
-        pa(core::ptr::addr_of!(__ubrk3_base)),
-        pa(core::ptr::addr_of!(__ubrk3_wall)),
-        pa(core::ptr::addr_of!(__kstack3_guard)),
-        pa(core::ptr::addr_of!(__kstack3_bottom)),
-        pa(core::ptr::addr_of!(__kstack3_top)),
+        slot(3).ustack_guard,
+        slot(3).ustack_bottom,
+        slot(3).ustack_top,
+        slot(3).brk_base,
+        slot(3).brk_wall,
+        slot(3).kstack_guard,
+        slot(3).kstack_bottom,
+        slot(3).kstack_top,
     );
 
     println!(
