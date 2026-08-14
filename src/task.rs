@@ -561,6 +561,27 @@ pub fn kill_unknown_syscall(num: usize, sepc: usize, stval: usize) {
     unsafe { CURRENT = None };
 }
 
+/// Invalid user pointer (D-0034). `stval` is the pointer the task named;
+/// hardware does not fill it on an `ecall`.
+#[cfg_attr(
+    any(
+        feature = "panic-selftest",
+        feature = "hang-selftest",
+        feature = "stress",
+        feature = "frame-exhaust-selftest"
+    ),
+    allow(dead_code)
+)]
+pub fn kill_invalid_user_ptr(sepc: usize, ptr: usize) {
+    let t = current();
+    println!(
+        "task {} killed: invalid user pointer sepc={:#x} stval={:#x}",
+        t.id, sepc, ptr
+    );
+    t.state = State::Exited;
+    unsafe { CURRENT = None };
+}
+
 /// No running task and no scheduler yet (T2.9). Printed, then SRST — a
 /// park would make `just test` hang after the marker, and silently
 /// resuming task 1 (`sepc = 0`) would be an instruction page fault that

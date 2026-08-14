@@ -20,6 +20,7 @@ if [ -n "$FEATURE" ]; then
 fi
 
 cargo build "${feat[@]}"
+bash scripts/check-utext.sh "$KERNEL"
 rm -f serial.log
 
 set +e

@@ -33,6 +33,12 @@ debug: build
 gdb:
     gdb-multiarch {{kernel}} -ex "target remote :1234"
 
+# Every symbol referenced from .utext must resolve in user sections or a
+# task's stack/break window — not kernel .text/.rodata. `lui`/`li` values
+# are not references; `auipc+addi` to .urodata is legitimate.
+check-utext: build
+    bash scripts/check-utext.sh {{kernel}}
+
 # Headless boot. Verdict from serial + QEMU status together (D-0017):
 #   PANIC in serial          → TEST FAIL (exit 1), panic line echoed
 #   timeout (status 124)     → TEST HANG (exit 2)

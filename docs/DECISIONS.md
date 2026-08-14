@@ -814,12 +814,18 @@ D-0011 onward are working decisions made under those constraints.
   hard-won property from M1 intact: the address space is validated in software
   (T1.6/T2.2) *before* anything runs on it, and it never changes afterwards,
   so there is no TLB-shootdown story and no mapping code reachable from a trap.
-- **Consequences:** demo tasks must be written so the compiler cannot reach
-  outside `.utext` — no string literals landing in kernel `.rodata`, no
+- **Consequences:** demo tasks must be written so every symbol referenced
+  from `.utext` resolves inside the user sections or the task's own
+  stack/break window — no string literals landing in kernel `.rodata`, no
   compiler-emitted `memcpy` call into kernel `.text`, no `gp`/`tp`-relative
-  access — which T2.5 checks by disassembling the section rather than trusting
-  it. The 64 KiB break window per task is part of the ~88 KiB static
-  reservation recorded in D-0030, including its M4 threat-to-validity note.
+  access. `just check-utext` enforces that by resolving `jal`/`auipc+addi`
+  (and friends) against those ranges; it does **not** ban `auipc` or `lui`.
+  Those instructions are how a legitimate `.urodata` buffer is addressed.
+  A `lui` immediate used as a value (a kernel address passed to `write`)
+  is not a symbol reference. T2.5 used to read this as "no `auipc`", which
+  was only right while `write` was a stub. The 64 KiB break window per
+  task is part of the ~88 KiB static reservation recorded in D-0030,
+  including its M4 threat-to-validity note.
   **Defense in depth on the break:** `__ubrkN_wall` is the same address as
   `__kstackN_guard`. A `sbrk` bound-check bug that hands out one page past
   the wall therefore lands in the kernel stack's unmapped guard (a store

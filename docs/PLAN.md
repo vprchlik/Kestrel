@@ -813,9 +813,17 @@ this path.
 answers "not implemented" for now. Prints `USER OK`.
 
 - **Acceptance:** `just test expect="USER OK"` passes. Separately,
-  `just objdump '-d --section=.utext'` shows no call leaving `.utext` and no
-  `gp`- or `tp`-relative access: no compiler-builtin `memcpy`, no kernel
-  `.rodata` literal, no TLS.
+  `just check-utext` (and `just objdump '-d --section=.utext'`) shows that
+  every symbol referenced from `.utext` resolves inside the user sections
+  (`.utext` / `.urodata` / `.udata` / `.ubss`) or a task's own stack/break
+  window. `auipc+addi` and `lui+addi` that form such an address are
+  legitimate — a real `write` needs a buffer in `.urodata`, and referencing
+  it takes one of those pairs. A `lui`/`li` immediate used as a *value*
+  (not a PC-relative symbol) is not a reference. The failure being guarded
+  against is a reference into kernel `.text` or kernel `.rodata`, not a
+  particular opcode. `gp`-/`tp`-relative access is still rejected: those
+  bases are kernel-owned (D-0032). The old "no `auipc`" reading was only
+  right while `write` was a stub and `a0 = 1` was never dereferenced.
 
 ### T2.6 — Syscall ABI and `ecall`-from-U dispatch — M
 Dispatch on `EXC_ECALL_U` per D-0033: number in `a7`, arguments `a0`–`a5`,
@@ -829,12 +837,24 @@ return pair `a0` = error / `a1` = value, written **into the frame**.
 ### T2.7 — User-pointer validation and `SUM`-windowed copies — M
 `user_range_ok(task, ptr, len)` against that task's static intervals
 (overflow-checked, containment in user stack / live break / `.udata`+`.ubss` /
-`.urodata` for read-only sources). `copy_from_user` / `copy_to_user` raise
-`SUM` only around an already-validated `memcpy`, with a 4 KiB per-call cap.
+`.urodata` for read-only sources). No page-table walk. `copy_from_user` /
+`copy_to_user` raise `SUM` only around an already-validated `memcpy`:
+validate → raise SUM → memcpy → clear SUM. Per-call cap is 4 KiB; a longer
+request returns a short count (`min(len, 4096)`), not an error. The same
+answer is what T2.8 `write` must give. A range that starts valid but runs
+past its interval is `ERR_INVALID_ADDRESS`, not a short copy of the prefix.
 
-- **Acceptance:** a task passing a kernel address to `write` gets an error
-  return and is killed; the kernel neither faults nor panics. `SUM` is clear
-  again on the next trap (asserted at entry to the dispatcher).
+- **Acceptance:** `just test expect="USERPTR OK"` passes. The task issues a
+  spanning pointer (error return, continues — no scheduler yet) and then a
+  kernel address (error return and kill). The kernel neither faults nor
+  panics. `SUM` is clear again on the next trap (asserted at dispatcher
+  entry). `just check-utext` still passes: the `lui` of the kernel address
+  is a value, not a symbol reference.
+- **Gap:** `.urodata` is still empty, so the read-only-source arm of
+  `user_range_ok` and `copy_to_user` are compiled but not exercised. They
+  wait on T2.8 putting a buffer in `.urodata` (and, for `copy_to_user`, a
+  caller). The paths that *are* live in this task are the user stack
+  (nonempty) and the two failure shapes.
 
 ### T2.8 — The five syscalls — M (S each)
 `write(ptr, len) -> count` (console only, no `fd`), `exit(code)`,

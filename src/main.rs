@@ -27,6 +27,7 @@ mod syscall;
 mod task;
 mod timer;
 mod trap;
+mod uaccess;
 mod user;
 
 use core::arch::{asm, global_asm};
@@ -180,9 +181,12 @@ static mut IN_PANIC: bool = false;
 
 /// Required by `no_std`: where `core` lands when an invariant fails.
 /// Prints location and message, then parks. Nested panics `ebreak` and park
-/// without printing.
+/// without printing. Clears `sstatus.SUM` first: a page fault inside a
+/// copy window arrives here with SUM still set, and formatting must not
+/// run with ambient user-memory authority.
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
+    csr::sstatus::clear(csr::sstatus::SUM);
     let nested = unsafe {
         if IN_PANIC {
             true
