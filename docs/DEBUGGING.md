@@ -232,14 +232,70 @@ and 11 for the entries the transition actually uses. The general lesson:
 verify the specific translations the cliff depends on, not a representative
 sample of the range.
 
-**M2 (expand at milestone start)**
+**M2**
 1. `sret` to U-mode with `sstatus.SPP` still S, or `sepc` bogus.
 2. User page lacking the U bit → instruction page fault at the first user
-   instruction (cause 12, `sepc` = user entry).
+   instruction (cause 12, `sepc` = user entry). Reaches further than expected:
+   a string literal left in kernel `.rodata` faults on the task's *load*
+   (cause 13), and a compiler-emitted `memcpy` call into kernel `.text` faults
+   on the *fetch* (cause 12, `sepc` inside kernel text).
 3. Kernel dereferencing user memory without `sstatus.SUM` → cause 13/15 from
-   *kernel* `sepc` at a user address in `stval`.
-4. Trap entry using the wrong stack (sscratch dance wrong) → corruption two
-   bugs away from the cause.
+   *kernel* `sepc` with a user address in `stval`.
+4. Trap entry using the wrong stack (`sscratch` protocol wrong, D-0029) →
+   corruption two bugs away from the cause. If `sscratch` is nonzero while
+   executing in S-mode, a kernel exception is misclassified as a trap from
+   U-mode and the entry pushes its frame over a live frame.
+5. **Kernel `gp` not reloaded on the trap-from-U path** (D-0029) → kernel
+   statics read through the *user's* `gp`. No fault, no proximity: the symptom
+   is an impossible value in a static, seen inside the handler.
+6. **Kernel stack overflow — a hang with no output. Known unrecoverable.**
+   See below.
+
+**Kernel stack overflow (M2 onward) — known unrecoverable failure**
+
+**Signature: a hang with no output at all, shortly after entering a deep
+kernel call path** (a syscall that formats a lot, or the nested-panic path).
+No `PANIC` line, no trap report, no `tick N`.
+
+Why nothing prints, step by step:
+
+1. The overflowing store lands in the 4 KiB unmapped guard hole below that
+   task's kernel stack (D-0030) and raises a store page fault (cause 15) from
+   S-mode.
+2. The fault came from S-mode, so `sscratch` is 0 (D-0029). Trap entry's
+   `csrrw`/`bnez`/`csrrw` sequence therefore *keeps the faulting `sp`* — which
+   is already inside the guard hole.
+3. Block 2 does `addi sp, sp, -272` and starts storing the frame through that
+   same hole. Those stores fault too.
+4. That fault re-enters `__trap_entry` in exactly the same state. Tight,
+   silent loop.
+5. Rust is never reached, so `IN_PANIC` and the panic printer never run. This
+   is the fault-the-fault-forever case from M1 item 4, arriving by a different
+   road.
+
+So the guard page converts silent corruption of a neighbouring task's stack
+into a silent hang. The damage stops; nothing is reported. It also only
+guarantees that much while the overflowing stack frame is *smaller* than the
+4 KiB hole — a single frame larger than the guard can step over it entirely
+and put the entry's 272-byte push into mapped memory below, which is silent
+corruption again.
+
+Confirming it from outside the guest (the only channels that work):
+
+1. **`-d int`.** A repeating cause-15 block whose `tval` sits in a guard hole
+   — compare against the `nm` addresses of `__kstack*_bottom` — and whose
+   `epc` is inside `__trap_entry`'s store sequence. Read the *first* block.
+2. **Monitor `info registers`.** `sp` below the current task's
+   `kstack_bottom` is the whole diagnosis.
+3. **GDB**, `hbreak __trap_entry`, then check `sp` against the linker symbols.
+
+Fixes, in the order to try them: shrink the offending call path (usually
+`println!` formatting or a large local buffer on a syscall path); raise the
+per-task kernel stack from 8 KiB; and only then consider the double-fault
+stack D-0030 declines to implement — a range check of `sp` against the current
+kernel stack bounds on every trap-from-S plus a switch to a reserved emergency
+stack, which costs a load and a comparison in the hottest path because RISC-V
+S-mode has only one `sscratch` and no hardware IST equivalent.
 
 **M3 (expand at milestone start)**
 1. Virtqueue memory not physically contiguous / wrong physical address given
