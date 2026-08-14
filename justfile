@@ -93,6 +93,23 @@ test-stress:
     fi
     echo "TEST PASS: frame exhaust total=${n}"
 
+# Both invalid-pointer shapes, each in its own image so the kill of one
+# cannot hide the other (D-0034). Default boot is T2.8 (SBRK OK).
+test-userptr:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    EXPECT="USERPTR OK" TIMEOUT_S=3 bash scripts/boot-test.sh userptr-kernel-selftest
+    if ! grep -a -q 'not in a user interval' serial.log; then
+        echo 'TEST FAIL: kernel-address case missing'
+        exit 1
+    fi
+    EXPECT="USERPTR OK" TIMEOUT_S=3 bash scripts/boot-test.sh userptr-span-selftest
+    if ! grep -a -q 'spans past interval' serial.log; then
+        echo 'TEST FAIL: span case missing'
+        exit 1
+    fi
+    echo 'TEST PASS: both invalid-pointer shapes killed'
+
 # Disassemble the kernel. Extra flags as one quoted arg, e.g. just objdump '-d --source'
 objdump flags="-d": build
     cargo objdump -- {{flags}}

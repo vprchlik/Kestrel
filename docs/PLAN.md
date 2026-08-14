@@ -844,27 +844,25 @@ request returns a short count (`min(len, 4096)`), not an error. The same
 answer is what T2.8 `write` must give. A range that starts valid but runs
 past its interval is `ERR_INVALID_ADDRESS`, not a short copy of the prefix.
 
-- **Acceptance:** `just test expect="USERPTR OK"` passes. The task issues a
-  spanning pointer (error return, continues — no scheduler yet) and then a
-  kernel address (error return and kill). The kernel neither faults nor
-  panics. `SUM` is clear again on the next trap (asserted at dispatcher
-  entry). `just check-utext` still passes: the kernel address is built from
-  immediates (`lui`/`addi`/`slli`), not a symbol reference.
-- **Gap:** `.urodata` is still empty, so the read-only-source arm of
-  `user_range_ok` and `copy_to_user` are compiled but not exercised. They
-  wait on T2.8 putting a buffer in `.urodata` (and, for `copy_to_user`, a
-  caller). The paths that *are* live in this task are the user stack
-  (nonempty) and the two failure shapes.
+- **Acceptance:** `just test-userptr` passes. Each invalid-pointer shape
+  is its own feature boot (`userptr-kernel-selftest`,
+  `userptr-span-selftest`) so a kill cannot hide the other; both return
+  `ERR_INVALID_ADDRESS` and kill the task (D-0034). The kernel neither
+  faults nor panics. `SUM` is clear again on the next trap (asserted at
+  dispatcher entry). The kernel address is built from immediates, not a
+  symbol reference (`just check-utext`).
 
 ### T2.8 — The five syscalls — M (S each)
 `write(ptr, len) -> count` (console only, no `fd`), `exit(code)`,
 `sbrk(delta) -> old_break`, `gettime() -> raw counter`, `yield()`. Semantics
 and error codes per D-0033. A task grows its break and uses the memory;
-prints `SBRK OK`.
+prints `SBRK OK`. `sbrk` past the wall **or** below `brk_base` returns
+`NO_MEM` with the break unchanged. `yield` resumes the same task until T2.9.
 
 - **Acceptance:** `just test expect="SBRK OK"` passes; `sbrk` past the wall
   returns `NO_MEM` and leaves the break unchanged; `gettime` deltas across a
-  `write` are positive and smaller than a tick period.
+  `write` are positive and smaller than a tick period. `just test-userptr`
+  still kills both invalid-pointer shapes.
 
 ### T2.9 — Round-robin scheduler at trap exit — L
 The timer handler ends the slice (slice = one tick, D-0035) and returns the

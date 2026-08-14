@@ -58,6 +58,13 @@ address. The kernel is identity-mapped (D-0006), so the PC, stack pointer,
 and return addresses keep their numeric values across the `satp` write —
 there is no higher-half trampoline.
 
+**lui sign-extension (RV64).** `lui rd, imm` writes `sext_64(imm << 12)`.
+If bit 31 of that result is set (`imm >= 0x80000`), bits 63:32 become 1.
+`lui a0, 0x80200` therefore yields `0xffffffff80200000`, not the
+identity-mapped kernel address `0x80200000`. Build a PA with bit 31 set
+from a positive `lui` plus `addi`/`slli`, or mask the high half after.
+This will bite again anywhere a test names a high address.
+
 **mret / sret.** "Return from trap" instructions for M-mode and S-mode
 respectively: they restore the previous privilege level and interrupt-enable
 state from status-register fields (`MPP`/`SPP`, `MPIE`/`SPIE`) and jump to the

@@ -215,7 +215,7 @@ fn build() -> usize {
     }
 
     // User sections are linked immediately after the boot stack, then the
-    // task slots. `.utext` gaining content in T2.5 advances `.` before
+    // task slots. `.utext` / `.urodata` content advances `.` before
     // `__tasks_start = .`, so the slots move up rather than overlapping.
     // A reorder that put `.utext` *after* the slots would fail this check
     // (`utext_start != boot_stack_top`) and, if it also overlapped a

@@ -103,10 +103,14 @@ fn classify(task: &Task, ptr: usize, len: usize, access: Access) -> Result<(), U
 /// Sequence: caller validates → raise SUM → memcpy → clear SUM.
 /// No policy, no formatting, no `println!` inside the window.
 ///
-/// `copy_nonoverlapping` does not panic. If a validation bug lets this
-/// memcpy page-fault, the trap arrives with SUM still set; `panic`
-/// clears it before printing. SIE is 0 in S-mode, so a timer cannot
-/// land in the window either.
+/// `copy_nonoverlapping` is unsafe. At opt-level=0 (our debug profile)
+/// Rust inserts UB checks for overlap, alignment, and null. They cannot
+/// fire here: `u8` alignment is 1, the kernel bounce buffer and the user
+/// range are disjoint, and a null pointer fails `user_range_ok` before
+/// this window. A validation bug that lets the memcpy page-fault is a
+/// trap, not those checks; the trap arrives with SUM still set and
+/// `panic` clears it before printing. SIE is 0 in S-mode, so a timer
+/// cannot land in the window either.
 #[inline(never)]
 unsafe fn copy_with_sum(dst: *mut u8, src: *const u8, n: usize) {
     csr::sstatus::set(csr::sstatus::SUM);
@@ -119,25 +123,30 @@ unsafe fn copy_with_sum(dst: *mut u8, src: *const u8, n: usize) {
 /// provided those capped bytes themselves pass `user_range_ok`. A range
 /// that is only partially inside an interval is an error, not a short
 /// copy of the valid prefix.
-pub fn copy_from_user(task: &Task, src: usize, len: usize) -> Result<usize, UserPtrError> {
+pub fn copy_from_user(task: &Task, src: usize, len: usize) -> Result<&'static [u8], UserPtrError> {
     let n = core::cmp::min(len, COPY_MAX);
     classify(task, src, n, Access::Read)?;
     if n == 0 {
-        return Ok(0);
+        return Ok(&[]);
     }
     unsafe {
-        copy_with_sum(core::ptr::addr_of_mut!(FROM_USER) as *mut u8, src as *const u8, n);
-        // Bounce buffer is unread until T2.8 prints it. Without a sink,
-        // LLVM could DSE the memcpy and the SUM window would never load
-        // user memory. Load after SUM is down: the byte is in kernel .bss.
-        let _ = core::hint::black_box(core::ptr::read(core::ptr::addr_of!(FROM_USER[0])));
+        copy_with_sum(
+            core::ptr::addr_of_mut!(FROM_USER) as *mut u8,
+            src as *const u8,
+            n,
+        );
+        // Caller must consume the slice before the next copy. `write`
+        // prints it; that read is also the DSE sink for the memcpy.
+        Ok(core::slice::from_raw_parts(
+            core::ptr::addr_of!(FROM_USER) as *const u8,
+            n,
+        ))
     }
-    Ok(n)
 }
 
 /// Copy up to [`COPY_MAX`] bytes from a kernel slice into a user
-/// destination. First caller is T2.8 `read`-shaped use (there is none
-/// yet); `.urodata` is rejected because this is a write.
+/// destination. No T2.8 caller (`write` is copy-from); `.urodata` is
+/// rejected because this is a write.
 #[allow(dead_code)]
 pub fn copy_to_user(task: &Task, dst: usize, src: &[u8]) -> Result<usize, UserPtrError> {
     let n = core::cmp::min(src.len(), COPY_MAX);

@@ -20,11 +20,12 @@ if [ -n "$FEATURE" ]; then
 fi
 
 cargo build "${feat[@]}"
-# Feature builds (panic/hang/stress) never enter U-mode; .utext can be
-# GC'd. The check is for the default image, which must have it.
-if [ -z "$FEATURE" ]; then
-    bash scripts/check-utext.sh "$KERNEL"
-fi
+# Feature builds that never enter U-mode can GC .utext. Userptr selftests
+# do enter U, so they still need the check.
+case "${FEATURE}" in
+    panic-selftest|hang-selftest|stress|frame-exhaust-selftest) ;;
+    *) bash scripts/check-utext.sh "$KERNEL" ;;
+esac
 rm -f serial.log
 
 set +e

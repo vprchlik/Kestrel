@@ -87,8 +87,10 @@ def fail(pc, insn, reason):
     sys.exit(1)
 
 # llvm-objdump: "80228000: 00100513     	li	a0, 0x1"
+# One hex encoding field, not a repeating byte dump — mnemonics like
+# `add`/`sub` are themselves hex digit strings and would be swallowed.
 line_re = re.compile(
-    r"^\s*([0-9a-fA-F]+):\s+(?:[0-9a-fA-F]{2,8}\s+)*\s*(\S+)(?:\s+(.*))?$"
+    r"^\s*([0-9a-fA-F]+):\s+[0-9a-fA-F]+\s+(\S+)(?:\s+(.*))?$"
 )
 
 insns = []
@@ -159,8 +161,13 @@ def hex_targets(args):
     return [int(x, 16) for x in re.findall(r"0x[0-9a-fA-F]+", args)]
 
 
+resolved = []
+
+
 def check_addr(pc, insn, addr, how):
-    if where(addr) is not None:
+    name = where(addr)
+    if name is not None:
+        resolved.append((pc, how, addr, name))
         return
     if kernel_lo <= addr < kernel_hi:
         fail(
@@ -257,5 +264,7 @@ for i, (pc, op, args, raw) in enumerate(insns):
 
     fail(pc, raw, f"unhandled {op} in .utext")
 
+for pc, how, addr, name in resolved:
+    print(f"  {pc:#x}: {how} {addr:#x} -> {name}")
 print("check-utext OK")
 PY

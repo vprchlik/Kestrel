@@ -13,6 +13,10 @@ hang-selftest = []
 stress = []
 # Boot through HEAP OK, then alloc frames until the free list is empty.
 frame-exhaust-selftest = []
+# T2.7/T2.8: write a kernel address; task is killed (D-0034).
+userptr-kernel-selftest = []
+# T2.7/T2.8: write a pointer that starts valid and runs past its interval.
+userptr-span-selftest = []
 
 [dependencies]
 

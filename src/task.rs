@@ -582,6 +582,25 @@ pub fn kill_invalid_user_ptr(sepc: usize, ptr: usize) {
     unsafe { CURRENT = None };
 }
 
+/// Voluntary `exit`. Same Exited/CURRENT drop as a kill; the cause line
+/// is `task N exit CODE` so T2.12 can grep it.
+#[cfg_attr(
+    any(
+        feature = "panic-selftest",
+        feature = "hang-selftest",
+        feature = "stress",
+        feature = "frame-exhaust-selftest"
+    ),
+    allow(dead_code)
+)]
+pub fn exit_current(code: usize) {
+    let t = current();
+    println!("task {} exit {}", t.id, code);
+    t.exit_code = code;
+    t.state = State::Exited;
+    unsafe { CURRENT = None };
+}
+
 /// No running task and no scheduler yet (T2.9). Printed, then SRST — a
 /// park would make `just test` hang after the marker, and silently
 /// resuming task 1 (`sepc = 0`) would be an instruction page fault that
