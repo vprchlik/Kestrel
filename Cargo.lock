@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "kestrel"
+name = "whimbrel"
 version = "0.1.0"

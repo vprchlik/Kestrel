@@ -143,7 +143,7 @@ and `print!`/`println!` macros. Probe DBCN via BASE before the first write.
 
 - **Acceptance:** `just run` prints exactly:
   ```
-  kestrel: hello from hart 0, dtb at 0x<some address in RAM>
+  whimbrel: hello from hart 0, dtb at 0x<some address in RAM>
   ```
   after the OpenSBI banner.
 
@@ -181,7 +181,7 @@ prints `TEST PASS: found "M0 BOOT OK"` and exits 0. And interactively:
 ```
 $ just run
 ... OpenSBI banner ...
-kestrel: hello from hart 0, dtb at 0x87e00000
+whimbrel: hello from hart 0, dtb at 0x87e00000
 M0 BOOT OK
 $ echo $?
 0

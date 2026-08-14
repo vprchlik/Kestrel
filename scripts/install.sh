@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Provision the Kestrel toolchain. Mirrors docs/SETUP.md — keep in lockstep.
+# Provision the Whimbrel toolchain. Mirrors docs/SETUP.md — keep in lockstep.
 # Used by .cursor/environment.json to set up cloud-agent VMs; safe to re-run.
 set -euo pipefail
 

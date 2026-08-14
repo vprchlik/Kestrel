@@ -387,8 +387,8 @@ pub fn self_test() {
     println!("align64 user={:#x}", ap);
     dump("after align64");
 
-    let s = String::from("kestrel");
-    if s != "kestrel" {
+    let s = String::from("whimbrel");
+    if s != "whimbrel" {
         panic!("String round-trip");
     }
 

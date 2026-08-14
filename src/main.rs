@@ -1,4 +1,4 @@
-//! Kestrel — a minimal rv64gc unikernel for QEMU virt, booted via OpenSBI.
+//! Whimbrel — a minimal rv64gc unikernel for QEMU virt, booted via OpenSBI.
 //!
 //! OpenSBI enters `_start` in S-mode with `a0` = hartid and `a1` = physical
 //! address of the device tree blob. `_start` sets `gp` and `sp`, zeros `.bss`,
@@ -83,7 +83,7 @@ _start:
 #[no_mangle]
 extern "C" fn kmain(hartid: usize, dtb_pa: usize) -> ! {
     sbi::require_dbcn();
-    println!("kestrel: hello from hart {}, dtb at {:#x}", hartid, dtb_pa);
+    println!("whimbrel: hello from hart {}, dtb at {:#x}", hartid, dtb_pa);
     {
         let sstatus = csr::sstatus::read();
         let sie = csr::sie::read();

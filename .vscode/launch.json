@@ -12,7 +12,7 @@
             "type": "lldb",
             "request": "custom",
             "targetCreateCommands": [
-                "target create ${workspaceFolder}/target/riscv64gc-unknown-none-elf/debug/kestrel"
+                "target create ${workspaceFolder}/target/riscv64gc-unknown-none-elf/debug/whimbrel"
             ],
             "processCreateCommands": [
                 "gdb-remote localhost:1234"

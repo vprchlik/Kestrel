@@ -53,7 +53,7 @@ When there's no output and GDB feels too slow, make QEMU narrate every trap:
 
 ```
 qemu-system-riscv64 -machine virt -nographic -bios default \
-    -kernel target/riscv64gc-unknown-none-elf/debug/kestrel \
+    -kernel target/riscv64gc-unknown-none-elf/debug/whimbrel \
     -d int,cpu_reset,guest_errors -D qemu.log
 ```
 
@@ -146,7 +146,7 @@ never reached your code. In rough order of likelihood:
 2. **Before T1.2 installs `__trap_entry`:** OpenSBI leaves `stvec =
    0x80200000` (our `_start`, Direct mode). Any *delegated* exception jumps
    there, so `_start` re-runs: `gp`/`sp` reset, `.bss` zeroed, `kmain` again.
-   Symptom is a repeating OpenSBI banner plus `kestrel: hello` line — not a
+   Symptom is a repeating OpenSBI banner plus `whimbrel: hello` line — not a
    hang, not a firmware dump, not a trap report. T1.2's `stvec` write
    eliminates this. Codes 1/2/4/5/6/7 are still not delegated and still
    produce a firmware dump if they fire.

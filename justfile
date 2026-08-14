@@ -1,9 +1,9 @@
-# Task runner for Kestrel. `just --list` shows all recipes.
+# Task runner for Whimbrel. `just --list` shows all recipes.
 
 set shell := ["bash", "-uc"]
 
 target    := "riscv64gc-unknown-none-elf"
-kernel    := "target/" + target + "/debug/kestrel"
+kernel    := "target/" + target + "/debug/whimbrel"
 qemu      := "qemu-system-riscv64"
 qemu_args := "-machine virt -nographic -bios default"
 

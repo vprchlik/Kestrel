@@ -1,4 +1,4 @@
-/* Linker script for Kestrel on QEMU virt.
+/* Linker script for Whimbrel on QEMU virt.
  *
  * Why 0x8020_0000: RAM on the virt machine starts at 0x8000_0000; OpenSBI
  * occupies (and PMP-protects) the first chunk of it and jumps to the next

@@ -10,7 +10,7 @@ EXPECT="${EXPECT:-M1 FUNDAMENTALS OK}"
 TIMEOUT_S="${TIMEOUT_S:-3}"
 FEATURE="${1:-}"
 TARGET="riscv64gc-unknown-none-elf"
-KERNEL="target/${TARGET}/debug/kestrel"
+KERNEL="target/${TARGET}/debug/whimbrel"
 QEMU="qemu-system-riscv64"
 QEMU_ARGS=(-machine virt -nographic -bios default)
 
