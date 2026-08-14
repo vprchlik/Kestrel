@@ -194,10 +194,15 @@ fn build() -> usize {
             be, sb
         );
     }
-    if st != hs {
-        panic!("gap between stack and heap: top={:#x} heap={:#x}", st, hs);
+    // T2.1: per-task stacks/breaks sit between the boot stack and the heap.
+    // T1.6 still maps [sb, st) and [hs, he) and leaves the gap unmapped —
+    // those holes are ordinary RAM until T2.2 (same inert-guard story as
+    // D-0016 before T1.6). Do not require st == hs.
+    if st >= hs {
+        panic!("boot stack overlaps heap: top={:#x} heap={:#x}", st, hs);
     }
-    if !(ks < rs && rs < ds && ds < be && be < sb && sb < st && hs < he && he < RAM_END) {
+    if !(ks < rs && rs < ds && ds < be && be < sb && sb < st && st < hs && hs < he && he < RAM_END)
+    {
         panic!(
             "symbol order: ks={:#x} rs={:#x} ds={:#x} be={:#x} sb={:#x} st={:#x} hs={:#x} he={:#x}",
             ks, rs, ds, be, sb, st, hs, he

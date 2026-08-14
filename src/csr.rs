@@ -136,9 +136,8 @@ rw_csr!(stvec, write_opts: [nomem, nostack, preserves_flags], {
     pub const MODE_VECTORED: usize = 1;
 });
 
-/// Scratch for the trap handler. Privileged spec 20211203 §4.1.1.
-/// D-0029: kernel stack top in U-mode, 0 in S-mode. `write` does not change
-/// how other memory operations behave.
+// sscratch: trap-handler scratch. Privileged spec 20211203 §4.1.1.
+// D-0029: kernel stack top in U-mode, 0 in S-mode.
 rw_csr!(sscratch, write_opts: [nomem, nostack, preserves_flags]);
 
 rw_csr!(scause, write_opts: [nomem, nostack, preserves_flags], {

@@ -23,6 +23,7 @@ mod page;
 mod sbi;
 #[cfg(feature = "stress")]
 mod stress;
+mod task;
 mod timer;
 mod trap;
 
@@ -137,6 +138,7 @@ extern "C" fn kmain(hartid: usize, dtb_pa: usize) -> ! {
         frame::check_dtb(dtb_pa);
         frame::init();
         frame::self_test();
+        task::check_layout();
         page::init();
         page::activate();
         heap::init();

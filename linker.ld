@@ -10,6 +10,9 @@
  * permissions (text R+X, rodata R, data/bss R+W) at page granularity.
  * The __symbols are consumed by startup asm (stack, bss clearing in M0) and
  * by the M1 frame allocator / page-table setup.
+ *
+ * Four task slots are unrolled below (D-0030). src/task.rs `MAX_TASKS` must
+ * match: check_layout asserts (__tasks_end - __tasks_start) / 88 KiB.
  */
 
 OUTPUT_ARCH(riscv)
@@ -72,6 +75,90 @@ SECTIONS
         . += 64K;
         __boot_stack_top = .;
     }
+
+    . = ALIGN(4K);
+
+    /* T2.1 / D-0031: user sections. Empty until T2.5. Each is 4 KiB-aligned
+     * so T2.2 can give it its own U-bit permissions. Empty + already
+     * aligned means start == end and no pages are consumed. */
+    __utext_start = .;
+    .utext : {
+        *(.utext .utext.*)
+    }
+    . = ALIGN(4K);
+    __utext_end = .;
+
+    __urodata_start = .;
+    .urodata : {
+        *(.urodata .urodata.*)
+    }
+    . = ALIGN(4K);
+    __urodata_end = .;
+
+    __udata_start = .;
+    .udata : {
+        *(.udata .udata.*)
+    }
+    . = ALIGN(4K);
+    __udata_end = .;
+
+    __ubss_start = .;
+    .ubss (NOLOAD) : {
+        *(.ubss .ubss.*)
+    }
+    . = ALIGN(4K);
+    __ubss_end = .;
+
+    /* Per-task stacks and break windows (D-0030). One slot:
+     *   4 KiB ustack guard + 8 KiB ustack + 64 KiB break
+     *   + 4 KiB kstack guard + 8 KiB kstack  = 88 KiB.
+     *
+     * Guard holes are linker-script holes only — not sections, not in the
+     * image. Same situation as D-0016 in M1/T1.5: T1.6 still identity-maps
+     * all of RAM R+W except the boot-stack guard, so these holes are
+     * ordinary RAM until T2.2 leaves them out of the tables. A stack
+     * overflow still stores into the neighbouring region. The frame
+     * allocator starts at __heap_end and never hands these pages out
+     * (they sit below __kernel_end). */
+    __tasks_start = .;
+
+    __ustack0_guard = .;  . += 4K;
+    __ustack0_bottom = .; . += 8K;
+    __ustack0_top = .;
+    __ubrk0_base = .;     . += 64K;
+    __ubrk0_wall = .;
+    __kstack0_guard = .;  . += 4K;
+    __kstack0_bottom = .; . += 8K;
+    __kstack0_top = .;
+
+    __ustack1_guard = .;  . += 4K;
+    __ustack1_bottom = .; . += 8K;
+    __ustack1_top = .;
+    __ubrk1_base = .;     . += 64K;
+    __ubrk1_wall = .;
+    __kstack1_guard = .;  . += 4K;
+    __kstack1_bottom = .; . += 8K;
+    __kstack1_top = .;
+
+    __ustack2_guard = .;  . += 4K;
+    __ustack2_bottom = .; . += 8K;
+    __ustack2_top = .;
+    __ubrk2_base = .;     . += 64K;
+    __ubrk2_wall = .;
+    __kstack2_guard = .;  . += 4K;
+    __kstack2_bottom = .; . += 8K;
+    __kstack2_top = .;
+
+    __ustack3_guard = .;  . += 4K;
+    __ustack3_bottom = .; . += 8K;
+    __ustack3_top = .;
+    __ubrk3_base = .;     . += 64K;
+    __ubrk3_wall = .;
+    __kstack3_guard = .;  . += 4K;
+    __kstack3_bottom = .; . += 8K;
+    __kstack3_top = .;
+
+    __tasks_end = .;
 
     . = ALIGN(4K);
     __kernel_end = .;
