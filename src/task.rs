@@ -367,7 +367,6 @@ const _: () = assert!((FABRICATED_SSTATUS & csr::sstatus::UXL) == csr::sstatus::
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum State {
     Ready,
-    #[allow(dead_code)]
     Running,
     Exited,
 }
@@ -384,6 +383,8 @@ pub struct Task {
     pub brk: usize,
     pub brk_wall: usize,
     pub exit_code: usize,
+    pub writes: usize,
+    pub yields: usize,
 }
 
 static mut TASKS: [Option<Task>; MAX_TASKS] = [None; MAX_TASKS];
@@ -462,18 +463,38 @@ pub fn create(id: usize, entry: usize) {
             brk: s.brk_base,
             brk_wall: s.brk_wall,
             exit_code: 0,
+            writes: 0,
+            yields: 0,
         });
     }
 }
 
-/// Create slot 0 with `sepc` = the `.utext` entry; the rest keep `sepc = 0`
-/// so a mistaken `sret` into them faults at address 0 (instruction page
-/// fault, `sepc = stval = 0`). Print the table. Asserts
-/// `frame == kstack_top - 272`.
+/// Create the static table. Default boot: tasks 1 and 2 are the T2.9
+/// demo (Ready); 0 and 3 are Exited so round-robin cannot `sret` into
+/// `sepc = 0`. Userptr selftests keep a single Ready task in slot 0.
 pub fn init() {
-    create(0, crate::user::entry());
-    for id in 1..MAX_TASKS {
-        create(id, 0);
+    #[cfg(any(
+        feature = "userptr-kernel-selftest",
+        feature = "userptr-span-selftest"
+    ))]
+    {
+        create(0, crate::user::entry());
+        for id in 1..MAX_TASKS {
+            create(id, 0);
+            get(id).state = State::Exited;
+        }
+    }
+    #[cfg(not(any(
+        feature = "userptr-kernel-selftest",
+        feature = "userptr-span-selftest"
+    )))]
+    {
+        create(0, 0);
+        create(1, crate::user::task1());
+        create(2, crate::user::task2());
+        create(3, 0);
+        get(0).state = State::Exited;
+        get(3).state = State::Exited;
     }
     println!(
         "fabricated sstatus {:#x} (SPIE=1 SPP=U SIE=0 FS=Off UXL=64)",
@@ -537,6 +558,125 @@ pub fn current() -> &'static mut Task {
     match unsafe { CURRENT } {
         Some(id) => get(id),
         None => panic!("no current task"),
+    }
+}
+
+pub fn has_current() -> bool {
+    unsafe { core::ptr::read_volatile(&raw const CURRENT) }.is_some()
+}
+
+static mut SWITCH_12: usize = 0;
+static mut SWITCH_21: usize = 0;
+
+fn next_ready_after(id: usize) -> Option<usize> {
+    for step in 1..=MAX_TASKS {
+        let cand = (id + step) % MAX_TASKS;
+        if get(cand).state == State::Ready {
+            return Some(cand);
+        }
+    }
+    None
+}
+
+fn record_switch(from: usize, to: usize) {
+    if from == to {
+        return;
+    }
+    unsafe {
+        if from == 1 && to == 2 {
+            SWITCH_12 = SWITCH_12.wrapping_add(1);
+        } else if from == 2 && to == 1 {
+            SWITCH_21 = SWITCH_21.wrapping_add(1);
+        }
+    }
+}
+
+fn run(id: usize) -> &'static mut TrapFrame {
+    let t = get(id);
+    t.state = State::Running;
+    unsafe { CURRENT = Some(id) };
+    unsafe { &mut *t.frame }
+}
+
+/// End the slice (D-0035): current stays Ready, return the next Ready
+/// frame. One Ready task gets itself back. Policy lives here; the
+/// assembly only does `mv sp, a0` (D-0032).
+pub fn preempt(frame: &mut TrapFrame) -> &mut TrapFrame {
+    let cur = current();
+    if cur.frame as usize != frame as *mut TrapFrame as usize {
+        panic!(
+            "preempt: frame {:#x} is not task {}'s {:#x}",
+            frame as *mut TrapFrame as usize,
+            cur.id,
+            cur.frame as usize
+        );
+    }
+    cur.state = State::Ready;
+    let next = next_ready_after(cur.id).unwrap_or(cur.id);
+    record_switch(cur.id, next);
+    run(next)
+}
+
+/// `yield`: same pick as a tick. Caller has already advanced `sepc`.
+pub fn yield_cpu(frame: &mut TrapFrame) -> &mut TrapFrame {
+    current().yields += 1;
+    preempt(frame)
+}
+
+/// Last `exit` with an empty ready set: assert the T2.9 predicate, print
+/// `SCHED OK`, shut down. No idle loop (D-0035).
+fn finish_sched() -> ! {
+    let t1 = get(1);
+    let t2 = get(2);
+    let sw12 = unsafe { SWITCH_12 };
+    let sw21 = unsafe { SWITCH_21 };
+    if t1.state != State::Exited || t2.state != State::Exited {
+        panic!(
+            "sched: task1 {} task2 {} switches 1->2={} 2->1={}",
+            state_name(t1.state),
+            state_name(t2.state),
+            sw12,
+            sw21
+        );
+    }
+    if t1.yields != 0 || t2.yields != 0 {
+        panic!(
+            "sched: yields task1={} task2={} want 0",
+            t1.yields, t2.yields
+        );
+    }
+    if sw12 == 0 || sw21 == 0 {
+        panic!(
+            "sched: switches 1->2={} 2->1={} (need at least one each way)",
+            sw12, sw21
+        );
+    }
+    println!(
+        "task 1 done writes={} yields={}",
+        t1.writes, t1.yields
+    );
+    println!(
+        "task 2 done writes={} yields={}",
+        t2.writes, t2.yields
+    );
+    println!(
+        "sched switches 1->2={} 2->1={} yields={}",
+        sw12,
+        sw21,
+        t1.yields + t2.yields
+    );
+    println!("SCHED OK");
+    stop_until_scheduler();
+}
+
+/// Pick the next Ready after an exit. Empty ready set → `finish_sched`.
+pub fn after_exit(exited_id: usize) -> &'static mut TrapFrame {
+    match next_ready_after(exited_id) {
+        Some(id) => {
+            record_switch(exited_id, id);
+            run(id)
+        }
+        None => finish_sched(),
     }
 }
 

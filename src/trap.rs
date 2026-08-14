@@ -159,10 +159,9 @@ pub fn instruction_width(halfword: u16) -> usize {
 }
 
 /// Called from `__trap_entry` with `a0` = frame pointer on the kernel stack.
-/// Returns the frame `__trap_return` should resume (D-0032). M1 traps and
-/// the timer still return the same `frame` they were given. An `ecall` from
-/// U is dispatched by `syscall::from_ecall`; unknown numbers kill the task
-/// and do not return.
+/// Returns the frame `__trap_return` should resume (D-0032). A timer tick
+/// or `yield` returns the next Ready task's frame; `mv sp, a0` is the
+/// switch. An `ecall` from U is dispatched by `syscall::from_ecall`.
 #[no_mangle]
 extern "C" fn trap_handler(frame: &mut TrapFrame) -> &mut TrapFrame {
     // D-0029: Rust runs in S-mode, so sscratch must be 0. A nonzero value
@@ -180,6 +179,11 @@ extern "C" fn trap_handler(frame: &mut TrapFrame) -> &mut TrapFrame {
     if interrupt {
         if code == csr::scause::INT_S_TIMER {
             timer::on_interrupt();
+            // Slice = this tick (D-0035). Boot ticks (no current task)
+            // return the same frame; once U is running, pick the next Ready.
+            if crate::task::has_current() {
+                return crate::task::preempt(frame);
+            }
             return frame;
         }
         unknown_trap(scause, code, true, frame, stval);

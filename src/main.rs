@@ -160,7 +160,16 @@ extern "C" fn kmain(hartid: usize, dtb_pa: usize) -> ! {
         #[cfg(not(any(feature = "frame-exhaust-selftest", feature = "stress")))]
         {
             // D-0035: kmain does not return after the first sret to U.
+            #[cfg(any(
+                feature = "userptr-kernel-selftest",
+                feature = "userptr-span-selftest"
+            ))]
             task::enter(0);
+            #[cfg(not(any(
+                feature = "userptr-kernel-selftest",
+                feature = "userptr-span-selftest"
+            )))]
+            task::enter(1);
         }
         #[cfg(feature = "stress")]
         {

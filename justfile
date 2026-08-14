@@ -56,6 +56,34 @@ test expect="M1 FUNDAMENTALS OK" timeout_s="3":
     case "$e" in expect=*) e="${e#expect=}" ;; esac
     case "$t" in timeout_s=*) t="${t#timeout_s=}" ;; esac
     EXPECT="$e" TIMEOUT_S="$t" bash scripts/boot-test.sh
+    if [ "$e" = "SCHED OK" ]; then
+        log=serial.log
+        if ! grep -aE -q 'task 1 done writes=[0-9]* yields=0' "$log"; then
+            echo 'TEST FAIL: missing "task 1 done writes=… yields=0"'
+            exit 1
+        fi
+        if ! grep -aE -q 'task 2 done writes=[0-9]* yields=0' "$log"; then
+            echo 'TEST FAIL: missing "task 2 done writes=… yields=0"'
+            exit 1
+        fi
+        if ! grep -aE -q 'sched switches 1->2=[1-9]' "$log"; then
+            echo 'TEST FAIL: missing sched switches 1->2=[1-9]'
+            exit 1
+        fi
+        if ! grep -aE -q '2->1=[1-9]' "$log"; then
+            echo 'TEST FAIL: missing 2->1=[1-9]'
+            exit 1
+        fi
+        if ! grep -aE '^task ' "$log" | awk '
+            /^task 2 / { if (!t2) t2 = NR }
+            /^task 1 done/ { d1 = NR }
+            END { if (!t2 || !d1 || t2 >= d1) exit 1 }
+        '; then
+            echo 'TEST FAIL: first ^task 2  line must precede ^task 1 done'
+            exit 1
+        fi
+        echo 'TEST PASS: sched greps and awk order'
+    fi
 
 # Invert the script's intentional non-zero so just does not print
 # "recipe failed" for a designed FAIL/HANG. `-` would also hide a

@@ -2,8 +2,8 @@
 //!
 //! Owns the ABI (D-0033): number in `a7`, arguments in `a0`–`a5`, return
 //! pair written into the trap frame. Bodies for the five calls live here.
-//! An unknown number or an invalid user pointer kills the task (D-0034)
-//! rather than panicking the kernel.
+//! `yield` and `exit` return the next Ready frame (D-0032); an unknown
+//! number or invalid user pointer kills the task (D-0034).
 
 #![cfg_attr(
     any(feature = "panic-selftest", feature = "hang-selftest"),
@@ -98,6 +98,7 @@ fn sys_write(frame: &mut TrapFrame) -> &mut TrapFrame {
     let task = task::current();
     match uaccess::copy_from_user(task, ptr, len) {
         Ok(bytes) => {
+            task.writes += 1;
             for &b in bytes {
                 sbi::console_write_byte(b);
             }
@@ -114,10 +115,11 @@ fn sys_write(frame: &mut TrapFrame) -> &mut TrapFrame {
     }
 }
 
-fn sys_exit(frame: &mut TrapFrame) -> ! {
+fn sys_exit(frame: &mut TrapFrame) -> &mut TrapFrame {
+    let id = task::current().id;
     let code = frame.a0();
     task::exit_current(code);
-    task::stop_until_scheduler();
+    task::after_exit(id)
 }
 
 /// `sbrk(delta) -> old_break`. Moves `task.brk` inside `[brk_base, brk_wall)`.
@@ -157,11 +159,10 @@ fn sys_gettime(frame: &mut TrapFrame) -> &mut TrapFrame {
     frame
 }
 
-/// No scheduler yet. Resume this same task. T2.9 replaces the body with
-/// "return the next Ready frame". No marker: T2.9's demo asserts
-/// `yields == 0` and must not grow a dependency on a T2.8 diagnostic.
+/// Advance `sepc` first, then pick the next Ready (D-0032 / PLAN T2.9).
+/// Returning without the advance would re-execute `ecall` forever.
 fn sys_yield(frame: &mut TrapFrame) -> &mut TrapFrame {
     advance_ecall(frame);
     frame.set_retval(OK, 0);
-    frame
+    task::yield_cpu(frame)
 }
