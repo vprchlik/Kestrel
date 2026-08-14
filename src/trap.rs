@@ -1,13 +1,17 @@
 //! Trap entry, frame, and dispatch.
 //!
-//! Owns `__trap_entry` (the `stvec` target) and the Rust `trap_handler` it
-//! calls. Hardware saves `sepc`/`scause`/`stval` and two `sstatus` bits and
-//! nothing else — this module is the only place the other 31 GPRs are
-//! preserved. Without it a delegated trap jumps to whatever OpenSBI left in
-//! `stvec` (our `_start`) and boot-loops.
+//! Owns `__trap_entry` (the `stvec` target), `__trap_return` (the shared
+//! epilogue), and the Rust `trap_handler` they call. Hardware saves
+//! `sepc`/`scause`/`stval` and two `sstatus` bits and nothing else — this
+//! module is the only place the other 31 GPRs are preserved. Without it a
+//! delegated trap jumps to whatever OpenSBI left in `stvec` (our `_start`)
+//! and boot-loops.
 //!
 //! Frame layout is D-0020: `x[i]` at offset `8 * i`, then `sepc`, `sstatus`,
-//! 272 bytes. `sscratch` is left untouched (D-0020 constraint 4).
+//! 272 bytes. `sscratch` is 0 in S-mode and the current task's kernel stack
+//! top in U-mode (D-0029). `trap_handler` returns the frame to resume
+//! (D-0032); block 4 is `__trap_return`, which T2.5's first `sret` will
+//! share.
 
 use crate::csr;
 use crate::println;
@@ -126,8 +130,17 @@ pub fn instruction_width(halfword: u16) -> usize {
 }
 
 /// Called from `__trap_entry` with `a0` = frame pointer on the kernel stack.
+/// Returns the frame `__trap_return` should resume (D-0032). Every M1 path
+/// returns the same `frame` it was given — there is no other task yet.
 #[no_mangle]
-extern "C" fn trap_handler(frame: &mut TrapFrame) {
+extern "C" fn trap_handler(frame: &mut TrapFrame) -> &mut TrapFrame {
+    // D-0029: Rust runs in S-mode, so sscratch must be 0. A nonzero value
+    // here means the S-path undo failed or the U path forgot to clear it.
+    let scratch = csr::sscratch::read();
+    if scratch != 0 {
+        panic!("sscratch {:#x} in handler, want 0", scratch);
+    }
+
     let scause = csr::scause::read();
     let stval = csr::stval::read();
     let interrupt = scause & csr::scause::INTERRUPT != 0;
@@ -136,7 +149,7 @@ extern "C" fn trap_handler(frame: &mut TrapFrame) {
     if interrupt {
         if code == csr::scause::INT_S_TIMER {
             timer::on_interrupt();
-            return;
+            return frame;
         }
         unknown_trap(scause, code, true, frame, stval);
     }
@@ -168,6 +181,7 @@ extern "C" fn trap_handler(frame: &mut TrapFrame) {
         }
         _ => unknown_trap(scause, code, false, frame, stval),
     }
+    frame
 }
 
 fn page_fault_name(code: usize) -> &'static str {
@@ -203,22 +217,31 @@ fn unknown_trap(scause: usize, code: usize, interrupt: bool, frame: &TrapFrame, 
     );
 }
 
-// Four blocks (D-0020): (1) stack switch — empty in M1, (2) save frame,
-// (3) call Rust, (4) restore and `sret`. `.balign 4` is the assembler-side
-// guarantee that bits [1:0] of the symbol are 00, so a `csrw stvec` of this
-// address selects Direct mode. `install()` double-checks at runtime.
+// Four blocks (D-0020 / D-0029 / D-0032):
+//   (1) sscratch swap + branch-on-zero; S path undoes with a second csrrw
+//   (2) save frame (offsets unchanged)
+//   (3) call Rust; a0 in = frame, a0 out = frame to resume
+//   (4) __trap_return: mv sp, a0, restore, sret
+// `.balign 4` is the assembler-side guarantee that bits [1:0] of
+// `__trap_entry` are 00, so a `csrw stvec` of this address selects Direct
+// mode. `install()` double-checks at runtime.
 global_asm!(
     r#"
     .section .text
     .balign 4
     .globl __trap_entry
 __trap_entry:
-    # Block 1: establish the kernel stack pointer.
-    # Empty in M1 — we are already on the kernel stack. M2 fills this with
-    # `csrrw sp, sscratch, sp` and nothing else in the entry changes.
-    # (D-0020 constraint 1). sscratch is left meaningless until then.
-
+    # Block 1 (D-0029): establish the kernel stack pointer.
+    # U: sscratch was kstack_top (nonzero) → sp = kstack_top, user sp in
+    #    sscratch. S: sscratch was 0 → sp = 0, kernel sp in sscratch; the
+    #    second csrrw undoes the first. Self-restoring: a nested trap from
+    #    the handler sees sscratch == 0 and keeps the faulting kernel sp.
+    csrrw   sp, sscratch, sp
+    bnez    sp, 1f
+    csrrw   sp, sscratch, sp
+1:
     # Block 2: save the frame (272 bytes). x[0] unused; x[2] filled below.
+    # Offsets are D-0020 and do not change.
     addi    sp, sp, -272
     sd      ra,   8(sp)
     sd      gp,  24(sp)
@@ -251,27 +274,52 @@ __trap_entry:
     sd      t5, 240(sp)
     sd      t6, 248(sp)
     # Pre-trap sp = current sp + 272. Extra addi (D-0020); t0 already saved.
+    # On the S path this is the real pre-trap sp. On the U path it is
+    # kstack_top; the next block overwrites x[2] with the user sp.
     addi    t0, sp, 272
     sd      t0,  16(sp)
+
+    # U path only: sscratch still holds the trapped user sp. Copy it into
+    # x[2], then zero sscratch so the handler (S-mode) keeps the invariant.
+    # Reload kernel gp with norelax — user gp is already in the frame, and
+    # relaxed kernel accesses would follow the user's gp into the wrong
+    # addresses with no fault (D-0029). Save happened first so we don't
+    # clobber the user's gp before storing it.
+    csrr    t0, sscratch
+    beqz    t0, 2f
+    sd      t0,  16(sp)
+    csrw    sscratch, zero
+    .option push
+    .option norelax
+    la      gp, __global_pointer$
+    .option pop
+2:
     csrr    t0, sepc
     sd      t0, 256(sp)
     csrr    t0, sstatus
     sd      t0, 264(sp)
 
-    # Block 3: call Rust. a0 = &TrapFrame.
+    # Block 3: call Rust. a0 = &TrapFrame in; a0 = frame to resume out.
     mv      a0, sp
     call    trap_handler
 
-    # Block 4: restore and sret. CSRs first so t0 can be scratch, then GPRs,
-    # then sp from the saved pre-trap value (the extra-addi slot).
+    # Block 4 (D-0032). Do not insert padding between the call and this
+    # symbol: the call returns here. T2.5 jumps here with a0 = fabricated
+    # frame.
+    .globl __trap_return
+__trap_return:
+    mv      sp, a0
+
+    # CSRs first so t0 can be scratch.
     ld      t0, 256(sp)
     csrw    sepc, t0
     ld      t0, 264(sp)
     csrw    sstatus, t0
+
+    # Restore GPRs except t0 (still scratch) and sp.
     ld      ra,   8(sp)
     ld      gp,  24(sp)
     ld      tp,  32(sp)
-    ld      t0,  40(sp)
     ld      t1,  48(sp)
     ld      t2,  56(sp)
     ld      s0,  64(sp)
@@ -298,7 +346,27 @@ __trap_entry:
     ld      t4, 232(sp)
     ld      t5, 240(sp)
     ld      t6, 248(sp)
-    ld      sp,  16(sp)
+
+    # Isolate SPP while the frame is still at sp, then pop. t0 holds 0 (U)
+    # or 0x100 (S) across the addi. Both paths: S reconstructs the pre-trap
+    # sp (we pushed exactly 272); U yields kstack_top.
+    ld      t0, 264(sp)
+    andi    t0, t0, {spp}
+    addi    sp, sp, 272
+
+    # U/S branch covers the two sscratch instructions (park + swap). S
+    # restores t0 and sret with sscratch still 0. U must restore t0 from
+    # the frame *before* the swap, so one kernel-stack load sits between
+    # park and csrrw — see the T2.3 notes.
+    bnez    t0, 3f
+    ld      t0, -256(sp)
+    csrw    sscratch, t0
+    ld      t0, -232(sp)
+    csrrw   sp, sscratch, sp
     sret
-"#
+3:
+    ld      t0, -232(sp)
+    sret
+"#,
+    spp = const csr::sstatus::SPP,
 );
