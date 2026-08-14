@@ -87,10 +87,12 @@ extern "C" fn kmain(hartid: usize, dtb_pa: usize) -> ! {
         let sstatus = csr::sstatus::read();
         let sie = csr::sie::read();
         let stvec = csr::stvec::read();
+        let sscratch = csr::sscratch::read();
         let satp = csr::satp::read();
         println!("sstatus {:#x}", sstatus);
         println!("sie {:#x}", sie);
         println!("stvec {:#x}", stvec);
+        println!("sscratch {:#x}", sscratch);
         println!("satp {:#x}", satp);
         if satp != 0 {
             panic!("satp={:#x}, expected Bare (0)", satp);
@@ -98,6 +100,7 @@ extern "C" fn kmain(hartid: usize, dtb_pa: usize) -> ! {
         println!("CSR OK");
     }
     trap::install();
+    println!("sscratch {:#x}", csr::sscratch::read());
     timer::init();
     #[cfg(feature = "panic-selftest")]
     panic!("selftest");

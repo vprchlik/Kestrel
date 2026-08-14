@@ -86,7 +86,16 @@ pub fn entry_pa() -> usize {
 /// Point `stvec` at `__trap_entry` in Direct mode. Panics if the symbol is
 /// not 4-byte aligned: writing a misaligned address would silently set MODE
 /// to Vectored (or reserved) instead of erroring (D-0020).
+///
+/// D-0029: `sscratch` is 0 in S-mode. Zero it **before** writing `stvec`: a
+/// trap taken with firmware garbage in `sscratch` would be misread as a trap
+/// from U-mode and the entry would push a frame at that address.
 pub fn install() {
+    csr::sscratch::write(0);
+    let scratch = csr::sscratch::read();
+    if scratch != 0 {
+        panic!("sscratch clear failed: {:#x}", scratch);
+    }
     let addr = __trap_entry as *const () as usize;
     if addr & csr::stvec::MODE_MASK != 0 {
         panic!(
