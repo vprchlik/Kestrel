@@ -592,3 +592,72 @@ D-0011 onward are working decisions made under those constraints.
   adjacent holes can still fragment until a request fails with free bytes
   remaining. M1's self-test does not hit that; if M2/M3 does, it is a
   finding, not a silent crate swap.
+
+## D-0028: Trap handlers must not allocate
+- Date: 2026-08-14 — Status: accepted (constraint on M2's design session)
+- **Decision:** neither the heap nor the frame allocator may be entered
+  from a trap handler. That is an invariant, not an implementation of
+  mutual exclusion. The 1 ms allocator storm restored one coalesced heap
+  block and the starting frame free-list length with ticks live; it did
+  not add a lock. Allocator logic stays as it is until M2 picks a
+  mechanism.
+- **Current enforcement (honest):** the heap sets `IN_ALLOC` around
+  `try_alloc` / `insert_coalesced` and panics on re-entry
+  (`heap re-entered: size={} align={}`). That is a detector, not a
+  critical-section lock — it does not clear `sstatus.SIE`. Frames have
+  **no** detector. `alloc_frame` reads `HEAD`, copies the next pointer,
+  stores `HEAD`, then zeros 4 KiB; `free_frame` writes the old head into
+  the frame and then stores `HEAD`. A nested `alloc_frame` between the
+  read and the store double-allocates the same PA or drops a list node;
+  an interrupt between `free_frame`'s two stores corrupts the LIFO list.
+  Both paths are silent. Hardware already clears `SIE` on trap entry, so
+  the handler itself is not re-interruptible; the race is the interrupted
+  *caller* sitting in the middle of a list mutation when the handler
+  mutates the same list.
+- **Held only by the handler's current contents.** `trap_handler` calls
+  `timer::on_interrupt`, which bumps a counter, programs the next
+  deadline, and sometimes `println!` (SBI DBCN bytes from the stack, no
+  `GlobalAlloc`, no `alloc_frame`). Nothing in that path touches either
+  free list. The storm exercised interrupt-during-mutation under that
+  contract and found no corruption. The contract is unenforced: any later
+  edit that allocates from the trap path breaks it without a compile
+  error.
+- **Alternatives considered:** masking `SIE` around frame-list mutation
+  now (rejected for this entry: the storm did not find a bug, and this
+  task was evidence, not a lock). A frame-side `IN_ALLOC` twin now
+  (rejected for the same reason; it would also only catch nesting, not
+  a handler that allocates while the caller is *not* in `alloc_frame`).
+  Declaring the invariant "good enough because M1's handler is small"
+  without recording it (rejected: M2 puts allocation on the trap path
+  and the finding would be rediscovered as a Heisenbug).
+- **Rationale:** ticks have been live since T1.3, before `frame::init`.
+  M1 can keep the invariant by construction because the only trap work
+  is a counter and an SBI call. M2 cannot: `ecall` dispatch is a trap,
+  and a scheduler that pops frames for task stacks (or a `sbrk` that
+  maps them) runs in that path. Once the handler allocates, a timer
+  taken in the middle of `alloc_frame` is no longer a harmless
+  `on_interrupt` — it is a second walker of an unguarded intrusive list.
+- **M2-proofing constraints — these are constraints on M2's design
+  session, not suggestions. Do not write M2 code until one of the
+  following is an accepted decision:**
+  1. **Mask `sstatus.SIE` around frame-list mutation** (`HEAD` read
+     through the `HEAD` store in `alloc_frame`; the two stores in
+     `free_frame`). Defers a timer until the list is consistent. Does
+     not by itself forbid a handler from allocating *after* the mask
+     drops.
+  2. **A frame-side re-entry detector mirroring `IN_ALLOC`**, panicking
+     on nested `alloc_frame` / `free_frame`. Loud, like the heap. Does
+     not make the list atomic if the handler allocates while the caller
+     is *outside* the allocator, and does not close the interrupt window
+     for a non-allocating handler.
+  3. **Preallocate everything the trap path could need** (syscall
+     scratch, task stacks, whatever `sbrk` / the scheduler would pop)
+     so the invariant holds by construction the way M1's timer path
+     does. Allocation stays out of `__trap_entry` and `trap_handler`.
+- Pick one, or a combination, in the M2 design session. Do not pick
+  here. Heap `IN_ALLOC` stays; this entry does not ask M2 to invent a
+  second heap policy unless the chosen option forces it.
+- **Consequences:** until M2 records that follow-up, adding a `Box`, a
+  `Vec`, or an `alloc_frame` under `trap_handler` / `timer::on_interrupt`
+  is a bug even if it appears to work. The `just test-stress` storm is
+  evidence that the *current* handler is safe, not a license to grow it.
