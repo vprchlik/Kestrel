@@ -803,8 +803,15 @@ D-0011 onward are working decisions made under those constraints.
   access — which T2.5 checks by disassembling the section rather than trusting
   it. The 64 KiB break window per task is part of the ~88 KiB static
   reservation recorded in D-0030, including its M4 threat-to-validity note.
-  M3 replaces the in-kernel demo tasks with an app crate linked into these
-  same sections; that is a build-integration change, not a mapping change.
+  **Defense in depth on the break:** `__ubrkN_wall` is the same address as
+  `__kstackN_guard`. A `sbrk` bound-check bug that hands out one page past
+  the wall therefore lands in the kernel stack's unmapped guard (a store
+  page fault from U-mode, which T2.10 kills as a task) rather than in the
+  kernel stack itself (`U=0`, S-mode writable). That is not a substitute
+  for the software check; it is what makes a missed check a contained
+  U-mode fault instead of kernel-stack corruption. M3 replaces the
+  in-kernel demo tasks with an app crate linked into these same sections;
+  that is a build-integration change, not a mapping change.
 
 ## D-0032: Switch at trap exit; the trap frame *is* the task context
 - Date: 2026-08-14 — Status: accepted

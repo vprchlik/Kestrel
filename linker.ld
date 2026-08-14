@@ -114,17 +114,23 @@ SECTIONS
      *   + 4 KiB kstack guard + 8 KiB kstack  = 88 KiB.
      *
      * Guard holes are linker-script holes only — not sections, not in the
-     * image. Same situation as D-0016 in M1/T1.5: T1.6 still identity-maps
-     * all of RAM R+W except the boot-stack guard, so these holes are
-     * ordinary RAM until T2.2 leaves them out of the tables. A stack
-     * overflow still stores into the neighbouring region. The frame
-     * allocator starts at __heap_end and never hands these pages out
-     * (they sit below __kernel_end). */
+     * image. Same situation as D-0016 in M1/T1.5: they are ordinary RAM
+     * until T2.2 leaves them out of the tables. A stack overflow still
+     * stores into the neighbouring region until then. The frame allocator
+     * starts at __heap_end and never hands these pages out (they sit below
+     * __kernel_end).
+     *
+     * `__ubrkN_wall == __kstackN_guard` is deliberate (D-0031): a `sbrk`
+     * that passes its software bound check by one page lands in the kernel
+     * stack's unmapped guard, not in the kernel stack. */
     __tasks_start = .;
 
     __ustack0_guard = .;  . += 4K;
     __ustack0_bottom = .; . += 8K;
     __ustack0_top = .;
+    /* Shared boundary, not a missing guard: the user stack grows down
+     * toward __ustackN_guard, the break grows up toward __ubrkN_wall.
+     * They diverge from this address. Do not insert a hole here. */
     __ubrk0_base = .;     . += 64K;
     __ubrk0_wall = .;
     __kstack0_guard = .;  . += 4K;
@@ -134,6 +140,7 @@ SECTIONS
     __ustack1_guard = .;  . += 4K;
     __ustack1_bottom = .; . += 8K;
     __ustack1_top = .;
+    /* See task 0: shared ustack-top / break-base boundary. */
     __ubrk1_base = .;     . += 64K;
     __ubrk1_wall = .;
     __kstack1_guard = .;  . += 4K;
@@ -143,6 +150,7 @@ SECTIONS
     __ustack2_guard = .;  . += 4K;
     __ustack2_bottom = .; . += 8K;
     __ustack2_top = .;
+    /* See task 0: shared ustack-top / break-base boundary. */
     __ubrk2_base = .;     . += 64K;
     __ubrk2_wall = .;
     __kstack2_guard = .;  . += 4K;
@@ -152,6 +160,7 @@ SECTIONS
     __ustack3_guard = .;  . += 4K;
     __ustack3_bottom = .; . += 8K;
     __ustack3_top = .;
+    /* See task 0: shared ustack-top / break-base boundary. */
     __ubrk3_base = .;     . += 64K;
     __ubrk3_wall = .;
     __kstack3_guard = .;  . += 4K;
