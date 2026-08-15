@@ -13,12 +13,20 @@ sudo apt-get install -y \
     qemu-system-misc \        # provides qemu-system-riscv64 (the whole "hardware")
     gdb-multiarch \           # GDB built with riscv64 support (Debian/Ubuntu naming)
     build-essential \         # linker/binutils/make for build scripts and C-adjacent tooling
+    tshark \                  # pcap assertions in the M3+ net harness (filter-dump captures)
     curl git
 ```
 
 Version note: any QEMU ≥ 7.x is fine (Ubuntu 22.04+ ships qemu ≥ 6.2 which
 also works). The exact version in use gets recorded in the M4 report for
 reproducibility: `qemu-system-riscv64 --version`.
+
+M3 note: the net recipes add `-global virtio-mmio.force-legacy=false`
+(modern virtio-mmio, D-0038), `-netdev user` with `hostfwd`, and
+`-object filter-dump,...,file=whimbrel.pcap` (packet capture, D-0043) to
+the QEMU invocation. `tshark` above is what the harness uses to assert on
+those captures — without it, `just test-net` fails on a machine that has
+everything else.
 
 ## 2. Rust toolchain
 

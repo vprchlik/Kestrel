@@ -1087,3 +1087,293 @@ D-0011 onward are working decisions made under those constraints.
   `FRAME OK` total (`__heap_end` moves with code size) — `just test-stress`
   compares exhaust's panic against **that boot's** `FRAME OK` line, not
   against `just run`.
+
+## D-0037: Hand-rolled network stack; the TCP scope tripwire
+- Date: 2026-08-15 — Status: accepted
+- **Decision:** M3's network path is written from scratch: Ethernet framing,
+  ARP, IPv4, ICMP echo, UDP echo, and a minimal TCP that serves one HTTP
+  response to a real client. No smoltcp, no third-party stack, no TLS.
+  **Tripwire:** any TCP work beyond "serves one GET to curl, verified in a
+  capture" requires M4 to already have first numbers. No retransmission
+  tuning, no multiple connections, no feature past the demo until
+  measurement exists.
+- **Alternatives considered:** `smoltcp` (rejected: it is the sane
+  production choice and precisely thereby the wrong one here — the project's
+  value is being able to defend every byte of the path, and M4's phase
+  decomposition wants a stack whose cost structure we authored). UDP-only
+  demo (rejected: the headline metric is boot-to-first-**HTTP**-byte, and
+  HTTP-over-TCP against a real client is the credibility line). TLS
+  (rejected: an order of magnitude more surface with zero measurement
+  value at this layer).
+- **Rationale:** the stack is the instrument for M4's measurement, not a
+  product. A hand-rolled stack lets every microsecond on the response path
+  be attributed to a line we wrote, which is what "find the floor" needs.
+  The tripwire exists because TCP is the recognized schedule risk: the
+  demo defines done, and measurement — the project's actual deliverable —
+  outranks protocol completeness.
+- **Consequences:** our TCP is honest about what it omits (D-0041) and the
+  report may not make throughput or robustness claims beyond the demo. The
+  tripwire is enforced structurally: M3's task list ends at T3.12 and
+  contains no TCP-polish task.
+
+## D-0038: Modern virtio-mmio, split virtqueue, static DMA pool; the freeze stands
+- Date: 2026-08-15 — Status: accepted
+- **Decision:** the driver speaks modern virtio-mmio (version 2, forced with
+  `-global virtio-mmio.force-legacy=false`) with split virtqueues, 16
+  descriptors per queue, negotiating `VIRTIO_F_VERSION_1` and
+  `VIRTIO_NET_F_MAC` only — no `MRG_RXBUF`, so RX buffers are 2048 bytes,
+  whole-frame, single-descriptor chains. Rings and buffers are page-aligned
+  statics in kernel `.bss` (RX 16×2048 + TX 8×2048 + rings ≈ 64 KiB): the
+  frame allocator is never touched, `frame::freeze()` stands verbatim, and
+  D-0036's reason 1 survives unamended. RX buffers are re-posted after
+  consumption, never freed — the NIC owns a fixed set of 24 buffers from
+  boot to shutdown; there is no buffer allocation path.
+  `virtq::verify()` runs before `DRIVER_OK` (the T1.6 move): alignment
+  16/2/4, every descriptor address inside the pool and identity-mapped,
+  indices zero, and the six queue-address registers read back and compared.
+  Memory barriers from day one: `fence w,w` before the avail-idx store,
+  `fence w,o` before the notify store, `fence r,r` after reading used-idx.
+- **Alternatives considered:** legacy virtio-mmio (rejected: page-shifted
+  `QueuePFN` forces the three structures into one contiguous layout and the
+  10/12-byte header ambiguity into the fast path; "we speak the current
+  spec" is also the defensible interview position). `MRG_RXBUF` (rejected:
+  buys nothing at one connection and adds descriptor-chain walking).
+  Preallocating the pool from the frame allocator before freeze (rejected:
+  buffer addresses would depend on allocation order and the pool would need
+  its own bookkeeping; statics are placed by the linker and verifiable by
+  name). Unfreezing plus a frame-side detector (rejected: reopens the
+  exact hazard D-0036 closed, and D-0036 predicted this moment).
+- **Rationale:** D-0036 expected M3 to need the allocator; it does not,
+  because everything the NIC touches is fixed-size and known at link time —
+  the same static-preallocation logic that produced D-0030's task slots.
+  The barriers are written although QEMU's device model will likely hide
+  their absence: a bug that cannot be provoked on the only test platform
+  must be prevented by review, not testing.
+- **Consequences:** 24 buffers cap in-flight traffic — irrelevant at one
+  connection, recorded for M4's threats-to-validity. The pool is dead
+  weight in netless images (~64 KiB of `.bss`; nothing, against 128 MiB).
+  `virtq::verify()` joins the boot cost that `fast-boot` may eventually
+  strip, with the same price-of-paranoia accounting as the map verify.
+
+## D-0039: Map the virtio-mmio window at build; map-then-probe
+- Date: 2026-08-15 — Status: accepted (amends D-0025; D-0031 intact)
+- **Decision:** `page::build` maps the 8-page virtio-mmio window
+  `0x1000_1000..0x1000_9000` (8 transports, 0x1000 stride, QEMU
+  `hw/riscv/virt.c`) as R+W, never X, U=0, at boot, before `activate`.
+  Discovery probes all 8 slots after paging is on. No PTE is edited after
+  activation — D-0031's ban stands. Every QEMU invocation in the harness
+  gains the NIC flags so feature images do not diverge from the default
+  boot.
+- **Alternatives considered:** probe-then-map (impossible under D-0031:
+  probing reads the magic register, which requires a mapped page — the
+  no-edit rule forces map-then-probe). Mapping only the discovered slot
+  (same impossibility). Relaxing D-0031 with a one-shot post-activation
+  map call (rejected: the one hard-won M1 property is that the address
+  space is validated before anything runs on it and never changes; eight
+  pages of window is a small price for keeping it).
+- **Rationale:** D-0025 already contained its own amendment clause — "M3
+  adds the virtio pages in the same task that adds the driver" — and this
+  entry is that clause exercised. The permissions are justified against
+  the code that uses them: the driver reads/writes device registers (R+W)
+  and nothing fetches from device memory (never X).
+- **Consequences:** eight pages of device memory are now reachable by a
+  stray kernel pointer that previously would have faulted — the cost
+  D-0025's rationale conceded the moment a driver exists. The T2.2 verify
+  walk asserts the window's mapping and permissions. sifive_test remains
+  unmapped (D-0017's escape hatch stays an `ecall`).
+
+## D-0040: Driver and stack in the kernel; `recv`/`send`; polling, no PLIC
+- Date: 2026-08-15 — Status: accepted (amends D-0010 and D-0033)
+- **Decision:** the virtio driver and the entire network stack live in the
+  kernel. The app talks payloads over two new syscalls — `recv` (6):
+  `recv(buf, len) → (err, n)`, returning request payload or an
+  `EAGAIN`-style error, **each call polling the NIC and advancing the
+  stack**; `send` (7): `send(buf, len, flags)`, a FIN flag bit closing the
+  connection. One listener, one connection at a time, no accept, no fds.
+  Polling only: the PLIC stays unmapped and uninitialized in M3. Two
+  invariants: **the NIC is touched only from syscall context** (never from
+  the trap path — networking adds zero code to the path D-0028 constrains;
+  TCP's timer is driven from `recv` polling via `rdtime`, not the tick
+  handler), and **remote bytes are user input** (a malformed packet
+  increments a counter and is dropped; it never panics the kernel —
+  D-0034's spirit extended to the wire).
+- **Alternatives considered:** raw-frame syscalls with the stack in the app
+  (rejected: every packet crosses U/S twice through the SUM window instead
+  of twice per connection; TCP timers would depend on a task that might be
+  spinning elsewhere; and the whole stack becomes compiled-Rust-in-`.utext`,
+  multiplying T3.9's checker risk by the stack's size). Everything in the
+  task with MMIO and rings mapped U=1 (rejected outright: a U-writable
+  descriptor table lets user code point device DMA at kernel memory — the
+  U/S boundary the project exists to measure becomes decorative exactly
+  where it matters). PLIC interrupts (rejected for M3: init cost lands in
+  the boot path the headline metric measures, and per-packet trap entry
+  plus claim/complete MMIO round-trips land in the response path; polling
+  costs host CPU, which the metric does not price — a single-purpose VM
+  serving one request has nothing better to do with the core). Multiplexing
+  over `write` (rejected: overloading the console syscall with a channel
+  argument saves one number at the cost of the ABI's legibility).
+- **Rationale:** the response path is RX-used-ring → TCP → TX-avail-ring
+  entirely in S-mode, with exactly two U/S crossings for the whole
+  connection. The layering story is defensible: the kernel is the
+  transport, the app is the HTTP server — mirroring real OS structure and
+  what Unikraft's lib-stack does inside its single domain. D-0035 survives
+  untouched: no Blocked state, no idle loop — a task waiting for a packet
+  is running, spinning on `recv`, and that spin *is* the poll loop.
+- **Consequences:** the five-syscall wall becomes seven, by decision entry
+  as D-0010 prescribed. M2's polling-first recommendation is upgraded to
+  no-PLIC-in-M3; if M4's data ever wants interrupt-driven numbers for the
+  comparison, that is a new entry. The app cannot be given a second
+  connection without reopening this entry.
+
+## D-0041: Minimal TCP: passive open, stop-and-wait, one fixed RTO
+- Date: 2026-08-15 — Status: accepted
+- **Decision:** passive open only. States: LISTEN → SYN_RCVD → ESTABLISHED
+  → FIN_WAIT_1 → FIN_WAIT_2 → truncated TIME_WAIT (log and drop to CLOSED
+  immediately), plus CLOSE_WAIT → LAST_ACK for the peer-closes-first race.
+  Duplicate SYN in SYN_RCVD re-sends the SYN/ACK. ISN from `rdtime` low
+  bits. MSS parsed from the SYN; all other options skipped via the data
+  offset field, which is honored on every segment. Fixed 8 KiB advertised
+  window. Stop-and-wait transmission: at most one unacked data segment in
+  flight, retransmitted on a fixed 200 ms `rdtime` deadline checked from
+  the polling loop, 8 attempts then RST. Anything unexpected gets RST plus
+  a counter — never silence, never a panic. Checksums with pseudo-header
+  in both directions. SYN and FIN each consume a sequence number.
+- **Alternatives considered:** no retransmission at all (defensible on a
+  near-lossless slirp leg and rejected anyway: the failure symptom is curl
+  hanging forever with nothing on serial — the single worst debugging
+  experience available in this project — bought back for ~30 lines; a
+  stack without retransmission is also not honestly called TCP).
+  Congestion control, window scaling, SACK, timestamps (all rejected: the
+  response is one segment; there is no window to grow and no loss pattern
+  to recover; each is listed so the report can say what was omitted and
+  why the omission is invisible at this workload). Full TIME_WAIT
+  (rejected: a one-shot server holding 2MSL state serves nothing; the
+  consequence — a retransmitted peer FIN meets RST — is visible in the
+  capture and harmless).
+- **Rationale:** the peer is libslirp (D-0042), which negotiates MSS and
+  little else, so the design rules that matter are the ones that keep any
+  naive stack alive against any peer: honor data offset (the number-one
+  naive-stack killer is assuming 20-byte headers), get the SYN/FIN
+  sequence-number consumption right (the off-by-one produces
+  hangs-at-close that masquerade as retransmit bugs), ACK unconditionally
+  on in-order receipt, and say RST when confused so the capture shows it.
+- **Consequences:** sequenced to land with demonstrable checkpoints —
+  handshake in pcap (T3.10), data + close + provoked retransmit + curl
+  end-to-end (T3.11). The tripwire (D-0037) applies beyond that line. A
+  browser (multiple parallel connections) is out of scope by construction;
+  curl is the demo client.
+
+## D-0042: Static network configuration; no DHCP; slirp is the peer
+- Date: 2026-08-15 — Status: accepted
+- **Decision:** the guest uses QEMU user-net's contractual constants
+  statically: 10.0.2.15/24, gateway 10.0.2.2. No DHCP client. The TCP/UDP
+  demo ports arrive via `hostfwd`. It is recorded plainly that under
+  user-net the guest's TCP peer is **libslirp's internal stack** — a
+  `hostfwd` connection is terminated on the host side and re-originated
+  from 10.0.2.2 — and that inbound ICMP echo is unroutable, so ICMP is
+  exercised guest→out (ping 10.0.2.2, slirp answers).
+- **Alternatives considered:** DHCP (rejected: burns boot milliseconds to
+  discover constants — the wrong direction for a boot-to-first-byte
+  metric — and adds a UDP client state machine with no measurement value;
+  the Linux baseline gets static config too, preserving comparability).
+  Tap networking for a real host-kernel peer (rejected for M3: needs
+  root/setup and breaks the "runs anywhere per SETUP.md" property;
+  recorded as the M4 threat-to-validity escape hatch if a hostile TCP
+  peer is ever needed).
+- **Rationale:** slirp's addressing is documented, stable API surface, not
+  guesswork. The de-risking is honest: curl's kernel-grade TCP options
+  never reach us, which makes the demo achievable, and the pcap — not the
+  claim "survives a real client" — is the arbiter of protocol correctness.
+- **Consequences:** the M4 report's threats-to-validity section inherits
+  the slirp-termination caveat verbatim. If the demo ever moves to tap,
+  ARP stops being a one-gateway affair and this entry reopens.
+
+## D-0043: Measurement edges, `fast-boot`, capture in the harness
+- Date: 2026-08-15 — Status: accepted
+- **Decision:** the boot-to-first-HTTP-byte edges are named: E0 = host
+  clock at QEMU exec; E1 = machine start (`mtime` ≈ 0); E2 = kernel entry
+  (`rdtime` at `_start`); E3g = `rdtime` at response-TX publish;
+  E3w = pcap timestamp of that frame; E4 = first byte at the client.
+  E0→E4 is both the honest and the comparable number (identical harness,
+  no guest cooperation required); E2→E3g decomposed by phase at 100 ns
+  `rdtime` resolution is the floor number, available for Whimbrel only
+  (stated, not hidden). Divergences are reported where they occur:
+  E3w−E3g prices virtio+slirp transit, E4−E3w the host loopback, E0→E1
+  QEMU init shared by all systems. The client runs a tight (~1 ms)
+  connect-retry loop started before E0; boot-to-ready (E0 → first
+  successful connect) is reported alongside. **The E2 assumption is
+  validated, not assumed:** T3.12(a) freezes the machine at reset and
+  reads `time` via GDB before the first guest instruction; the observed
+  offset is recorded in this entry when measured, and the firmware row of
+  the M4 table cites the measurement. Phase timestamps live in a static
+  array and are printed only after the response is sent (DBCN is one
+  `ecall` per byte). A `fast-boot` cargo feature (same codebase, sibling
+  shape) removes the boot tick wait, self-tests, and non-essential prints;
+  it **keeps the map verify initially**, and the safe/fast delta is
+  reported as the price-of-paranoia finding. The M1 timer acceptance moves,
+  not vanishes: the default profile's 30-tick wait shrinks to 3 ticks with
+  `tick 3` on serial, and timer coverage also holds structurally (the
+  T2.9 preemption counters cannot advance without live ticks). Packet
+  capture (`-object filter-dump`) is standing harness infrastructure from
+  the first TX packet onward; `tshark` joins SETUP.md and
+  `scripts/install.sh` as a dependency so assertions run everywhere the
+  harness does. Full determinism is not promised — slirp timing rides
+  host scheduling; the harness promises reproducible statistics (N
+  trials, median/IQR, pinned QEMU version) plus a pcap per run.
+  **Unikraft baseline:** the riscv64 port is an open PR
+  (unikraft/unikraft#1698, rebased June 2026; kraftkit riscv64 merged), so
+  the M4 comparison rests on a timeboxed feasibility spike at the M3/M4
+  boundary with a recorded fallback ladder: (1) it works — full three-way
+  under identical conditions; (2) runs only on arm64/x86_64 — two-way
+  riscv64 head-to-head as primary, Unikraft as a labeled different-ISA
+  reference; (3) does not run — two-way plus qualitative boot-path
+  analysis from source.
+- **Alternatives considered:** first-serial-byte as the readiness edge
+  (rejected as primary: serial cost differs across guests and is not the
+  service the user waits for; kept as a secondary marker). `-icount` for
+  determinism (rejected: does not tame the slirp/host boundary and
+  distorts the host-clock edges the comparison needs). Stripping the map
+  verify in `fast-boot` from the start (rejected: it is the project's
+  signature safety net, and "we measured the cost of our own verification"
+  is itself a result — it gets stripped only if the phase data shows it
+  matters, as a recorded amendment).
+- **Rationale:** a benchmark whose edges are not pinned before measurement
+  drifts toward the number its author wanted. Naming E0–E4 now, validating
+  E2, and building the instrumentation into T3.12 makes M4 a measurement
+  exercise instead of a definition argument.
+- **Consequences:** boot prints nothing new on the measured path; the
+  phase block appears after first-byte. The `fast-boot` profile is a
+  feature flag, not a fork — the sibling-selftest pattern already proves
+  the shape. When the E2 offset is measured, this entry gains the number.
+
+## D-0044: App crate in the user sections; check-utext bans FP, including compressed
+- Date: 2026-08-15 — Status: accepted
+- **Decision:** the M3 app is a real crate linked into the existing user
+  sections — the linker script matches the app archive's
+  `.text/.rodata/.data/.bss` into `.utext/.urodata/.udata/.ubss` — with a
+  `usys` wrapper crate for the syscalls. `check-utext` grows to handle
+  compiled-Rust output and **rejects every floating-point instruction in
+  `.utext`: the F/D mnemonics and the compressed forms** — `c.fld`,
+  `c.fsd`, `c.fldsp`, `c.fsdsp` — the encodings a compiler emits silently
+  and a naive mnemonic list misses (llvm-objdump may print either
+  spelling; both are banned). `sstatus.FS` stays Off.
+- **Alternatives considered:** enabling FS so FP just works (rejected: the
+  TrapFrame saves no FP state, so it is only safe while exactly one task
+  uses FP — an invariant nobody is checking two milestones from now; and
+  the demo needs no floats). Building the app for a soft-float target
+  (rejected: `riscv64gc`'s hard-float ABI and a soft-float ABI cannot link
+  into one image). Trusting that integer HTTP code emits no FP (rejected:
+  hope is not a gate; the checker already fails closed on unknown forms,
+  so the ban is a natural extension).
+- **Rationale:** an FP instruction from U-mode with FS=Off is an
+  **undelegated illegal instruction** — OpenSBI dump, hart parked, no
+  `task N killed` line, the M2 known limit and the worst failure mode in
+  the project. The choice is to handle it at runtime (enable FS, save FP
+  state) or make it unrepresentable at build time; the checker already
+  exists and the demo has no floats, so unrepresentable wins.
+- **Consequences:** the app crate must avoid `f32`/`f64` end to end
+  (formatting included); a violation fails `just check-utext` by name
+  rather than parking the hart silently. If a future milestone needs FP in
+  U-mode, this entry reopens together with a TrapFrame FP-state design.
+  T3.9 carries the checker work and its acceptance includes a planted
+  `c.fld` being caught.
