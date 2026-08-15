@@ -346,6 +346,18 @@ S-mode has only one `sscratch` and no hardware IST equivalent.
    still printed PASS. Wrap every new assert with `if ! …; then exit 1;
    fi` (or give the recipe `set -e`). It will recur in each new test
    script — treat an untested failure mode as an unwritten assert.
+8. RX `used.idx` stuck, status gains `0x40` (`DEVICE_NEEDS_RESET`), QEMU
+   prints `Looped descriptor` and `virtqueue_pop … in_num 0 out_num 1`:
+   `VIRTQ_DESC_F_WRITE` is **2**, `NEXT` is **1**. Flagging RX buffers
+   with 1 makes the device follow `next` (often 0) around the table.
+   TX still works — those descriptors are device-readable (`flags=0`).
+   Confirm with `-trace virtqueue_pop` and QEMU stderr, not by guessing
+   at notify or offsets (TX already proved those).
+9. A hostfwd connect after our GARP does not produce an ARP request.
+   slirp caches the GARP and sends IPv4 (TCP SYN) unicast. T3.5's
+   trigger is slirp's ARP, so the guest must poll RX **before**
+   transmitting the GARP, or the slirp-ARP pcap assert fails while the
+   capture still looks "alive".
 
 ## 5. QEMU monitor — inspect a hung machine *without* GDB
 
