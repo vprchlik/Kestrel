@@ -16,7 +16,9 @@
 use crate::csr;
 use crate::println;
 use crate::timer;
-use core::arch::{asm, global_asm};
+use core::arch::global_asm;
+#[cfg(not(feature = "no-sret"))]
+use core::arch::asm;
 
 /// `TrapFrame` size in bytes. 32 GPRs + `sepc` + `sstatus`.
 pub const FRAME_SIZE: usize = 272;
@@ -33,12 +35,7 @@ pub struct TrapFrame {
 const _: () = assert!(core::mem::size_of::<TrapFrame>() == FRAME_SIZE);
 const _: () = assert!(FRAME_SIZE % 16 == 0);
 
-#[allow(dead_code)]
 impl TrapFrame {
-    #[inline]
-    pub fn ra(&self) -> usize {
-        self.x[1]
-    }
     #[inline]
     pub fn sp(&self) -> usize {
         self.x[2]
@@ -50,26 +47,6 @@ impl TrapFrame {
     #[inline]
     pub fn a1(&self) -> usize {
         self.x[11]
-    }
-    #[inline]
-    pub fn a2(&self) -> usize {
-        self.x[12]
-    }
-    #[inline]
-    pub fn a3(&self) -> usize {
-        self.x[13]
-    }
-    #[inline]
-    pub fn a4(&self) -> usize {
-        self.x[14]
-    }
-    #[inline]
-    pub fn a5(&self) -> usize {
-        self.x[15]
-    }
-    #[inline]
-    pub fn a6(&self) -> usize {
-        self.x[16]
     }
     #[inline]
     pub fn a7(&self) -> usize {
@@ -91,16 +68,11 @@ extern "C" {
 
 /// Jump to `__trap_return` with `a0` = frame. Used for the first `sret`
 /// into U-mode (T2.5) and later for every resume. Does not return.
-#[cfg_attr(
-    any(
-        feature = "panic-selftest",
-        feature = "hang-selftest",
-        feature = "stress",
-        feature = "frame-exhaust-selftest",
-        feature = "freeze-selftest"
-    ),
-    allow(dead_code)
-)]
+///
+/// Compiled out of images that never `sret` (`no-sret`, enabled by those
+/// selftests in Cargo.toml). Adding a kmain-only selftest means listing
+/// `no-sret` there, not growing this `cfg` by hand.
+#[cfg(not(feature = "no-sret"))]
 pub fn resume(frame: *mut TrapFrame) -> ! {
     unsafe {
         asm!(

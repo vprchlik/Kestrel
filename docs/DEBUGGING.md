@@ -328,6 +328,24 @@ S-mode has only one `sscratch` and no hardware IST equivalent.
    QueueReady. A driver that writes them once at startup and resets later
    has a dead ring with no diagnostic — `used.idx` never moves, the pcap
    stays empty.
+6. `net::dump` showing `isr=0x1` after the first used-ring update is
+   expected under polling. Virtio-mmio InterruptStatus bit 0
+   (`VIRTIO_MMIO_INT_VRING`) stays set until a write to InterruptACK
+   (0x064). We never ACK: the PLIC is unmapped (D-0040) and the bit is
+   not how we notice work — `used.idx` is. Do not "fix" this by ACK-ing
+   in the dump path; that would hide a later accidental interrupt enable.
+7. **Harness assertions fail closed, and every new one must have its
+   failure modes exercised before it is trusted.** A missing file, an
+   empty file, a well-formed file with zero matching frames, and a
+   missing tool (`tshark`, `llvm-objdump`) are four different bugs; if
+   you only run the happy path, a vacuous pass is indistinguishable from
+   a real one. This is the same shape as `check-utext` (unknown objdump
+   lines are a hard error, not a skip) and as the T3.4 `just test` hole:
+   that recipe is `set -u` without `set -e`, so a bare
+   `bash scripts/assert-….sh` returning 1 was ignored and the recipe
+   still printed PASS. Wrap every new assert with `if ! …; then exit 1;
+   fi` (or give the recipe `set -e`). It will recur in each new test
+   script — treat an untested failure mode as an unwritten assert.
 
 ## 5. QEMU monitor — inspect a hung machine *without* GDB
 

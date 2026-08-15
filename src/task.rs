@@ -534,17 +534,7 @@ pub fn init() {
 /// Mark `id` Running and `sret` into its fabricated frame. Does not return
 /// (D-0035). `sscratch` is still 0 here; `__trap_return`'s U tail parks the
 /// user `sp` and swaps `kstack_top` into `sscratch` immediately before `sret`.
-#[cfg_attr(
-    any(
-        feature = "panic-selftest",
-        feature = "hang-selftest",
-        feature = "stress",
-        feature = "frame-exhaust-selftest",
-        feature = "freeze-selftest",
-        feature = "net-init-selftest"
-    ),
-    allow(dead_code)
-)]
+#[cfg(not(feature = "no-sret"))]
 pub fn enter(id: usize) -> ! {
     // D-0036: freeze before the first `sret`. Two independent reasons the
     // D-0028 hazard is gone (they fail independently, which is why both

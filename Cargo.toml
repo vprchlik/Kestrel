@@ -4,15 +4,21 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
+# Images that never `sret` into U-mode. Selftests that stop in kmain
+# enable this so `trap::resume` / `task::enter` are compiled out instead
+# of growing a five-feature `allow(dead_code)` list in the Rust source.
+# A new kmain-only selftest adds `["no-sret"]` here; it does not edit
+# trap.rs.
+no-sret = []
 # Build with `--features panic-selftest` (or `just panic`) to panic in kmain
 # instead of shutting down. Keeps the panic handler reachable without edits.
-panic-selftest = []
+panic-selftest = ["no-sret"]
 # Park after hello with no marker and no panic — exercises TEST HANG.
-hang-selftest = []
+hang-selftest = ["no-sret"]
 # Allocator storm after the M1 markers (just test-stress).
-stress = []
+stress = ["no-sret"]
 # Boot through HEAP OK, then alloc frames until the free list is empty.
-frame-exhaust-selftest = []
+frame-exhaust-selftest = ["no-sret"]
 # T2.7/T2.8: write a kernel address; task is killed (D-0034).
 userptr-kernel-selftest = []
 # T2.7/T2.8: write a pointer that starts valid and runs past its interval.
@@ -20,9 +26,9 @@ userptr-span-selftest = []
 # T2.10: U-mode load page fault; the other task continues (D-0034).
 user-fault-selftest = []
 # T2.11: freeze, then a deliberate alloc_frame that must panic.
-freeze-selftest = []
+freeze-selftest = ["no-sret"]
 # T3.3: handshake to DRIVER_OK, then stop before U-mode.
-net-init-selftest = []
+net-init-selftest = ["no-sret"]
 
 [dependencies]
 
