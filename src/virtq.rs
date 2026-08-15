@@ -428,6 +428,51 @@ pub(crate) fn tx_used_idx() -> u16 {
     load_used_idx(&pool().tx.used)
 }
 
+/// TX buffer for descriptor `i`. Caller must drop this before `post_tx`.
+pub(crate) fn tx_buf(i: usize) -> &'static mut [u8] {
+    if i >= TX_BUFS {
+        panic!("virtq: TX buf {i} >= {TX_BUFS}");
+    }
+    &mut pool().tx_buf[i]
+}
+
+/// Fill TX descriptor `i` (no NEXT, device reads) and publish it.
+/// Sequence: desc.len/flags, avail.ring[idx % N] = i, fence w,w, idx++.
+/// Caller does fence w,o + QueueNotify afterwards.
+pub(crate) fn post_tx(desc_i: usize, len: u32) {
+    if desc_i >= TX_BUFS {
+        panic!("virtq: TX desc {desc_i} >= {TX_BUFS}");
+    }
+    if len == 0 {
+        panic!("virtq: TX desc {desc_i} len 0");
+    }
+    let p = pool();
+    if p.tx.desc[desc_i].addr == 0 {
+        panic!("virtq: TX desc {desc_i} has no buffer");
+    }
+    p.tx.desc[desc_i].len = len;
+    // Device reads; no NEXT — virtio-net hdr and frame share this desc.
+    p.tx.desc[desc_i].flags = 0;
+    let idx = unsafe { core::ptr::read_volatile(&p.tx.avail.idx) };
+    let slot = (idx as usize) % QSIZE;
+    unsafe {
+        core::ptr::write_volatile(&mut p.tx.avail.ring[slot], desc_i as u16);
+    }
+    publish_avail_idx(&mut p.tx.avail, idx.wrapping_add(1));
+}
+
+/// If `used.idx` has advanced past `seen`, read that used-ring entry.
+/// `tx_used_idx` already did `fence r,r` between idx and this read.
+pub(crate) fn take_tx_used(seen: u16) -> Option<(u16, u32, u32)> {
+    let used = tx_used_idx();
+    if used == seen {
+        return None;
+    }
+    let slot = (seen as usize) % QSIZE;
+    let e = unsafe { core::ptr::read_volatile(&pool().tx.used.ring[slot]) };
+    Some((seen.wrapping_add(1), e.id, e.len))
+}
+
 /// Fence + store `avail.idx`. First used when posting RX (T3.3).
 fn publish_avail_idx(avail: &mut Avail, idx: u16) {
     // Descriptor and `avail.ring[]` stores must be visible to the device

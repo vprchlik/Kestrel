@@ -1,10 +1,11 @@
-//! virtio-net device: status handshake to `DRIVER_OK` (D-0038, D-0040).
+//! virtio-net device: handshake, RX post, and TX (D-0038, D-0040).
 //!
-//! Owns the feature negotiation, QueueReady, RX posting, MAC print, and
-//! `dump` / stall observability. The rings themselves stay in `virtq`.
-//! `FEATURES_OK` readback is the one place the handshake can tell us the
-//! device rejected our feature set — everything else is programming we
-//! control. Without this module the NIC never leaves reset.
+//! Owns the feature negotiation, QueueReady, RX posting, the first TX
+//! (gratuitous ARP), MAC print, and `dump` / stall observability. The
+//! rings themselves stay in `virtq`. `FEATURES_OK` readback is the one
+//! place the handshake can tell us the device rejected our feature set.
+//! Without this module the NIC never leaves reset and nothing hits the
+//! wire.
 
 #![cfg_attr(
     any(feature = "panic-selftest", feature = "hang-selftest"),
@@ -12,6 +13,7 @@
 )]
 
 use crate::csr;
+use crate::print;
 use crate::println;
 use crate::virtio;
 use crate::virtq;
@@ -41,6 +43,22 @@ const F_EVENT_IDX: u32 = 1 << 29;
 
 /// 100 ms at the 10 MHz `rdtime` timebase (`timer::PERIOD` is 10 ms).
 const STALL_TICKS: usize = 1_000_000;
+
+/// virtio-net header with `VIRTIO_F_VERSION_1` and without `MRG_RXBUF`:
+/// 10-byte legacy hdr plus `num_buffers`. Virtio 1.2 §5.1.6.1. We zero
+/// every field: no CSUM offload, no GSO, TX does not use `num_buffers`.
+const VNET_HDR: usize = 12;
+/// Ethernet header (14) + ARP (28). Padded to 60 before FCS.
+const GARP: usize = 42;
+/// Minimum Ethernet payload without FCS.
+const ETH_MIN: usize = 60;
+const TX_LEN: u32 = (VNET_HDR + ETH_MIN) as u32;
+
+/// Guest address. D-0042.
+const IP: [u8; 4] = [10, 0, 2, 15];
+const ETH_BCAST: [u8; 6] = [0xff; 6];
+
+static mut MAC: [u8; 6] = [0; 6];
 
 static mut RX_POSTED: u32 = 0;
 static mut RX_COMPLETED: u32 = 0;
@@ -229,7 +247,92 @@ pub fn init() {
     if mac.iter().all(|&b| b == 0) {
         panic!("virtio-net: MAC is all zeros; NET_F_MAC negotiated but config empty");
     }
+    unsafe { MAC = mac };
 
     dump();
     poll_stall();
+    tx_gratuitous_arp(base);
+}
+
+/// Build a 12-byte zero virtio-net header plus a 60-byte Ethernet frame
+/// (42-byte GARP padded) in TX desc 0, publish, notify, poll used.idx.
+fn tx_gratuitous_arp(base: usize) {
+    let mac = unsafe { MAC };
+    {
+        let buf = virtq::tx_buf(0);
+        write_garp(buf, &mac);
+    }
+    virtq::post_tx(0, TX_LEN);
+    unsafe { TX_POSTED = TX_POSTED.wrapping_add(1) };
+    unsafe {
+        STALL_ARMED_TIME = csr::time::read();
+        STALL_USED_AT_ARM = virtq::tx_used_idx();
+        STALL_DUMPED = false;
+    }
+    println!("virtio-net: TX GARP posted=1 len={TX_LEN} (hdr {VNET_HDR} + eth {ETH_MIN})");
+    virtq::notify(base, virtq::Q_TX);
+
+    let t0 = csr::time::read();
+    let seen: u16 = 0;
+    loop {
+        if let Some((_next, id, len)) = virtq::take_tx_used(seen) {
+            unsafe { TX_COMPLETED = TX_COMPLETED.wrapping_add(1) };
+            println!("virtio-net: TX GARP completed=1 id={id} len={len}");
+            break;
+        }
+        poll_stall();
+        if csr::time::read().wrapping_sub(t0) >= STALL_TICKS {
+            println!("virtio-net: TX GARP used.idx unmoved after ~100ms");
+            dump();
+            break;
+        }
+    }
+    dump();
+}
+
+/// Zero the virtio-net header, then Ethernet+ARP (42 bytes) padded to 60.
+/// One descriptor, no chain: hdr and frame are contiguous in `buf`.
+fn write_garp(buf: &mut [u8], mac: &[u8; 6]) {
+    if buf.len() < TX_LEN as usize {
+        panic!("virtio-net: TX buf {} < {TX_LEN}", buf.len());
+    }
+    for b in buf.iter_mut().take(TX_LEN as usize) {
+        *b = 0;
+    }
+    // Header [0, 12) already zero: flags, gso_type, hdr_len, gso_size,
+    // csum_start, csum_offset, num_buffers. Device is not asked to
+    // checksum or segment; we declined those features.
+    let f = &mut buf[VNET_HDR..];
+    f[0..6].copy_from_slice(&ETH_BCAST);
+    f[6..12].copy_from_slice(mac);
+    f[12..14].copy_from_slice(&0x0806u16.to_be_bytes()); // EtherType ARP
+    f[14..16].copy_from_slice(&1u16.to_be_bytes()); // htype Ethernet
+    f[16..18].copy_from_slice(&0x0800u16.to_be_bytes()); // ptype IPv4
+    f[18] = 6;
+    f[19] = 4;
+    f[20..22].copy_from_slice(&1u16.to_be_bytes()); // ARP request
+    f[22..28].copy_from_slice(mac); // sha
+    f[28..32].copy_from_slice(&IP); // spa 10.0.2.15
+    // tha [32, 38) stays zero
+    f[38..42].copy_from_slice(&IP); // tpa 10.0.2.15
+    // [42, 60) already zero: pad to Ethernet minimum.
+    println!("virtio-net: GARP 42 bytes (padded to 60):");
+    print_hex(&f[0..GARP]);
+}
+
+fn print_hex(bytes: &[u8]) {
+    let mut i = 0;
+    while i < bytes.len() {
+        if i % 16 == 0 {
+            if i > 0 {
+                println!();
+            }
+            print!("  ");
+        } else if i % 8 == 0 {
+            print!(" ");
+        }
+        print!("{:02x} ", bytes[i]);
+        i += 1;
+    }
+    println!();
 }

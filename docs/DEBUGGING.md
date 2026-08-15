@@ -323,6 +323,11 @@ S-mode has only one `sscratch` and no hardware IST equivalent.
    transport** (the readback cannot distinguish it from a correct write).
    If the ring is dead in T3.3, re-derive the offsets against the spec
    table first, not last.
+5. A Status=0 soft reset (`virtio_mmio_soft_reset`) clears the queue
+   address registers. Any re-init path must rewrite them before
+   QueueReady. A driver that writes them once at startup and resets later
+   has a dead ring with no diagnostic — `used.idx` never moves, the pcap
+   stays empty.
 
 ## 5. QEMU monitor — inspect a hung machine *without* GDB
 

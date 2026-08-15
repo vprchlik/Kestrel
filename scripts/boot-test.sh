@@ -12,8 +12,8 @@ FEATURE="${1:-}"
 TARGET="riscv64gc-unknown-none-elf"
 KERNEL="target/${TARGET}/debug/whimbrel"
 QEMU="qemu-system-riscv64"
-# D-0038 / D-0039: keep in sync with justfile qemu_args and .cargo/config.toml.
-QEMU_ARGS=(-machine virt -nographic -bios default -global virtio-mmio.force-legacy=false -netdev user,id=net0 -device virtio-net-device,netdev=net0)
+# D-0038 / D-0039 / D-0043: keep in sync with justfile qemu_args and .cargo/config.toml.
+QEMU_ARGS=(-machine virt -nographic -bios default -global virtio-mmio.force-legacy=false -netdev user,id=net0 -device virtio-net-device,netdev=net0 -object filter-dump,id=f0,netdev=net0,file=whimbrel.pcap)
 
 feat=()
 if [ -n "$FEATURE" ]; then
@@ -27,7 +27,7 @@ case "${FEATURE}" in
     panic-selftest|hang-selftest|stress|frame-exhaust-selftest) ;;
     *) bash scripts/check-utext.sh "$KERNEL" ;;
 esac
-rm -f serial.log
+rm -f serial.log whimbrel.pcap
 
 set +e
 timeout --foreground "$TIMEOUT_S" "$QEMU" "${QEMU_ARGS[@]}" -kernel "$KERNEL" > serial.log 2>&1

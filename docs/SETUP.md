@@ -25,11 +25,12 @@ M3 note: from T3.1 every QEMU invocation (`just run`, `just test`,
 `just panic`, `just debug`, and `scripts/boot-test.sh`) carries
 `-global virtio-mmio.force-legacy=false` (modern virtio-mmio, D-0038)
 and a `virtio-net-device` on `-netdev user,id=net0` (D-0039: a netless
-boot is a misconfigured harness). `hostfwd` and
-`-object filter-dump,...,file=whimbrel.pcap` land with the later net
-recipes. `tshark` above is what the harness uses to assert on those
-captures — without it, `just test-net` fails on a machine that has
-everything else.
+boot is a misconfigured harness). From T3.4 every invocation also
+carries `-object filter-dump,id=f0,netdev=net0,file=whimbrel.pcap`
+(D-0043: capture is standing infrastructure). `hostfwd` lands with
+the later net recipes. `tshark` above is what the harness uses to
+assert on those captures — without it, `just test` fails on a machine
+that has everything else.
 
 ## 2. Rust toolchain
 

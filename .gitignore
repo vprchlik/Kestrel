@@ -1,6 +1,7 @@
 /target
 serial.log
 qemu.log
+whimbrel.pcap
 
 # Agent scratch, editor debris, local transcripts — never commit
 .cursor/*.log

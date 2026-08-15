@@ -5,9 +5,9 @@ set shell := ["bash", "-uc"]
 target    := "riscv64gc-unknown-none-elf"
 kernel    := "target/" + target + "/debug/whimbrel"
 qemu      := "qemu-system-riscv64"
-# D-0038 / D-0039: modern virtio-mmio + a net device on every invocation.
-# hostfwd and filter-dump land in later tasks; do not add them here.
-qemu_args := "-machine virt -nographic -bios default -global virtio-mmio.force-legacy=false -netdev user,id=net0 -device virtio-net-device,netdev=net0"
+# D-0038 / D-0039 / D-0043: modern virtio-mmio, a net device, and capture
+# on every invocation. hostfwd lands in later tasks.
+qemu_args := "-machine virt -nographic -bios default -global virtio-mmio.force-legacy=false -netdev user,id=net0 -device virtio-net-device,netdev=net0 -object filter-dump,id=f0,netdev=net0,file=whimbrel.pcap"
 
 # Build the kernel (debug profile; target + linker script via .cargo/config.toml).
 build:
@@ -104,6 +104,11 @@ test expect="M2 EXECUTION OK" timeout_s="5":
             echo 'TEST FAIL: missing DRIVER_OK'
             exit 1
         fi
+        if ! grep -a -q 'tx avail=1 used=1 posted=1 completed=1' "$log"; then
+            echo 'TEST FAIL: TX GARP posted/completed is not 1/1'
+            exit 1
+        fi
+        bash scripts/assert-pcap-garp.sh whimbrel.pcap
         if ! grep -a -q 'task 2 exit 0' "$log"; then
             echo 'TEST FAIL: missing "task 2 exit 0"'
             exit 1
@@ -268,7 +273,12 @@ test-net-init:
         echo 'TEST FAIL: missing net::dump'
         exit 1
     fi
-    echo 'TEST PASS: DRIVER_OK, MAC, dump'
+    if ! grep -a -q 'tx avail=1 used=1 posted=1 completed=1' serial.log; then
+        echo 'TEST FAIL: TX GARP posted/completed is not 1/1'
+        exit 1
+    fi
+    bash scripts/assert-pcap-garp.sh whimbrel.pcap
+    echo 'TEST PASS: DRIVER_OK, MAC, dump, GARP'
 
 # Disassemble the kernel. Extra flags as one quoted arg, e.g. just objdump '-d --source'
 objdump flags="-d": build
