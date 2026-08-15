@@ -263,8 +263,10 @@ pub fn init() {
 
     dump();
     poll_stall();
-    tx_gratuitous_arp(base);
+    // RX before GARP: slirp learns our MAC from the GARP and will not
+    // ARP. The T3.5 trigger is that ARP, so wait for it first.
     wait_rx_arp(base);
+    tx_gratuitous_arp(base);
 }
 
 /// Build a 12-byte zero virtio-net header plus a 60-byte Ethernet frame

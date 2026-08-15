@@ -34,8 +34,11 @@ const BUF: usize = 2048;
 pub(crate) const Q_RX: u32 = 0;
 /// virtio-net transmitq. §5.1.2.
 pub(crate) const Q_TX: u32 = 1;
-/// Device writes this buffer. Virtio 1.2 §2.7.5 `VIRTQ_DESC_F_WRITE`.
-const DESC_WRITE: u16 = 1;
+/// `VIRTQ_DESC_F_NEXT` is 1. `VIRTQ_DESC_F_WRITE` is 2. Virtio 1.2 §2.7.5.
+/// Using 1 here would mark a chain, not a device-writable RX buffer —
+/// QEMU then logs `Looped descriptor` and sets DEVICE_NEEDS_RESET.
+const DESC_WRITE: u16 = 2;
+const _: () = assert!(DESC_WRITE == 2);
 
 const _: () = assert!(RX_BUFS == QSIZE);
 const _: () = assert!(TX_BUFS <= QSIZE);
