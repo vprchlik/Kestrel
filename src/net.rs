@@ -1,11 +1,11 @@
-//! virtio-net device: handshake, RX post, and TX (D-0038, D-0040).
+//! virtio-net device: handshake, RX post, TX, and RX classify (D-0038, D-0040).
 //!
 //! Owns the feature negotiation, QueueReady, RX posting, the first TX
-//! (gratuitous ARP), MAC print, and `dump` / stall observability. The
-//! rings themselves stay in `virtq`. `FEATURES_OK` readback is the one
-//! place the handshake can tell us the device rejected our feature set.
-//! Without this module the NIC never leaves reset and nothing hits the
-//! wire.
+//! (gratuitous ARP), the first RX (classify EtherType, re-post, no reply),
+//! MAC print, and `dump` / stall observability. The rings themselves stay
+//! in `virtq`. `FEATURES_OK` readback is the one place the handshake can
+//! tell us the device rejected our feature set. Without this module the
+//! NIC never leaves reset and nothing hits the wire.
 
 #![cfg_attr(
     any(feature = "panic-selftest", feature = "hang-selftest"),
@@ -17,6 +17,7 @@ use crate::print;
 use crate::println;
 use crate::virtio;
 use crate::virtq;
+use core::arch::asm;
 
 /// ACKNOWLEDGE. Virtio 1.2 §2.1.
 const ACKNOWLEDGE: u32 = 1;
@@ -43,11 +44,17 @@ const F_EVENT_IDX: u32 = 1 << 29;
 
 /// 100 ms at the 10 MHz `rdtime` timebase (`timer::PERIOD` is 10 ms).
 const STALL_TICKS: usize = 1_000_000;
+/// How long `wait_rx_arp` spins for slirp's request (~2 s).
+const RX_WAIT_TICKS: usize = 20 * STALL_TICKS;
 
 /// virtio-net header with `VIRTIO_F_VERSION_1` and without `MRG_RXBUF`:
 /// 10-byte legacy hdr plus `num_buffers`. Virtio 1.2 §5.1.6.1. We zero
 /// every field: no CSUM offload, no GSO, TX does not use `num_buffers`.
 const VNET_HDR: usize = 12;
+/// Ethernet destination + source + EtherType.
+const ETH_HDR: usize = 14;
+/// EtherType ARP.
+const ETH_TYPE_ARP: u16 = 0x0806;
 /// Ethernet header (14) + ARP (28). Padded to 60 before FCS.
 const GARP: usize = 42;
 /// Minimum Ethernet payload without FCS.
@@ -62,6 +69,9 @@ static mut MAC: [u8; 6] = [0; 6];
 
 static mut RX_POSTED: u32 = 0;
 static mut RX_COMPLETED: u32 = 0;
+static mut RX_SEEN: u16 = 0;
+static mut RX_DROP_SHORT: u32 = 0;
+static mut RX_DROP_OTHER: u32 = 0;
 static mut TX_POSTED: u32 = 0;
 static mut TX_COMPLETED: u32 = 0;
 static mut STALL_ARMED_TIME: usize = 0;
@@ -118,8 +128,10 @@ pub fn dump() {
     let rx_c = unsafe { RX_COMPLETED };
     let tx_p = unsafe { TX_POSTED };
     let tx_c = unsafe { TX_COMPLETED };
+    let d_short = unsafe { RX_DROP_SHORT };
+    let d_other = unsafe { RX_DROP_OTHER };
     println!(
-        "net: dump status={st:#x} isr={isr:#x} rx avail={rx_a} used={rx_u} posted={rx_p} completed={rx_c} tx avail={tx_a} used={tx_u} posted={tx_p} completed={tx_c}"
+        "net: dump status={st:#x} isr={isr:#x} rx avail={rx_a} used={rx_u} posted={rx_p} completed={rx_c} tx avail={tx_a} used={tx_u} posted={tx_p} completed={tx_c} drop_short={d_short} drop_other={d_other}"
     );
 }
 
@@ -252,6 +264,7 @@ pub fn init() {
     dump();
     poll_stall();
     tx_gratuitous_arp(base);
+    wait_rx_arp(base);
 }
 
 /// Build a 12-byte zero virtio-net header plus a 60-byte Ethernet frame
@@ -288,6 +301,86 @@ fn tx_gratuitous_arp(base: usize) {
         }
     }
     dump();
+}
+
+/// Poll the RX used ring until one frame classifies as ARP, or ~2 s.
+/// Consumed buffers are re-posted (never freed). No reply — T3.6.
+fn wait_rx_arp(base: usize) {
+    let t0 = csr::time::read();
+    loop {
+        if poll_rx(base) {
+            dump();
+            return;
+        }
+        poll_stall();
+        if csr::time::read().wrapping_sub(t0) >= RX_WAIT_TICKS {
+            println!("virtio-net: RX no ARP after ~2s");
+            dump();
+            return;
+        }
+        // Timer tick wakes us; do not busy-spin the host for 2 s.
+        unsafe { asm!("wfi") };
+    }
+}
+
+/// Take one used RX entry if `used.idx` moved, classify, re-post.
+/// Returns true iff that frame was ARP.
+fn poll_rx(base: usize) -> bool {
+    let seen = unsafe { RX_SEEN };
+    let Some((next, id, used_len)) = virtq::take_rx_used(seen) else {
+        return false;
+    };
+    if id as usize >= virtq::RX_BUFS {
+        panic!("virtio-net: RX used id={id} >= {}", virtq::RX_BUFS);
+    }
+    unsafe {
+        RX_SEEN = next;
+        RX_COMPLETED = RX_COMPLETED.wrapping_add(1);
+    }
+    let got_arp = classify_rx(id as usize, used_len);
+    virtq::repost_rx(id as usize);
+    unsafe { RX_POSTED = RX_POSTED.wrapping_add(1) };
+    let posted = unsafe { RX_POSTED };
+    let completed = unsafe { RX_COMPLETED };
+    let inflight = posted.wrapping_sub(completed);
+    if inflight != virtq::RX_BUFS as u32 {
+        panic!(
+            "virtio-net: RX inflight {inflight} want {} (posted={posted} completed={completed}); a leaked buffer starves the device",
+            virtq::RX_BUFS
+        );
+    }
+    virtq::notify(base, virtq::Q_RX);
+    got_arp
+}
+
+/// Strip the 12-byte virtio-net header, then classify on EtherType.
+/// `used.elem.len` includes the header (unlike TX, where it was 0).
+fn classify_rx(desc_i: usize, used_len: u32) -> bool {
+    let buf = virtq::rx_buf(desc_i);
+    let n = used_len as usize;
+    if n < VNET_HDR + ETH_HDR || n > buf.len() {
+        unsafe { RX_DROP_SHORT = RX_DROP_SHORT.wrapping_add(1) };
+        println!("virtio-net: RX drop short used.len={used_len}");
+        return false;
+    }
+    // Device wrote [0, used_len): header then Ethernet. Do not parse
+    // the header; we declined CSUM/GSO/MRG_RXBUF.
+    let frame = &buf[VNET_HDR..n];
+    let etype = u16::from_be_bytes([frame[12], frame[13]]);
+    if etype != ETH_TYPE_ARP {
+        unsafe { RX_DROP_OTHER = RX_DROP_OTHER.wrapping_add(1) };
+        println!(
+            "virtio-net: RX drop ethertype={etype:#06x} used.len={used_len} frame.len={}",
+            frame.len()
+        );
+        return false;
+    }
+    println!(
+        "virtio-net: RX arp used.len={used_len} hdr={VNET_HDR} frame.len={}",
+        frame.len()
+    );
+    print_hex(frame);
+    true
 }
 
 /// Zero the virtio-net header, then Ethernet+ARP (42 bytes) padded to 60.

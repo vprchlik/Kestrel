@@ -4,6 +4,12 @@
 #   no arg              → default image, expect PASS
 #   panic-selftest      → FAIL (panic line echoed)
 #   hang-selftest       → HANG
+#
+# After DRIVER_OK, a sibling watcher fires a hostfwd TCP connect so slirp
+# ARPs 10.0.2.15 (T3.5). The connect is not waited on — the guest has no
+# TCP yet. Panic/hang images never print DRIVER_OK, so they are not
+# provoked. The watcher is killed when QEMU exits; it does not own the
+# timeout (timeout still parents QEMU, same as T0.5).
 set -u
 
 EXPECT="${EXPECT:-M2 EXECUTION OK}"
@@ -12,8 +18,9 @@ FEATURE="${1:-}"
 TARGET="riscv64gc-unknown-none-elf"
 KERNEL="target/${TARGET}/debug/whimbrel"
 QEMU="qemu-system-riscv64"
-# D-0038 / D-0039 / D-0043: keep in sync with justfile qemu_args and .cargo/config.toml.
-QEMU_ARGS=(-machine virt -nographic -bios default -global virtio-mmio.force-legacy=false -netdev user,id=net0 -device virtio-net-device,netdev=net0 -object filter-dump,id=f0,netdev=net0,file=whimbrel.pcap)
+# D-0038 / D-0039 / D-0042 / D-0043: keep in sync with justfile qemu_args
+# and .cargo/config.toml.
+QEMU_ARGS=(-machine virt -nographic -bios default -global virtio-mmio.force-legacy=false -netdev user,id=net0,hostfwd=tcp::8080-:80 -device virtio-net-device,netdev=net0 -object filter-dump,id=f0,netdev=net0,file=whimbrel.pcap)
 
 feat=()
 if [ -n "$FEATURE" ]; then
@@ -29,9 +36,26 @@ case "${FEATURE}" in
 esac
 rm -f serial.log whimbrel.pcap
 
+# Watch serial for DRIVER_OK, then provoke. Must start before QEMU so a
+# fast guest cannot print DRIVER_OK unobserved. grep on a missing file
+# is a miss, not a pass.
+(
+    while ! grep -a -q 'DRIVER_OK' serial.log 2>/dev/null; do
+        sleep 0.05
+    done
+    bash scripts/provoke-hostfwd.sh >/dev/null 2>&1
+) &
+wpid=$!
+
 set +e
-timeout --foreground "$TIMEOUT_S" "$QEMU" "${QEMU_ARGS[@]}" -kernel "$KERNEL" > serial.log 2>&1
+if command -v stdbuf >/dev/null 2>&1; then
+    timeout --foreground "$TIMEOUT_S" stdbuf -oL "$QEMU" "${QEMU_ARGS[@]}" -kernel "$KERNEL" > serial.log 2>&1
+else
+    timeout --foreground "$TIMEOUT_S" "$QEMU" "${QEMU_ARGS[@]}" -kernel "$KERNEL" > serial.log 2>&1
+fi
 status=$?
+kill "$wpid" 2>/dev/null
+wait "$wpid" 2>/dev/null
 set -e
 
 if grep -a -q 'PANIC' serial.log; then

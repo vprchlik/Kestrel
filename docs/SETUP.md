@@ -27,10 +27,11 @@ M3 note: from T3.1 every QEMU invocation (`just run`, `just test`,
 and a `virtio-net-device` on `-netdev user,id=net0` (D-0039: a netless
 boot is a misconfigured harness). From T3.4 every invocation also
 carries `-object filter-dump,id=f0,netdev=net0,file=whimbrel.pcap`
-(D-0043: capture is standing infrastructure). `hostfwd` lands with
-the later net recipes. `tshark` above is what the harness uses to
-assert on those captures — without it, `just test` fails on a machine
-that has everything else.
+(D-0043: capture is standing infrastructure). From T3.5 every
+invocation also carries `hostfwd=tcp::8080-:80` on that netdev — a host
+TCP connect to 127.0.0.1:8080 is what makes slirp ARP for 10.0.2.15.
+`tshark` above is what the harness uses to assert on those captures —
+without it, `just test` fails on a machine that has everything else.
 
 ## 2. Rust toolchain
 

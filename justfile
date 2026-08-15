@@ -5,9 +5,10 @@ set shell := ["bash", "-uc"]
 target    := "riscv64gc-unknown-none-elf"
 kernel    := "target/" + target + "/debug/whimbrel"
 qemu      := "qemu-system-riscv64"
-# D-0038 / D-0039 / D-0043: modern virtio-mmio, a net device, and capture
-# on every invocation. hostfwd lands in later tasks.
-qemu_args := "-machine virt -nographic -bios default -global virtio-mmio.force-legacy=false -netdev user,id=net0 -device virtio-net-device,netdev=net0 -object filter-dump,id=f0,netdev=net0,file=whimbrel.pcap"
+# D-0038 / D-0039 / D-0042 / D-0043: modern virtio-mmio, a net device,
+# hostfwd (slirp ARPs 10.0.2.15 on a host TCP connect), and capture on
+# every invocation.
+qemu_args := "-machine virt -nographic -bios default -global virtio-mmio.force-legacy=false -netdev user,id=net0,hostfwd=tcp::8080-:80 -device virtio-net-device,netdev=net0 -object filter-dump,id=f0,netdev=net0,file=whimbrel.pcap"
 
 # Build the kernel (debug profile; target + linker script via .cargo/config.toml).
 build:
@@ -113,6 +114,22 @@ test expect="M2 EXECUTION OK" timeout_s="5":
         # an empty pcap — the same fail-closed hole check-utext refuses.
         if ! bash scripts/assert-pcap-garp.sh whimbrel.pcap; then
             echo 'TEST FAIL: pcap GARP assertion'
+            exit 1
+        fi
+        if ! bash scripts/check-assert-fail-closed.sh; then
+            echo 'TEST FAIL: pcap assert failure-mode check'
+            exit 1
+        fi
+        if ! grep -a -q 'virtio-net: RX arp' "$log"; then
+            echo 'TEST FAIL: missing RX arp classification'
+            exit 1
+        fi
+        if ! grep -aE -q 'rx avail=[0-9]+ used=[1-9][0-9]* posted=[0-9]+ completed=[1-9]' "$log"; then
+            echo 'TEST FAIL: RX completed did not increment'
+            exit 1
+        fi
+        if ! bash scripts/assert-pcap-slirp-arp.sh whimbrel.pcap; then
+            echo 'TEST FAIL: pcap slirp ARP assertion'
             exit 1
         fi
         if ! grep -a -q 'task 2 exit 0' "$log"; then
@@ -287,7 +304,19 @@ test-net-init:
         echo 'TEST FAIL: pcap GARP assertion'
         exit 1
     fi
-    echo 'TEST PASS: DRIVER_OK, MAC, dump, GARP'
+    if ! grep -a -q 'virtio-net: RX arp' serial.log; then
+        echo 'TEST FAIL: missing RX arp classification'
+        exit 1
+    fi
+    if ! grep -aE -q 'rx avail=[0-9]+ used=[1-9][0-9]* posted=[0-9]+ completed=[1-9]' serial.log; then
+        echo 'TEST FAIL: RX completed did not increment'
+        exit 1
+    fi
+    if ! bash scripts/assert-pcap-slirp-arp.sh whimbrel.pcap; then
+        echo 'TEST FAIL: pcap slirp ARP assertion'
+        exit 1
+    fi
+    echo 'TEST PASS: DRIVER_OK, MAC, dump, GARP, RX ARP'
 
 # Disassemble the kernel. Extra flags as one quoted arg, e.g. just objdump '-d --source'
 objdump flags="-d": build

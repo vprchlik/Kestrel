@@ -24,7 +24,7 @@ use core::ptr::{addr_of, addr_of_mut};
 /// Descriptors per queue. D-0038.
 pub(crate) const QSIZE: usize = 16;
 /// RX buffers: one per RX descriptor, whole-frame, no `MRG_RXBUF`.
-const RX_BUFS: usize = 16;
+pub(crate) const RX_BUFS: usize = 16;
 /// TX buffers. Fewer than `QSIZE`; unused TX descriptors stay addr=0.
 const TX_BUFS: usize = 8;
 /// Bytes per buffer. 2048 holds a 12-byte virtio-net header plus an MTU
@@ -459,6 +459,46 @@ pub(crate) fn post_tx(desc_i: usize, len: u32) {
         core::ptr::write_volatile(&mut p.tx.avail.ring[slot], desc_i as u16);
     }
     publish_avail_idx(&mut p.tx.avail, idx.wrapping_add(1));
+}
+
+/// RX buffer for descriptor `i`. Device-written; caller must not hold this
+/// across `repost_rx`.
+pub(crate) fn rx_buf(i: usize) -> &'static [u8] {
+    if i >= RX_BUFS {
+        panic!("virtq: RX buf {i} >= {RX_BUFS}");
+    }
+    &pool().rx_buf[i]
+}
+
+/// If `used.idx` has advanced past `seen`, read that used-ring entry.
+/// `rx_used_idx` already did `fence r,r` between idx and this read.
+pub(crate) fn take_rx_used(seen: u16) -> Option<(u16, u32, u32)> {
+    let used = rx_used_idx();
+    if used == seen {
+        return None;
+    }
+    let slot = (seen as usize) % QSIZE;
+    let e = unsafe { core::ptr::read_volatile(&pool().rx.used.ring[slot]) };
+    Some((seen.wrapping_add(1), e.id, e.len))
+}
+
+/// Put descriptor `i` back on the avail ring. Restores `WRITE` and full
+/// `BUF` length — the device owns the buffer again. `fence w,w` then idx.
+/// Caller notifies.
+pub(crate) fn repost_rx(desc_i: usize) {
+    if desc_i >= RX_BUFS {
+        panic!("virtq: RX desc {desc_i} >= {RX_BUFS}");
+    }
+    let p = pool();
+    p.rx.desc[desc_i].len = BUF as u32;
+    p.rx.desc[desc_i].flags = DESC_WRITE;
+    p.rx.desc[desc_i].next = 0;
+    let idx = unsafe { core::ptr::read_volatile(&p.rx.avail.idx) };
+    let slot = (idx as usize) % QSIZE;
+    unsafe {
+        core::ptr::write_volatile(&mut p.rx.avail.ring[slot], desc_i as u16);
+    }
+    publish_avail_idx(&mut p.rx.avail, idx.wrapping_add(1));
 }
 
 /// If `used.idx` has advanced past `seen`, read that used-ring entry.

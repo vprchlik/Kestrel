@@ -146,7 +146,7 @@ pub fn probe() {
             println!("virtio-mmio: net at slot {n}");
         }
         None => panic!(
-            "virtio-mmio: no net device (device ID {DEVICE_NET}) in {N_TRANSPORTS} slots"
+            "virtio-mmio: no net device (device ID {DEVICE_NET}) in {N_TRANSPORTS} slots; check -device virtio-net-device,netdev=net0"
         ),
     }
 }
