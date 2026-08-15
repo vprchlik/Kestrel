@@ -45,6 +45,11 @@ hole rather than a staircase of unusable sizes.
 owns `[__heap_end, RAM_END)`; the heap's variable-size blocks live in the
 1 MiB carve-out below that and never come from this list (D-0024).
 
+**frame freeze.** `frame::freeze()` immediately before the first `sret` to U
+(D-0036). After it, `alloc_frame` / `free_frame` panic printing the request.
+The 67 frames already gone are 65 page tables plus the two `FRAME OK`
+self-test leftovers.
+
 **GlobalAlloc.** Rust's `no_std` heap interface (`alloc` / `dealloc` with a
 `Layout` of size plus alignment). Our implementation panics on exhaustion
 with those two numbers and never returns null (D-0027).
@@ -58,11 +63,24 @@ address. The kernel is identity-mapped (D-0006), so the PC, stack pointer,
 and return addresses keep their numeric values across the `satp` write —
 there is no higher-half trampoline.
 
+**lui sign-extension (RV64).** `lui rd, imm` writes `sext_64(imm << 12)`.
+If bit 31 of that result is set (`imm >= 0x80000`), bits 63:32 become 1.
+`lui a0, 0x80200` therefore yields `0xffffffff80200000`, not the
+identity-mapped kernel address `0x80200000`. Build a PA with bit 31 set
+from a positive `lui` plus `addi`/`slli`, or mask the high half after.
+This will bite again anywhere a test names a high address.
+
 **mret / sret.** "Return from trap" instructions for M-mode and S-mode
 respectively: they restore the previous privilege level and interrupt-enable
 state from status-register fields (`MPP`/`SPP`, `MPIE`/`SPIE`) and jump to the
 saved PC (`mepc`/`sepc`). They are also the *only* way privilege goes down —
 OpenSBI `mret`s into our kernel, and our kernel will `sret` into U-mode.
+
+**MEDELEG.** The M-mode CSR that chooses which exceptions reach S-mode.
+OpenSBI on this platform sets `0xf0b509`: codes 0, 3, 8, 10, 12, 13, 15,
+20–23 are delegated; 1, 2, 4, 5, 6, 7, 9 are not. An illegal instruction
+from a task (cause 2) therefore dumps in firmware, not in our handler
+(D-0034). We read the boot log; we do not write `medeleg`.
 
 **MMIO (Memory-Mapped I/O).** Device registers exposed at physical addresses,
 accessed with ordinary load/store instructions instead of special I/O
@@ -120,6 +138,11 @@ S-mode OS and M-mode firmware: extension ID in `a7`, function ID in `a6`,
 arguments in `a0..a5`, then `ecall`. It is to firmware what the syscall ABI is
 to a kernel; we use it for console output, timers, and shutdown.
 
+**sbrk / break window.** Per-task 64 KiB NOLOAD region already mapped `U+R+W`.
+`sbrk(delta)` moves a pointer inside `[brk_base, brk_wall)` and does not
+allocate or edit PTEs (D-0036). The validator accepts only the live prefix
+`[brk_base, brk)`.
+
 **scause / sepc / stval.** The three CSRs the hardware fills on every trap
 into S-mode: *why* (interrupt bit + cause code), *where* (PC of the
 interrupted instruction), and *what* (faulting address or offending
@@ -131,11 +154,22 @@ memory: after changing PTEs or `satp`, older translations may still be cached
 until you execute it. Project rule: fence after every PTE change — cheap
 insurance on one hart.
 
+**sscratch.** Supervisor scratch CSR. We use it as the U/S stack discriminator
+(D-0029): nonzero = current task's `kstack_top` while in U; 0 while in S.
+Trap entry `csrrw`s it with `sp`. A nonzero value in S-mode turns a kernel
+fault into a frame pushed at a stale kstack top.
+
 **sstatus.SPP.** The S-mode "previous privilege" bit (sstatus bit 8): 0 = U,
 1 = S. It records where `sret` will return, not the privilege the hart is
 running at now. Observed 0 at `kmain` — OpenSBI's initial value after `mret`
 into S-mode, not evidence that we are in U-mode. Becomes load-bearing in M2
 when we set SPP=U before `sret` into the app.
+
+**sstatus.SUM.** Supervisor User Memory: when set, S-mode loads/stores may
+access `U=1` pages. Raised only around an already-validated `memcpy` in
+`copy_from_user` / `copy_to_user`, then cleared (D-0034). It does not
+*restrict* S-mode from `U=0` pages — validation is software or it does not
+exist.
 
 **SRST (System Reset).** The SBI extension (EID `0x53525354`) that asks
 firmware to reset or shut down the machine. We probe it, then call FID 0 with
@@ -169,6 +203,11 @@ is 100_000 ticks at this platform's 10 MHz timebase.
 OpenSBI reports `Platform Timer Device: aclint-mtimer @ 10000000Hz` — 10 MHz,
 so 100 ns per tick. M1's timeslice is `rdtime() + 100_000` (D-0018).
 
+**timeslice.** Here, exactly one supervisor timer interrupt (D-0035). Kernel
+code runs with `SIE=0`, so a pending tick cannot preempt a syscall; that
+stretches the slice for syscall-heavy tasks (a known fairness property, not
+a bug). There is no idle loop: an empty ready set shuts down.
+
 **TLB (Translation Lookaside Buffer).** The hart's cache of recent
 virtual→physical translations, consulted before walking page tables in memory.
 It is what makes paging fast and what makes *stale* mappings possible — hence
@@ -176,8 +215,15 @@ It is what makes paging fast and what makes *stale* mappings possible — hence
 
 **TrapFrame.** The 272-byte register save area built on the kernel stack
 at trap entry: `x[0..31]` at `8 * regnum`, then `sepc` and `sstatus`
-(D-0020). `x[2]` is the pre-trap `sp`. Direct `stvec`; `sscratch` unused
-until M2.
+(D-0020). `x[2]` is the pre-trap `sp`. The frame *is* the task context
+(D-0032): the TCB stores a pointer to `kstack_top - 272`, and `__trap_return`
+does `mv sp, a0` to switch. `sscratch` holds that kstack top in U-mode and
+0 in S-mode (D-0029).
+
+**U bit.** PTE flag that marks a user page. User fetch/load/store of a `U=0`
+page faults; S-mode access of a `U=1` page faults unless `SUM` is set. It
+never stops the kernel reading its own pages, which is why user pointers
+are checked in software.
 
 **unikernel.** A single application linked with exactly the OS services it
 needs into one bootable image — no processes, no dynamic loading, no

@@ -1,4 +1,4 @@
-/* Linker script for Kestrel on QEMU virt.
+/* Linker script for Whimbrel on QEMU virt.
  *
  * Why 0x8020_0000: RAM on the virt machine starts at 0x8000_0000; OpenSBI
  * occupies (and PMP-protects) the first chunk of it and jumps to the next
@@ -10,6 +10,9 @@
  * permissions (text R+X, rodata R, data/bss R+W) at page granularity.
  * The __symbols are consumed by startup asm (stack, bss clearing in M0) and
  * by the M1 frame allocator / page-table setup.
+ *
+ * Four task slots are unrolled below (D-0030). src/task.rs `MAX_TASKS` must
+ * match: check_layout asserts (__tasks_end - __tasks_start) / 88 KiB.
  */
 
 OUTPUT_ARCH(riscv)
@@ -72,6 +75,100 @@ SECTIONS
         . += 64K;
         __boot_stack_top = .;
     }
+
+    . = ALIGN(4K);
+
+    /* T2.1 / D-0031: user sections. T2.5 puts code in `.utext`; the rest
+     * stay empty. Each is 4 KiB-aligned so it can have its own U-bit
+     * permissions. Content advances `.` before `__tasks_start = .`, so
+     * the 88 KiB slots move up rather than overlapping. */
+    __utext_start = .;
+    .utext : {
+        *(.utext .utext.*)
+    }
+    . = ALIGN(4K);
+    __utext_end = .;
+
+    __urodata_start = .;
+    .urodata : {
+        *(.urodata .urodata.*)
+    }
+    . = ALIGN(4K);
+    __urodata_end = .;
+
+    __udata_start = .;
+    .udata : {
+        *(.udata .udata.*)
+    }
+    . = ALIGN(4K);
+    __udata_end = .;
+
+    __ubss_start = .;
+    .ubss (NOLOAD) : {
+        *(.ubss .ubss.*)
+    }
+    . = ALIGN(4K);
+    __ubss_end = .;
+
+    /* Per-task stacks and break windows (D-0030). One slot:
+     *   4 KiB ustack guard + 8 KiB ustack + 64 KiB break
+     *   + 4 KiB kstack guard + 8 KiB kstack  = 88 KiB.
+     *
+     * Guard holes are linker-script holes only — not sections, not in the
+     * image. Same situation as D-0016 in M1/T1.5: they are ordinary RAM
+     * until T2.2 leaves them out of the tables. A stack overflow still
+     * stores into the neighbouring region until then. The frame allocator
+     * starts at __heap_end and never hands these pages out (they sit below
+     * __kernel_end).
+     *
+     * `__ubrkN_wall == __kstackN_guard` is deliberate (D-0031): a `sbrk`
+     * that passes its software bound check by one page lands in the kernel
+     * stack's unmapped guard, not in the kernel stack. */
+    __tasks_start = .;
+
+    __ustack0_guard = .;  . += 4K;
+    __ustack0_bottom = .; . += 8K;
+    __ustack0_top = .;
+    /* Shared boundary, not a missing guard: the user stack grows down
+     * toward __ustackN_guard, the break grows up toward __ubrkN_wall.
+     * They diverge from this address. Do not insert a hole here. */
+    __ubrk0_base = .;     . += 64K;
+    __ubrk0_wall = .;
+    __kstack0_guard = .;  . += 4K;
+    __kstack0_bottom = .; . += 8K;
+    __kstack0_top = .;
+
+    __ustack1_guard = .;  . += 4K;
+    __ustack1_bottom = .; . += 8K;
+    __ustack1_top = .;
+    /* See task 0: shared ustack-top / break-base boundary. */
+    __ubrk1_base = .;     . += 64K;
+    __ubrk1_wall = .;
+    __kstack1_guard = .;  . += 4K;
+    __kstack1_bottom = .; . += 8K;
+    __kstack1_top = .;
+
+    __ustack2_guard = .;  . += 4K;
+    __ustack2_bottom = .; . += 8K;
+    __ustack2_top = .;
+    /* See task 0: shared ustack-top / break-base boundary. */
+    __ubrk2_base = .;     . += 64K;
+    __ubrk2_wall = .;
+    __kstack2_guard = .;  . += 4K;
+    __kstack2_bottom = .; . += 8K;
+    __kstack2_top = .;
+
+    __ustack3_guard = .;  . += 4K;
+    __ustack3_bottom = .; . += 8K;
+    __ustack3_top = .;
+    /* See task 0: shared ustack-top / break-base boundary. */
+    __ubrk3_base = .;     . += 64K;
+    __ubrk3_wall = .;
+    __kstack3_guard = .;  . += 4K;
+    __kstack3_bottom = .; . += 8K;
+    __kstack3_top = .;
+
+    __tasks_end = .;
 
     . = ALIGN(4K);
     __kernel_end = .;

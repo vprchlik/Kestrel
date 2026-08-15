@@ -6,11 +6,11 @@
 #   hang-selftest       → HANG
 set -u
 
-EXPECT="${EXPECT:-M1 FUNDAMENTALS OK}"
-TIMEOUT_S="${TIMEOUT_S:-3}"
+EXPECT="${EXPECT:-M2 EXECUTION OK}"
+TIMEOUT_S="${TIMEOUT_S:-5}"
 FEATURE="${1:-}"
 TARGET="riscv64gc-unknown-none-elf"
-KERNEL="target/${TARGET}/debug/kestrel"
+KERNEL="target/${TARGET}/debug/whimbrel"
 QEMU="qemu-system-riscv64"
 QEMU_ARGS=(-machine virt -nographic -bios default)
 
@@ -20,6 +20,12 @@ if [ -n "$FEATURE" ]; then
 fi
 
 cargo build "${feat[@]}"
+# Feature builds that never enter U-mode can GC .utext. Userptr selftests
+# do enter U, so they still need the check.
+case "${FEATURE}" in
+    panic-selftest|hang-selftest|stress|frame-exhaust-selftest) ;;
+    *) bash scripts/check-utext.sh "$KERNEL" ;;
+esac
 rm -f serial.log
 
 set +e

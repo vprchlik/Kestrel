@@ -1,9 +1,9 @@
-# Task runner for Kestrel. `just --list` shows all recipes.
+# Task runner for Whimbrel. `just --list` shows all recipes.
 
 set shell := ["bash", "-uc"]
 
 target    := "riscv64gc-unknown-none-elf"
-kernel    := "target/" + target + "/debug/kestrel"
+kernel    := "target/" + target + "/debug/whimbrel"
 qemu      := "qemu-system-riscv64"
 qemu_args := "-machine virt -nographic -bios default"
 
@@ -33,6 +33,12 @@ debug: build
 gdb:
     gdb-multiarch {{kernel}} -ex "target remote :1234"
 
+# Every symbol referenced from .utext must resolve in user sections or a
+# task's stack/break window — not kernel .text/.rodata. `lui`/`li` values
+# are not references; `auipc+addi` to .urodata is legitimate.
+check-utext: build
+    bash scripts/check-utext.sh {{kernel}}
+
 # Headless boot. Verdict from serial + QEMU status together (D-0017):
 #   PANIC in serial          → TEST FAIL (exit 1), panic line echoed
 #   timeout (status 124)     → TEST HANG (exit 2)
@@ -42,7 +48,7 @@ gdb:
 # just 1.58 has no kwargs: `just test expect="CSR OK"` passes the literal
 # string `expect=CSR OK` as the first positional. Strip a matching `name=`
 # prefix so that form, `just test "CSR OK"`, and the defaults all work.
-test expect="M1 FUNDAMENTALS OK" timeout_s="3":
+test expect="M2 EXECUTION OK" timeout_s="5":
     #!/usr/bin/env bash
     set -u
     e='{{expect}}'
@@ -50,6 +56,74 @@ test expect="M1 FUNDAMENTALS OK" timeout_s="3":
     case "$e" in expect=*) e="${e#expect=}" ;; esac
     case "$t" in timeout_s=*) t="${t#timeout_s=}" ;; esac
     EXPECT="$e" TIMEOUT_S="$t" bash scripts/boot-test.sh
+    if [ "$e" = "SCHED OK" ] || [ "$e" = "M2 EXECUTION OK" ]; then
+        log=serial.log
+        if ! grep -a -q 'frames frozen: free=' "$log"; then
+            echo 'TEST FAIL: missing "frames frozen: free=N"'
+            exit 1
+        fi
+        if ! grep -a -q 'USER OK' "$log"; then
+            echo 'TEST FAIL: missing USER OK'
+            exit 1
+        fi
+        if ! grep -a -q 'SYSCALL OK' "$log"; then
+            echo 'TEST FAIL: missing SYSCALL OK'
+            exit 1
+        fi
+        if ! grep -a -q 'SBRK OK' "$log"; then
+            echo 'TEST FAIL: missing SBRK OK'
+            exit 1
+        fi
+        if ! grep -a -q 'task 1 exit 0' "$log"; then
+            echo 'TEST FAIL: missing "task 1 exit 0"'
+            exit 1
+        fi
+        if ! grep -a -q 'task 2 exit 0' "$log"; then
+            echo 'TEST FAIL: missing "task 2 exit 0"'
+            exit 1
+        fi
+        if ! grep -aE -q 'task 1 done writes=[0-9]* yields=0' "$log"; then
+            echo 'TEST FAIL: missing "task 1 done writes=… yields=0"'
+            exit 1
+        fi
+        if ! grep -aE -q 'task 2 done writes=[0-9]* yields=0' "$log"; then
+            echo 'TEST FAIL: missing "task 2 done writes=… yields=0"'
+            exit 1
+        fi
+        if ! grep -aE -q 'sched switches 1->2=[1-9]' "$log"; then
+            echo 'TEST FAIL: missing sched switches 1->2=[1-9]'
+            exit 1
+        fi
+        if ! grep -aE -q '2->1=[1-9]' "$log"; then
+            echo 'TEST FAIL: missing 2->1=[1-9]'
+            exit 1
+        fi
+        if ! grep -aE '^task ' "$log" | awk '
+            /^task 2 / { if (!t2) t2 = NR }
+            /^task 1 done/ { d1 = NR }
+            END { if (!t2 || !d1 || t2 >= d1) exit 1 }
+        '; then
+            echo 'TEST FAIL: first ^task 2  line must precede ^task 1 done'
+            exit 1
+        fi
+        echo 'TEST PASS: sched greps and awk order'
+    fi
+    if [ "$e" = "M2 EXECUTION OK" ]; then
+        log=serial.log
+        if ! awk '
+            /frames frozen: free=/ { f=NR }
+            /USER OK/ { u=NR }
+            /SYSCALL OK/ { s=NR }
+            /SBRK OK/ { b=NR }
+            /SCHED OK/ { c=NR }
+            /M2 EXECUTION OK/ { m=NR }
+            END { if (!(f && u && s && b && c && m) || !(f<u && u<s && s<b && b<c && c<m)) exit 1 }
+        ' "$log"; then
+            echo 'TEST FAIL: marker order (frozen, USER, SYSCALL, SBRK, SCHED, M2)'
+            exit 1
+        fi
+        echo 'TEST PASS: M2 marker order'
+    fi
 
 # Invert the script's intentional non-zero so just does not print
 # "recipe failed" for a designed FAIL/HANG. `-` would also hide a
@@ -63,6 +137,9 @@ test-hang:
 
 # Allocator storm at 10 ms then 1 ms ticks, then frame-exhaust panic.
 # Exhaust is a designed PANIC (same harness shape as test-panic).
+# The `frames N` total is taken from **this exhaust boot's** FRAME OK line,
+# not from `just run`. Feature images shift `__heap_end`, so the default
+# kernel can print 31866 while exhaust prints 31867 — that is not a mismatch.
 test-stress:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -75,7 +152,7 @@ test-stress:
         echo "TEST FAIL: frame exhaust expected panic (exit 1), got ${code}"
         exit 1
     fi
-    n=$(grep -aE 'frames [0-9]+' serial.log | head -n1 | awk '{print $2}')
+    n=$(grep -aE '^frames [0-9]+ heap_start=' serial.log | head -n1 | awk '{print $2}')
     if [ -z "$n" ]; then
         echo 'TEST FAIL: no FRAME OK frame count in serial.log'
         exit 1
@@ -86,6 +163,63 @@ test-stress:
         exit 1
     fi
     echo "TEST PASS: frame exhaust total=${n}"
+
+# Both invalid-pointer shapes, each in its own image so the kill of one
+# cannot hide the other (D-0034).
+test-userptr:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    EXPECT="USERPTR OK" TIMEOUT_S=3 bash scripts/boot-test.sh userptr-kernel-selftest
+    if ! grep -a -q 'not in a user interval' serial.log; then
+        echo 'TEST FAIL: kernel-address case missing'
+        exit 1
+    fi
+    EXPECT="USERPTR OK" TIMEOUT_S=3 bash scripts/boot-test.sh userptr-span-selftest
+    if ! grep -a -q 'spans past interval' serial.log; then
+        echo 'TEST FAIL: span case missing'
+        exit 1
+    fi
+    echo 'TEST PASS: both invalid-pointer shapes killed'
+
+# T2.10: one task takes a U-mode load page fault; the other continues and
+# the kernel shuts down cleanly (exit 0, not the inverted panic recipes).
+test-user-fault:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    EXPECT="USERFAULT OK" TIMEOUT_S=5 bash scripts/boot-test.sh user-fault-selftest
+    if ! grep -a -q 'task 2 killed: load page fault' serial.log; then
+        echo 'TEST FAIL: missing "task 2 killed: load page fault"'
+        exit 1
+    fi
+    if ! grep -aE -q 'task 1 done writes=[0-9]+ yields=0' serial.log; then
+        echo 'TEST FAIL: survivor did not run to completion'
+        exit 1
+    fi
+    echo 'TEST PASS: user fault contained, survivor finished'
+
+# T2.11: freeze then a deliberate alloc_frame. Designed PANIC (same harness
+# shape as test-panic).
+test-freeze:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    set +e
+    TIMEOUT_S=5 bash scripts/boot-test.sh freeze-selftest
+    code=$?
+    set -e
+    if [ "$code" -ne 1 ]; then
+        echo "TEST FAIL: freeze-selftest expected panic (exit 1), got ${code}"
+        exit 1
+    fi
+    if ! grep -a -q 'frames frozen: free=' serial.log; then
+        echo 'TEST FAIL: missing "frames frozen: free=N"'
+        exit 1
+    fi
+    if ! grep -a -q 'alloc_frame after freeze' serial.log; then
+        echo 'TEST FAIL: missing "alloc_frame after freeze" panic'
+        grep -a 'PANIC' serial.log || true
+        exit 1
+    fi
+    echo 'TEST PASS: freeze then alloc_frame panicked'
 
 # Disassemble the kernel. Extra flags as one quoted arg, e.g. just objdump '-d --source'
 objdump flags="-d": build

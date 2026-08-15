@@ -21,7 +21,7 @@ against a minimal Linux VM.
   is done when its acceptance test passes and the end-of-milestone ritual
   (glossary/decisions update + 5-question quiz, see `.cursor/rules/project.mdc`)
   is complete.
-- M0 and M1 are detailed to individual-task resolution below. **M2–M4 are
+- M0, M1, and M2 are detailed to individual-task resolution below. **M3–M4 are
   intentionally kept at task-list resolution** and marked
   `[TO BE DETAILED at milestone start]` — the first action at each of those
   milestones is expanding its section to full resolution using what prior
@@ -33,7 +33,7 @@ against a minimal Linux VM.
 |---|---|---|---|
 | M0 | Boot | OpenSBI → kernel entry → UART "hello" → clean QEMU exit | done |
 | M1 | Fundamentals | Traps, SBI timer interrupts, frame allocator, Sv39 paging, heap | done |
-| M2 | Execution | U-mode, 5 syscalls, context switch, preemptive scheduling of 2+ tasks | [TO BE DETAILED at milestone start] |
+| M2 | Execution | U-mode, 5 syscalls, context switch, preemptive scheduling of 2+ tasks | detailed; not started |
 | M3 | Unikernel | App-in-image as sole U-mode task, virtio-net, tiny HTTP responder | [TO BE DETAILED at milestone start] |
 | M4 | Evaluation | Scripted reproducible benchmarks vs minimal Linux VM + technical report | [TO BE DETAILED at milestone start] |
 
@@ -143,7 +143,7 @@ and `print!`/`println!` macros. Probe DBCN via BASE before the first write.
 
 - **Acceptance:** `just run` prints exactly:
   ```
-  kestrel: hello from hart 0, dtb at 0x<some address in RAM>
+  whimbrel: hello from hart 0, dtb at 0x<some address in RAM>
   ```
   after the OpenSBI banner.
 
@@ -181,7 +181,7 @@ prints `TEST PASS: found "M0 BOOT OK"` and exits 0. And interactively:
 ```
 $ just run
 ... OpenSBI banner ...
-kestrel: hello from hart 0, dtb at 0x87e00000
+whimbrel: hello from hart 0, dtb at 0x87e00000
 M0 BOOT OK
 $ echo $?
 0
@@ -620,41 +620,378 @@ heap free list, coalesce on free, first-fit.
 
 ---
 
-# M2 — Execution  `[TO BE DETAILED at milestone start]`
+# M2 — Execution
 
 **Goal:** two or more kernel-defined tasks run in U-mode, invoke the 5 syscalls
 (`write`, `exit`, `sbrk`, `gettime`, `yield`) via `ecall`, and are preemptively
 scheduled round-robin off the timer interrupt.
 
-**Task list (resolution deferred; expand + get sign-off before any code):**
-- Task control block, per-task kernel stack + user stack, task states — M
-- `sscratch`-based trap entry rework: distinguish trap-from-U vs trap-from-S,
-  swap to the task's kernel stack — L
-- First U-mode entry: craft `sstatus.SPP=U`, `sepc`, `sret` into a task — M
-- Syscall ABI (numbers in `a7`, args `a0..a5`, return in `a0` — mirror the SBI
-  convention we already speak) + dispatch on `ecall`-from-U — M
-- Implement `write`, `exit`, `gettime`, `yield` — S each; `sbrk` (per-task
-  break, backed by frame allocator + mapping) — M
-- Context switch (save/restore callee-saved + `sepc`/`sstatus` per task) — L
-- Round-robin scheduler driven by timer tick; idle loop (`wfi`) — M
-- Two demo tasks (e.g. two counters `write`-ing at different rates) proving
-  preemption without `yield` — S
+**Decisions recorded before any code:** D-0029 `sscratch` protocol; D-0030
+static per-task stacks with guard holes; D-0031 separate user sections, no
+PTE edits after activation; D-0032 switch at trap exit, the trap frame *is*
+the task context; D-0033 syscall ABI; D-0034 user-pointer validation and the
+`SUM` window; D-0035 slice = one tick, no idle loop; D-0036 resolution of
+D-0028.
 
-**Key decisions to record when detailing:** syscall numbering scheme; time
-slice length; what `exit` of the last task does (shutdown); whether user pages
-are also identity-mapped with U-bit (single address space says yes — but then
-S-mode access to U pages needs `sstatus.SUM` — a classic trap to document).
+## Prerequisite concepts
 
-**Known cliffs:** `sret`-to-U with wrong `sstatus`/`sepc` (hangs or bounces
-straight back with an illegal-instruction or page fault); forgetting the U bit
-on user code pages (instruction page fault at the first user instruction);
-kernel touching user buffers without `SUM` set (load/store page fault inside a
-syscall).
+**1. There is no "enter user mode" instruction.** Privilege only drops via
+`sret` (or `mret`). `sret` sets the privilege level from `sstatus.SPP`, sets
+`sstatus.SIE` from `SPIE`, sets `SPP` back to U, and jumps to `sepc`. Every
+one of those inputs is a register we control, which means entering U-mode for
+the first time is *returning from a trap that never happened*: the kernel
+fabricates the state a trap would have left behind (`sepc` = the task's entry
+point, `SPP` = 0, a user `sp`) and executes `sret`. There is no separate
+mechanism, and this is why the same assembly that returns from a syscall also
+starts a brand-new task.
 
-**Acceptance sketch:** headless run shows interleaved output from 2 tasks with
-no `yield` calls in either (proving preemption), correct `gettime` deltas,
-`sbrk`-backed buffer use, and clean `exit`-driven shutdown; asserted via
-`just test`.
+**2. Interrupts for higher privilege levels are always enabled.** The
+privileged spec's global-enable rule is asymmetric: while executing at level
+*x*, interrupts for levels *y > x* are always globally enabled regardless of
+that level's `yIE` bit, and interrupts for levels *w < x* are always globally
+disabled. Concretely: in U-mode, S-mode interrupts fire whether or not
+`sstatus.SIE` is set (only `sie.STIE` and pending state matter), so user code
+is *always* preemptible; in S-mode, `sstatus.SIE` gates them, and hardware
+cleared it on trap entry and we never set it (D-0020), so kernel code is
+*never* preempted. That single asymmetry is what makes M2's scheduler small:
+there is exactly one point in the system where a task can lose the CPU.
+
+**3. A pending timer during a syscall is deferred, not lost.** `sip.STIP` is
+not write-clearable from S-mode; re-arming is the acknowledgement (D-0018). If
+the deadline passes while a syscall is running, `STIP` stays set, `SIE=0`
+suppresses the trap, and the interrupt is taken *immediately* after the `sret`
+back to U-mode, because U-mode cannot mask S-mode interrupts (concept 2).
+Expect preemption to land right after a syscall returns. Nothing is lost, and
+the arm-at-`rdtime()+PERIOD` rule (D-0018) means a long syscall cannot leave
+the comparator in the past.
+
+**4. The `U` bit, and what `sstatus.SUM` does and does not buy.** A leaf PTE's
+`U` bit says the page is reachable from U-mode. In S-mode, a load or store to
+a `U=1` page raises a page fault *unless* `sstatus.SUM` is set; an
+**instruction fetch** from a `U=1` page faults in S-mode always, `SUM` or not
+(`SUM` covers loads and stores only; `MXR` only makes execute-only pages
+readable). Two consequences shape the whole milestone. First, user code cannot
+live in kernel `.text`: one page cannot be both S-fetchable and U-fetchable, so
+user code needs its own sections. Second, the kernel cannot read a user buffer
+without `SUM`, and with paging on there is no physical back door — every S-mode
+load goes through the same translation and the same `U` check.
+
+**5. Hardware does not validate pointers the kernel dereferences.** The `U`
+bit protects *user → kernel*: a U-mode access to a `U=0` page faults with no
+software involvement. It says nothing about *kernel-on-behalf-of-user*. With
+`SUM=1` the kernel may read `U=1` pages, and it could always read `U=0` pages,
+so a copy loop will faithfully read kernel `.bss` if the task passes that
+address. In a single identity-mapped address space (D-0006) there is no
+hardware check to switch on: validating a user pointer is software or it does
+not happen.
+
+**6. `sscratch` exists because every register belongs to the interrupted
+context.** On a trap from U-mode all 31 GPRs still hold user values, `sp`
+included. Pushing a trap frame at the trapped `sp` would let a task point `sp`
+at kernel memory and have the kernel spill 272 bytes into it — permitted,
+because S-mode stores to `U=0` pages are legal. `sscratch` is the one
+architectural scratch slot the trap handler owns, and swapping it with `sp` is
+the only way to obtain a trustworthy stack pointer without first having a free
+register to compute one. The corollary is that the *discrimination* between a
+trap from U and a trap from S must also ride on that swap: reading
+`sstatus.SPP` needs a destination register, and at the first instruction of
+the handler there is none.
+
+**7. A task's whole context is the trap frame.** With no floating-point state
+in scope (D-0002 defers FPU context switching; `sstatus.FS` stays `Off`), a
+task's complete user context is 31 GPRs plus `sepc` and `sstatus` — exactly the
+`TrapFrame` D-0020 already builds. Nothing else needs saving. So the task
+control block stores no register state at all, only *where* its frame lives,
+and a context switch is a change of which frame the trap epilogue restores.
+
+**8. `gp` and `tp` are ABI registers with kernel meaning.** `_start` loads `gp`
+with relaxation disabled precisely so the linker may relax kernel absolute
+loads into cheaper `gp`-relative ones; kernel Rust code therefore *depends* on
+`gp`. A trap from U-mode arrives with the user's `gp` still in the register, so
+the entry must restore the kernel's before calling Rust or every relaxed static
+access reads the wrong address — a bug that surfaces far from its cause. `tp`
+is the thread pointer, used only for thread-locals, which `no_std` without TLS
+never emits: the kernel never reads it, so it is saved and restored like any
+other GPR and needs no reload.
+
+**9. `ecall` has no compressed encoding.** RVC defines `c.ebreak` but no
+`c.ecall`, so the syscall path advances `sepc` by the constant 4 with that
+citation and never reads user memory to decide. This is D-0021 constraint 3
+paying off: the alternative — decoding width from the instruction at `sepc` —
+is a *load* from a user virtual address, which needs `SUM` in the hottest path
+in the kernel and a fault story for a task that jumped somewhere unmapped.
+
+**10. Kernel stack overflow is not a recoverable fault.** Once each task has
+its own kernel stack, an overflow must be caught by an unmapped guard page or
+it silently corrupts a neighbour. But trace what the guard actually produces:
+the store page fault arrives from S-mode, so `sscratch` is 0, so trap entry
+keeps the faulting `sp` — already inside the guard hole — and immediately
+pushes 272 bytes through it, which faults again, forever, with no output. Rust
+is never reached, so the panic printer and its `IN_PANIC` guard never run. The
+guard converts silent neighbour corruption into a silent hang. That is a real
+improvement (the damage stops) but it is not a diagnostic, and M2 does not fix
+it (D-0030).
+
+## Kernel + user address space — the M2 target
+
+Every new region is **static and linker-placed**, inserted between the boot
+stack and `__kernel_end` so the 1 MiB kernel-heap carve-out (D-0024) and the
+frame free list keep their existing structure and simply start higher.
+`MAX_TASKS` is a compile-time constant (4; the demo uses 2).
+
+| Region | Permissions | Why |
+|---|---|---|
+| `.utext` | R + X + **U** | User code cannot live in kernel `.text`: S-mode cannot fetch from a `U=1` page and U-mode cannot fetch from a `U=0` one (concept 4). |
+| `.urodata` | R + **U** | Literals a task passes to `write` must be user-readable. A literal left in kernel `.rodata` faults on the task's own load. |
+| `.udata` / `.ubss` | R + W + **U** | User statics. `.ubss` is NOLOAD. |
+| Per-task user stack ×`MAX_TASKS` | R + W + **U** | 8 KiB each, NOLOAD, 4 KiB unmapped guard hole below each. |
+| Per-task break window ×`MAX_TASKS` | R + W + **U** | 64 KiB each, NOLOAD. `sbrk` moves a pointer inside this; it never allocates or maps (D-0036). |
+| Per-task kernel stack ×`MAX_TASKS` | R + W, **U=0** | 8 KiB each, NOLOAD, 4 KiB unmapped guard hole below each. `sscratch` holds the top (D-0029). |
+
+Everything else is the M1 map unchanged. **No PTE is edited after
+`page::activate`** (D-0031): the user map is built at boot beside the kernel
+map, so M2 adds no `sfence.vma` site and no mapping work in the trap path.
+
+## Tasks
+
+Thirteen tasks. T2.2 is the T1.6-shaped safety net for T2.3 — verify the
+`U` bits in software before betting the machine on the first `sret` to U.
+T2.3 and T2.9 are the L tasks.
+
+### T2.0 — `sscratch` accessor and boot-context assertions — S
+Add `csr::sscratch`. Extend the boot CSR snapshot to print `sscratch` as
+OpenSBI left it, then zero it in `trap::install()` **before** `stvec` is
+written: a trap taken while `sscratch` holds firmware garbage would be
+misread as a trap from U-mode and would push a frame at that address.
+
+- **Acceptance:** boot prints `sscratch` in the CSR block and `sscratch 0`
+  after install; `just test expect="CSR OK"` passes.
+
+### T2.1 — Linker script: user sections, per-task stacks, guard holes — M
+The regions in the table above, with per-task-index symbols. `MAX_TASKS` is
+mirrored in Rust with a `const _: () = assert!` against the linker-derived
+region count so the two cannot drift.
+
+- **Acceptance:** `nm` shows each guard hole exactly 4 KiB, each stack 8 KiB,
+  each break window 64 KiB, every user region 4 KiB-aligned, and
+  `__heap_start` still immediately above `__kernel_end`; the kernel still
+  boots to `M1 FUNDAMENTALS OK`.
+
+### T2.2 — Map the user address space; verify `U` bits in software — M
+Extend `page::build` with `LEAF_URX` / `LEAF_UR` / `LEAF_URW`. Today's
+`flags_match` requires `U=0` on every probe; make the expected `U` bit a
+per-probe field and probe every new region plus every guard hole.
+
+- **Acceptance:** the printed walk shows `U=1` on user regions, `U=0` on
+  kernel regions, and unmapped for every guard hole;
+  `just test expect="PAGETABLE OK"` passes.
+
+### T2.3 — Trap entry/exit rework — L
+Fill D-0020 block 1 with the `sscratch` swap and the branch-on-zero
+discrimination (D-0029); reload the kernel's `gp` on the U path; factor block 4
+into a `__trap_return` symbol shared by the epilogue and the first U-mode
+entry; change `trap_handler` to *return* the frame to resume (D-0032), which
+costs block 4 one `mv sp, a0`.
+
+- **Acceptance:** the whole existing suite still passes unchanged — every M1
+  trap is a trap-from-S, so `just test`, `just test-panic`, `just test-hang`,
+  and `just test-stress` exercise the S path and the `sscratch`-stays-zero
+  invariant. The deliberate `ebreak` still reports and continues (`TRAP OK`).
+
+### T2.4 — Task control block and the static task table — M
+`Task { id, state: {Ready, Running, Exited}, frame, kstack_top, ustack_top,
+brk_base, brk, brk_wall, exit_code }` in a static array. `create(id, entry)`
+fabricates the initial frame (`sepc` = entry, `SPP`=0, `SPIE`=1,
+`x[2]` = `ustack_top`, `gp` = `tp` = 0 per D-0032). No allocation anywhere in
+this path.
+
+- **Acceptance:** boot prints the table — ids, stack tops, break windows — and
+  asserts `frame == kstack_top - 272` for every task.
+
+### T2.5 — First U-mode entry — M
+`sret` into task 0, whose body immediately `ecall`s back; the dispatcher
+answers "not implemented" for now. Prints `USER OK`.
+
+- **Acceptance:** `just test expect="USER OK"` passes. Separately,
+  `just check-utext` (and `just objdump '-d --section=.utext'`) shows that
+  every symbol referenced from `.utext` resolves inside the user sections
+  (`.utext` / `.urodata` / `.udata` / `.ubss`) or a task's own stack/break
+  window. `auipc+addi` and `lui+addi` that form such an address are
+  legitimate — a real `write` needs a buffer in `.urodata`, and referencing
+  it takes one of those pairs. A `lui`/`li` immediate used as a *value*
+  (not a PC-relative symbol) is not a reference. The failure being guarded
+  against is a reference into kernel `.text` or kernel `.rodata`, not a
+  particular opcode. `gp`-/`tp`-relative access is still rejected: those
+  bases are kernel-owned (D-0032). The old "no `auipc`" reading was only
+  right while `write` was a stub and `a0 = 1` was never dereferenced.
+
+### T2.6 — Syscall ABI and `ecall`-from-U dispatch — M
+Dispatch on `EXC_ECALL_U` per D-0033: number in `a7`, arguments `a0`–`a5`,
+return pair `a0` = error / `a1` = value, written **into the frame**.
+`sepc += 4` with the no-`c.ecall` citation. An unknown number kills the task
+(D-0034) rather than panicking the kernel. Prints `SYSCALL OK`.
+
+- **Acceptance:** `just test expect="SYSCALL OK"` passes; a task calling
+  number 99 is killed with a printed diagnostic and the system stays up.
+
+### T2.7 — User-pointer validation and `SUM`-windowed copies — M
+`user_range_ok(task, ptr, len)` against that task's static intervals
+(overflow-checked, containment in user stack / live break / `.udata`+`.ubss` /
+`.urodata` for read-only sources). No page-table walk. `copy_from_user` /
+`copy_to_user` raise `SUM` only around an already-validated `memcpy`:
+validate → raise SUM → memcpy → clear SUM. Per-call cap is 4 KiB; a longer
+request returns a short count (`min(len, 4096)`), not an error. The same
+answer is what T2.8 `write` must give. A range that starts valid but runs
+past its interval is `ERR_INVALID_ADDRESS`, not a short copy of the prefix.
+
+- **Acceptance:** `just test-userptr` passes. Each invalid-pointer shape
+  is its own feature boot (`userptr-kernel-selftest`,
+  `userptr-span-selftest`) so a kill cannot hide the other; both return
+  `ERR_INVALID_ADDRESS` and kill the task (D-0034). The kernel neither
+  faults nor panics. `SUM` is clear again on the next trap (asserted at
+  dispatcher entry). The kernel address is built from immediates, not a
+  symbol reference (`just check-utext`).
+
+### T2.8 — The five syscalls — M (S each)
+`write(ptr, len) -> count` (console only, no `fd`), `exit(code)`,
+`sbrk(delta) -> old_break`, `gettime() -> raw counter`, `yield()`. Semantics
+and error codes per D-0033. A task grows its break and uses the memory;
+prints `SBRK OK`. `sbrk` past the wall **or** below `brk_base` returns
+`NO_MEM` with the break unchanged. `yield` resumes the same task until T2.9.
+
+- **Acceptance:** `just test expect="SBRK OK"` passes; `sbrk` past the wall
+  returns `NO_MEM` and leaves the break unchanged; `gettime` deltas across a
+  `write` are positive and smaller than a tick period. `just test-userptr`
+  still kills both invalid-pointer shapes.
+
+### T2.9 — Round-robin scheduler at trap exit — L
+The timer handler ends the slice (slice = one tick, D-0035) and returns the
+next `Ready` task's frame. `yield` does the same immediately. No idle loop:
+with no blocking states the ready set is empty only when every task has
+exited, which shuts down.
+
+The demo tasks make the test deterministic rather than timing-dependent: each
+spins on `gettime` until **its own** observed counter has advanced by
+`2 × PERIOD` (20 ms at 10 MHz), printing a progress line every 5 ms, then
+exits. Because `rdtime` is wall-clock at a fixed 10 MHz, a task that refuses
+to exit before 20 ms of counter advance is preempted at least twice at a 10 ms
+tick on any host, and a slower host produces *more* switches, never fewer.
+
+The kernel asserts the property itself and panics with the counts if it fails:
+both tasks `Exited`, `yields == 0` for both, and at least one switch in each
+direction. Then it prints, before `SCHED OK`:
+
+```
+task 1 done writes=4 yields=0
+task 2 done writes=4 yields=0
+sched switches 1->2=3 2->1=2 yields=0
+```
+
+- **Acceptance:** `just test expect="SCHED OK"` passes, and the recipe also
+  greps the serial log for all four of:
+  `task 1 done writes=[0-9]* yields=0`, `task 2 done writes=[0-9]* yields=0`,
+  `sched switches 1->2=[1-9]`, `2->1=[1-9]`; plus an `awk` check that the
+  first `^task 2 ` line precedes the `^task 1 done` line. Exact interleaving
+  is never asserted.
+
+### T2.10 — Contained user faults — M
+A U-mode page fault, misaligned instruction address, or bad syscall kills the
+task with `task N killed: <cause> sepc=… stval=…` and reschedules. New
+`user-fault-selftest` feature and `just test-user-fault`, in the same shape as
+`panic-selftest` and `frame-exhaust-selftest`.
+
+- **Acceptance:** `just test-user-fault` shows the faulting task killed, the
+  other task continuing to completion, and a clean shutdown — the kernel does
+  **not** panic and the recipe expects exit 0, not the inverted status the
+  panic recipes use.
+
+### T2.11 — Freeze the frame allocator — S
+`frame::freeze()` immediately before the first `sret` to U (D-0036). After it,
+`alloc_frame` / `free_frame` panic printing the request. Enforces by assertion
+what T2.1/T2.8 arrange by construction: nothing in the trap path allocates.
+
+- **Acceptance:** boot prints `frames frozen: free=N`; a deliberate
+  `alloc_frame` after freeze panics with that message. `just test-stress`
+  still passes (the storm runs before the freeze).
+
+### T2.12 — Two demo tasks and milestone wrap — M
+Two counters writing at different rates, one of them using `sbrk`, both
+exiting; the last `exit` shuts down. Marker `M2 EXECUTION OK`, harness default
+updated, GLOSSARY and DECISIONS updated. Quiz is separate.
+
+- **Acceptance:** `just test` (no arguments) passes on the new default marker.
+
+## Milestone acceptance test
+
+```
+$ just test
+```
+prints `TEST PASS: found "M2 EXECUTION OK"` and exits 0, and the serial log
+from `just run` contains, in order: the M1 markers, `frames frozen`,
+`USER OK`, `SYSCALL OK`, `SBRK OK`, the two tasks' progress lines (and the
+sbrk-backed write), both `task N exit 0` lines, both `task N done … yields=0`
+lines, the `sched switches` line, `SCHED OK`, `M2 EXECUTION OK`, then a clean
+exit 0.
+`just test-panic`, `just test-hang`, `just test-stress`, `just test-userptr`,
+`just test-user-fault`, and `just test-freeze` all still hold their verdicts.
+
+## M2 summary
+
+**Produced:** an S-mode kernel that `sret`s into U-mode tasks over a 5-syscall
+ABI, copies user pointers through a `SUM` window after a static-interval
+check, round-robins on every tick (`mv sp, a0` is the switch), kills a
+delegated U-mode fault without panicking, and freezes the frame allocator
+before the first `sret` so the trap path cannot allocate. Two demo tasks
+write at different rates; task 2 grows its break and uses the memory; the
+last `exit` shuts the machine down. Containment does not cover undelegated
+causes (illegal instruction → OpenSBI).
+
+**Acceptance proves:** `just test` finds `M2 EXECUTION OK` and exits 0.
+`just run` prints the M1 markers, then `frames frozen`, `USER OK`,
+`SYSCALL OK`, `SBRK OK`, interleaved progress with `yields=0`, both
+`task N exit 0` lines, `SCHED OK`, `M2 EXECUTION OK`, and QEMU exits 0.
+Sibling selftests keep their verdicts.
+
+**Decisions this milestone:** D-0029 `sscratch` protocol; D-0030 static
+per-task stacks with guard holes; D-0031 user map built before `satp`, no
+PTE edits after; D-0032 switch at trap exit, the trap frame *is* the task
+context; D-0033 syscall ABI; D-0034 user-pointer validation, `SUM` window,
+user faults kill the task (delegated subset only); D-0035 slice = one tick,
+no idle loop, known fairness of `SIE=0` in S; D-0036 D-0028 resolved by
+preallocation plus `frame::freeze()`.
+
+---
+
+## Risks and likely failure modes
+
+- **T2.3, `gp` clobber.** A trap from U arrives with the user's `gp`; relaxed
+  kernel static accesses inside the handler then read the wrong addresses.
+  Symptom is impossible static values far from the cause, not a fault.
+- **T2.3, `sscratch` nonzero while in S-mode.** Any window where `sscratch`
+  is nonzero during S-mode execution turns a kernel exception into a
+  frame-clobbering mess. D-0029 shrinks that window to the single `csrrw`
+  immediately before `sret`, which touches no memory and cannot fault.
+- **T2.5, wrong side of the `U` bit.** User code in a `U=0` page is an
+  instruction page fault at the task's first instruction (cause 12,
+  `sepc` = the entry point). The same mistake reaches further than expected:
+  a string literal left in kernel `.rodata` faults on the task's *load*, and a
+  compiler-emitted `memcpy` call into kernel `.text` faults on the *fetch*.
+- **T2.6, `sepc` not advanced before a switch.** If a syscall reschedules and
+  the advance happens after, the task re-executes its `ecall` on resume — an
+  infinite syscall loop that presents as a hang.
+- **T2.7, `SUM` left set.** A `SUM` window spanning anything but the validated
+  `memcpy` is ambient authority over user memory inside kernel code. Raise it
+  after validation, drop it before any formatting or dispatch.
+- **`sstatus.FS` is likely `Off`.** An FP instruction from U-mode is then an
+  illegal instruction, and code 2 is **not delegated** on this platform
+  (M1 concept 9): OpenSBI dumps it and our handler never sees it. Demo tasks
+  stay integer-only; check the boot `sstatus` snapshot before blaming the
+  scheduler.
+- **Kernel stack overflow is a silent hang, not a fault report.** 8 KiB per
+  task, a debug build, and `println!` formatting on the nested-panic path.
+  See concept 10 and D-0030; the signature is in DEBUGGING.md §4.
+- **A pending timer during a syscall is not a lost tick** (concept 3).
+  Preemption lands right after the `sret`; that is the design, not a bug.
 
 ---
 

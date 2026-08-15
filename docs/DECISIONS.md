@@ -661,3 +661,429 @@ D-0011 onward are working decisions made under those constraints.
   `Vec`, or an `alloc_frame` under `trap_handler` / `timer::on_interrupt`
   is a bug even if it appears to work. The `just test-stress` storm is
   evidence that the *current* handler is safe, not a license to grow it.
+
+## D-0029: `sscratch` holds the kernel stack top in U-mode and zero in S-mode
+- Date: 2026-08-14 — Status: accepted
+- **Decision:** `sscratch` holds the current task's kernel stack top while
+  that task executes in U-mode, and is exactly 0 whenever the hart executes
+  in S-mode. D-0020 block 1 becomes `csrrw sp, sscratch, sp` followed by
+  `bnez sp, 1f` and, on the not-taken path, a second `csrrw` that undoes the
+  first. On the U path only, the entry then stores the trapped `sp` (now in
+  `sscratch`) into the frame's `x[2]` slot and reloads the kernel's `gp` with
+  relaxation disabled. `trap::install()` writes `sscratch = 0` **before** it
+  writes `stvec`.
+- **Alternatives considered:** reading `sstatus.SPP` to discriminate
+  (rejected: `csrr` needs a destination GPR and at the first instruction of
+  the handler every GPR still holds the interrupted context — the swap has to
+  come first, and once it has, branching on the swapped-in value is free).
+  Keeping a task-control-block pointer in `sscratch` at all times, including
+  in S-mode (rejected: then a nested trap from S-mode reuses the same kernel
+  stack top and overwrites the outer frame; the zero-in-kernel convention is
+  what makes the S path self-restoring). Vectored `stvec` with separate entry
+  points (rejected: D-0020 fixed Direct mode, and this would spread the same
+  discrimination across a table).
+- **Rationale:** on a trap from U-mode all 31 GPRs still hold user values,
+  `sp` included, and S-mode stores to `U=0` pages are legal — so a frame
+  pushed at the trapped `sp` lets a task nominate kernel memory as the spill
+  target and the hardware will not stop it. `sscratch` is the only
+  architectural slot the handler owns. The `gp` reload is not cosmetic:
+  `_start` loads `gp` with `norelax` precisely so the linker may relax kernel
+  absolute loads into `gp`-relative ones, so kernel Rust reached from a
+  trap-from-U with the user's `gp` reads the wrong addresses, with no fault and
+  no proximity to the cause. `tp` needs no such reload — it is the thread
+  pointer, used only for thread-locals, which `no_std` without TLS never
+  emits, so the kernel never reads it and saving/restoring it as an ordinary
+  GPR is sufficient.
+- **Exit-path ordering is part of this decision.** Any instruction executed
+  while `sscratch` holds the *user* `sp` in S-mode would misclassify a kernel
+  exception as a trap-from-U and push a frame at that address. The exit
+  therefore writes user `sp` into `sscratch` as late as it can: after all
+  GPRs except `t0` are restored, and after `addi sp, sp, 272` (which
+  reconstructs the pre-trap `sp` on the S path and yields `kstack_top` on
+  the U path), a branch on saved `sstatus.SPP` covers the two `sscratch`
+  instructions. The S path restores `t0` and `sret` with `sscratch` still 0.
+  The U path is:
+
+      ld      t0, -256(sp)       # x[2] = user sp; sscratch still 0
+      csrw    sscratch, t0       # park — window starts
+      ld      t0, -232(sp)       # restore t0 from the frame
+      csrrw   sp, sscratch, sp   # swap; sscratch = kstack_top
+      sret
+
+  The S-mode-with-user-`sscratch` window is **three instructions, not one**.
+  It cannot be shorter: `t0` must be reloaded from the frame *before* the
+  `csrrw`, because afterward `sp` points at the user stack and the frame is
+  no longer at a known offset from `sp`, and every other GPR already holds
+  the interrupted context so there is no spare register to hoist the load.
+  The `ld` can only fault if the kernel stack is already blown, which is
+  the D-0030 unrecoverable hang — so the window is **safe but not
+  fault-free**. `csrw` / `csrrw` touch no memory. After the swap, `sret`
+  also runs with `sscratch != 0`, but that value is `kstack_top` (the
+  U-mode-ready one) and `sret` cannot fault. `x[2]` stays in the frame as
+  the diagnostic copy the panic printer already reports.
+- **Consequences:** `sscratch = 0` is now a kernel-wide invariant that any
+  future S-mode code path must preserve; the boot CSR snapshot prints
+  `sscratch` so firmware garbage is visible rather than assumed. The S path
+  costs one extra `csrrw` on every kernel-side trap, which is the price of
+  needing no scratch register.
+
+## D-0030: Per-task kernel and user stacks are static and linker-placed, with guard holes
+- Date: 2026-08-14 — Status: accepted
+- **Decision:** each of `MAX_TASKS` (4) task slots gets an 8 KiB kernel stack
+  and an 8 KiB user stack, both NOLOAD and placed by the linker script between
+  the boot stack and `__kernel_end`, each with a 4 KiB unmapped guard hole
+  immediately below it. Task creation allocates nothing.
+- **Alternatives considered:** kernel stacks from `frame::alloc_frame()` at
+  task creation (rejected on a property of *our* allocator: the free list is
+  LIFO over an intrusive list (D-0019), so two frames are not adjacent — an
+  8 KiB stack needs contiguity and a guard needs the frame numerically below
+  the stack, neither of which the allocator can promise. Making it promise
+  them means adding a contiguous-run allocator to serve one caller, which
+  D-0014 loses). A single 4 KiB kernel stack per task to avoid the contiguity
+  question (rejected: debug builds plus `println!` formatting plus the
+  nested-panic path do not fit comfortably, and the failure mode is the silent
+  hang below). One shared kernel stack for all tasks (rejected: it only works
+  if no task is ever suspended with kernel state live, which is true under
+  D-0032 today — but it would make D-0032 load-bearing for memory safety
+  rather than for scheduling policy, and M3 would inherit that coupling).
+- **Rationale:** static placement buys contiguity and guard holes from the
+  linker the same way `.boot_stack` already does (D-0016), and it makes task
+  creation allocation-free, which is most of D-0036's answer. It also
+  establishes the invariant the trap path depends on: **a task's kernel stack
+  is empty whenever that task is in U-mode**, so `sscratch` is a constant per
+  task and the frame always lands at `kstack_top - 272`.
+- **Kernel stack overflow is NOT handled, and the guard does not make it a
+  diagnostic.** Trace it: the overflowing store raises a store page fault from
+  S-mode, so `sscratch` is 0, so trap entry keeps the faulting `sp` — already
+  inside the guard hole — and block 2's `addi sp, sp, -272` plus its stores go
+  through the same hole and fault again. That re-enters `__trap_entry`
+  identically, forever. Rust is never reached, so the panic printer and its
+  `IN_PANIC` guard never run: **no output, no `scause`, nothing.** This is the
+  fault-the-fault-forever case from M1/T1.2 (DEBUGGING.md §4, M1 item 4). The
+  guard therefore converts silent corruption of a neighbouring task's stack
+  into a silent hang — the damage stops, but nothing is reported. One further
+  bound: the guard only guarantees even that much while the overflowing stack
+  frame is smaller than the 4 KiB hole; a single frame larger than the guard
+  can step clear over it and land the entry's 272-byte push in mapped memory
+  below, which is silent corruption again.
+- **The standard fix, which M2 does not implement:** a separate double-fault
+  stack — on every trap from S-mode, range-check `sp` against the current
+  task's kernel stack bounds and switch to a reserved emergency stack when it
+  is out of range, so the fault report has somewhere to run. x86 does this in
+  hardware (IST); RISC-V S-mode has no equivalent, and there is only one
+  `sscratch`, so the second slot would have to be a fixed memory location
+  reached by an absolute or `gp`-relative load, plus a comparison, on every
+  kernel-side trap. That is a real cost in the hottest path to diagnose a bug
+  that should be prevented by keeping frames small. Revisit if a kernel stack
+  overflow ever actually costs a debugging session.
+- **Consequences (including an M4 threat to validity):** the reserved
+  footprint is 8 KiB user stack + 8 KiB kernel stack + two 4 KiB guards +
+  64 KiB break window (D-0031) ≈ **88 KiB per task slot**, ~352 KiB for
+  `MAX_TASKS = 4`, all NOLOAD. That does not inflate the image, but it *is*
+  physical RAM committed up front, so the guest-reported memory footprint M4
+  measures against a demand-paged Linux is higher than a fault-driven design
+  would report. **M4's report must state this as a methodology difference
+  rather than discover it in the numbers:** we commit stacks and break windows
+  at link time; Linux reserves address space and populates on fault, so the
+  fair comparison is either against Linux's resident set or accompanied by an
+  explicit note that our number is a reservation, not a working set.
+  Signature and first-response for the overflow hang are in DEBUGGING.md §4.
+
+## D-0031: Separate user sections with the `U` bit; no PTE edits after activation
+- Date: 2026-08-14 — Status: accepted
+- **Decision:** user code and data live in their own linker sections —
+  `.utext` (R+X+U), `.urodata` (R+U), `.udata`/`.ubss` (R+W+U) — plus per-task
+  user stacks and a 64 KiB per-task break window (R+W+U). All of it is mapped
+  by `page::build` at boot, beside the kernel map. **No page-table entry is
+  edited after `page::activate`.**
+- **Alternatives considered:** marking existing identity-mapped frames `U=1`
+  at task creation with a new `page::set_user(va)` (rejected: it needs a
+  remap path — today's `map` panics on remap by design (D-0026) — plus an
+  `sfence.vma` site, and it puts page-table mutation in the same milestone
+  that puts allocation near the trap path; D-0036 wants the opposite
+  direction). Placing user code in kernel `.text` and setting `U=1` there
+  (impossible, not merely undesirable: S-mode cannot fetch from a `U=1` page,
+  so the kernel would stop being able to execute its own text). A kernel
+  alias mapping of user buffers at a second `U=0` virtual address so the
+  kernel could read them without `SUM` (rejected: it breaks VA = PA for those
+  pages and reintroduces the two-views-of-one-buffer bookkeeping a single
+  address space (D-0006) exists to avoid, to save two CSR writes).
+- **Rationale:** the `U` bit is per-PTE and per-page, so "user code" is a
+  placement question before it is a permission question — the sections are the
+  minimal way to answer it. Building the whole map at boot keeps the one
+  hard-won property from M1 intact: the address space is validated in software
+  (T1.6/T2.2) *before* anything runs on it, and it never changes afterwards,
+  so there is no TLB-shootdown story and no mapping code reachable from a trap.
+- **Consequences:** demo tasks must be written so every symbol referenced
+  from `.utext` resolves inside the user sections or the task's own
+  stack/break window — no string literals landing in kernel `.rodata`, no
+  compiler-emitted `memcpy` call into kernel `.text`, no `gp`/`tp`-relative
+  access. `just check-utext` enforces that by resolving `jal`/`auipc+addi`
+  (and friends) against those ranges; it does **not** ban `auipc` or `lui`.
+  Those instructions are how a legitimate `.urodata` buffer is addressed.
+  A `lui` immediate used as a value (a kernel address passed to `write`)
+  is not a symbol reference. T2.5 used to read this as "no `auipc`", which
+  was only right while `write` was a stub. The 64 KiB break window per
+  task is part of the ~88 KiB static reservation recorded in D-0030,
+  including its M4 threat-to-validity note.
+  **Defense in depth on the break:** `__ubrkN_wall` is the same address as
+  `__kstackN_guard`. A `sbrk` bound-check bug that hands out one page past
+  the wall therefore lands in the kernel stack's unmapped guard (a store
+  page fault from U-mode, which T2.10 kills as a task) rather than in the
+  kernel stack itself (`U=0`, S-mode writable). That is not a substitute
+  for the software check; it is what makes a missed check a contained
+  U-mode fault instead of kernel-stack corruption. M3 replaces the
+  in-kernel demo tasks with an app crate linked into these same sections;
+  that is a build-integration change, not a mapping change.
+
+## D-0032: Switch at trap exit; the trap frame *is* the task context
+- Date: 2026-08-14 — Status: accepted
+- **Decision:** `trap_handler` changes from taking `&mut TrapFrame` to
+  *returning* the frame to resume; block 4 gains `mv sp, a0` before the
+  restore sequence. A context switch is therefore "the handler returned a
+  different frame pointer than it was given". There is no `swtch`-style
+  assembly routine and no second saved-context format: the task control block
+  stores no register state, only where its frame lives. The fabricated frame
+  for a new task sets `sepc` = entry, `sstatus.SPP` = 0, `SPIE` = 1,
+  `x[2]` = `ustack_top`, and `gp` = `tp` = 0.
+- **Alternatives considered:** an xv6-style
+  `switch(&mut old_ksp, new_ksp)` that saves callee-saved registers and `ra`
+  on the kernel stack and returns into a different function than it was called
+  from (rejected for M2: it buys the ability to suspend a task *mid-kernel*,
+  and no M2 syscall can block — `write` completes into DBCN, `gettime` is one
+  `rdtime`, `sbrk` moves a pointer, `yield` and `exit` are scheduler
+  operations. It costs a second context format to explain, a synthetic switch
+  frame with a fake `ra` for new tasks, and the mind-bender that makes it a
+  reading session rather than a paragraph). Storing the user context in the
+  TCB and copying it in and out of the frame (rejected: the copy is pure
+  overhead — the frame is already a complete context — and it creates two
+  places where a register lives).
+- **Rationale:** hardware clears `sstatus.SIE` on trap entry and we never set
+  it (D-0020), so kernel code is never preempted; with no blocking syscall, a
+  task's kernel work always runs to completion. Those two facts mean there is
+  exactly one point in the system where a task can lose the CPU — the trap
+  epilogue — which is precisely the point where its entire context already
+  sits in one 272-byte structure at a known address (`kstack_top - 272`,
+  D-0030). Returning a pointer keeps all scheduling policy in Rust and leaves
+  the assembly one instruction longer. `gp` and `tp` are zeroed in the
+  fabricated frame for the same reason: if user code ever does emit a
+  `gp`- or `tp`-relative access, it faults near address 0 immediately instead
+  of silently reading kernel data through a register the kernel owns.
+- **Consequences:** the handler must have no live Rust state on the outgoing
+  task's kernel stack when it returns — it does not: it returns normally, its
+  epilogue pops its frames, and only then does block 4 move `sp`. Dead frames
+  left below the outgoing task's trap frame are never touched again, because
+  resuming that task sets `sp` to its frame at the top of its stack. **The
+  known upgrade:** if M3 adds a blocking operation, this design has to become
+  the separate save path, and that is a change rather than an addition. The
+  mitigation is structural and free — keep "choose the next task" (policy)
+  in a function separate from "resume this frame" (mechanism) so a second
+  resume path can be added without touching the scheduler. M3 also has the
+  option of polling virtio in the task's own context, which keeps this design.
+
+## D-0033: SBI-shaped syscall ABI — number in `a7`, `a0` error and `a1` value
+- Date: 2026-08-14 — Status: accepted
+- **Decision:** the syscall number is in `a7`, arguments in `a0`–`a5`, and the
+  return is a pair: `a0` = error (0 on success), `a1` = value — written into
+  the trap frame, not into registers, because the epilogue restores from the
+  frame. Numbering starts at 1: 1 `write`, 2 `exit`, 3 `sbrk`, 4 `gettime`,
+  5 `yield`; **0 is reserved and invalid**. Signatures:
+  `write(ptr, len) -> count` (console only, no `fd`), `exit(code)` (does not
+  return), `sbrk(delta) -> old_break` (0 queries, negative shrinks, past the
+  wall returns `NO_MEM` with the break unchanged), `gettime() -> raw time
+  counter`, `yield()`. `sepc` advances by the constant 4, citing that RVC has
+  `c.ebreak` but no `c.ecall`.
+- **Alternatives considered:** a Linux-style single-register return with small
+  negative errors in `a0` (rejected: it forces an argument that no legitimate
+  return value can look like an error, which here is true only because of our
+  memory map — a property of the platform, not of the ABI. The pair costs one
+  register and removes the question). Reusing SBI's exact numeric error codes
+  (rejected: SBI's list does not contain the errors we need, and a false
+  identity is worse than an honest analogy — so the *shape* is SBI's, the
+  numbering is ours). A reserved `fd`-like first argument to `write` so M3's
+  socket multiplexing would be ABI-compatible (rejected: it is a hook for a
+  future milestone, which the standing rules forbid, and the cost of changing
+  the ABI later is one edit in the single in-tree caller). `gettime` returning
+  nanoseconds (rejected: it hides the 10 MHz timebase that D-0012 makes an
+  explicit platform constant, and the app can multiply; the raw counter is
+  also exactly what the kernel arms the timer with, and 100 ns resolution is
+  what M4's latency bracketing wants).
+- **Rationale:** the kernel has spoken this convention since M0 — EID/FID in
+  `a7`/`a6`, arguments in `a0`–`a5`, `(error, value)` back — so mirroring it
+  means one calling convention in the whole system, which is both a legibility
+  win and a good interview answer ("our syscall ABI is the ABI our kernel
+  itself calls"). Starting the numbering at 1 is the fail-loudly choice: a
+  wild jump with a zeroed `a7` lands on "invalid syscall 0" rather than
+  silently being `write`.
+- **Consequences:** `a1` is clobbered on every syscall return, which the user
+  side must know. The five-call wall (D-0010) is unchanged: a need not
+  expressible here becomes a decision entry, not a sixth number. M3 will
+  likely revisit `write`'s single sink.
+
+## D-0034: Validate user pointers against static intervals; `SUM` only around a validated copy; user faults never panic the kernel
+- Date: 2026-08-14 — Status: accepted
+- **Decision:** every user pointer crossing the syscall boundary is checked by
+  `user_range_ok(task, ptr, len)`: reject on `checked_add` overflow, then
+  require full containment in one of that task's static intervals — its user
+  stack, the live part of its break window, `.udata`+`.ubss`, or `.urodata`
+  for read-only sources. `sstatus.SUM` is raised **after** validation, only
+  around a `memcpy` inside `copy_from_user` / `copy_to_user`, with a 4 KiB
+  per-call cap, and dropped before any formatting or dispatch. A U-mode fault,
+  an invalid pointer, or an unknown syscall number **kills the task** — print
+  `task N killed: <cause> sepc=… stval=…`, mark it `Exited`, reschedule — and
+  never panics the kernel.
+- **Alternatives considered:** walking the page table per page and requiring
+  `U=1` (rejected: that is what a kernel with a dynamic address space must do;
+  here every user interval is fixed by the linker plus one TCB field, so the
+  walk re-derives a known fact at O(len/4096) instead of O(1)). Trusting the
+  hardware to catch bad pointers (rejected because it cannot: see the
+  rationale). Panicking on a bad user pointer (rejected: if a U-mode task can
+  take the machine down, the U/S boundary M2 exists to build is decorative).
+- **Rationale:** the `U` bit protects user → kernel and nothing else. With
+  `SUM=1` the kernel may read `U=1` pages, and it could always read `U=0`
+  pages, so a copy loop will faithfully read kernel `.bss` if the task names
+  that address — there is no hardware check to enable, and with paging on
+  there is no physical back door either, because every S-mode load goes
+  through the same translation and the same check. Validation is software or
+  it does not exist. Bounding the `SUM` window matters for the same reason in
+  reverse: while it is up, every kernel bug that dereferences a wild pointer
+  into user memory succeeds instead of faulting, so the window contains a
+  `memcpy` and no decisions. The fail-loudly rule still applies where it
+  belongs — a violated *kernel* invariant panics; a misbehaving *task* is a
+  contained, reported condition, which is the whole point of the privilege
+  boundary.
+- **Consequences:** the last line of defence is unchanged — if validation is
+  correct the kernel never faults on a user pointer, and if it is wrong the
+  result is a kernel page fault, which panics loudly with `scause`/`stval`.
+  `just test-user-fault` asserts the containment: the faulting task dies, the
+  other one finishes, and the run exits 0. Every new interval a task can own
+  (M3's app sections) must be added to the validator, or legitimate pointers
+  start failing.
+
+  **"User faults never panic the kernel" holds only for the delegated
+  subset.** OpenSBI sets `MEDELEG = 0xf0b509`, so codes 1, 2, 4, 5, 6, 7, 9
+  never reach S-mode (PLAN M1 concept 9). Cause 2 — illegal instruction —
+  is the one a task can actually raise: `unimp`, or an FP op with `FS=Off`
+  (fabricated `sstatus` leaves FS Off, D-0032). That trap goes to M-mode.
+  OpenSBI dumps `mcause`/`mepc`/`mtval` and parks the hart. Our handler
+  never runs, so there is no `task N killed` line and no reschedule; the
+  machine looks dead. That is outside our containment **by platform design,
+  not by choice** — we do not control `medeleg`. Symptom and first-response
+  are in DEBUGGING.md §4 (M2). The user-fault selftest therefore loads from
+  VA 0 (cause 13, delegated) rather than executing `unimp`.
+
+## D-0035: One tick per slice; no idle loop in M2
+- Date: 2026-08-14 — Status: accepted
+- **Decision:** the timeslice is exactly one timer interrupt at the existing
+  10 ms period (D-0018) — the handler switches on every tick, so no per-task
+  tick counter exists. There is no idle loop and no `Blocked` task state.
+- **Alternatives considered:** a multi-tick slice with a counter in the TCB
+  (rejected for now: it is a policy knob with no M2 requirement behind it;
+  "the slice is the tick" is one sentence and one fewer field). Shortening
+  the period to 1 ms for finer preemption (rejected: unnecessary for a demo
+  that must show interleaving inside a 3 s hang-guard — and `just test-stress`
+  already proved the allocators survive 1 ms ticks, so this stays available at
+  no risk). A `wfi` idle task (rejected: unreachable — see rationale).
+- **Rationale:** with no blocking syscall there is no state in which a task is
+  unrunnable but not finished, so the ready set is empty only when every task
+  has exited, and that path shuts the machine down from the last `exit`. An
+  idle loop would be code no test could reach, which the standing rule against
+  implementing beyond the milestone forbids. A task that yields while it is
+  the only runnable one simply gets the CPU back from round-robin.
+- **Consequences:** `kmain` never returns once the first task starts, so the
+  boot stack is dead from that point and `park()` after it is unreachable.
+  The moment M3 introduces a blocking operation, both halves of this entry
+  reopen together: a `Blocked` state and an idle loop arrive with it, and
+  D-0032's resume path is the third piece.
+
+  **Known fairness property, not a bug.** A syscall-heavy task gets more CPU
+  than a compute-heavy one under "slice = one tick". Kernel code runs with
+  `SIE = 0` (D-0020), so a pending `STIP` cannot preempt until `sret`. The
+  tick is not lost — it fires immediately after `sret` (PLAN M1 concept 3) —
+  but the slice has already been stretched by however long the syscall ran.
+  Two standard fixes we are **deliberately not doing:**
+  1. Charge elapsed time (`rdtime` delta) rather than ticks, so a syscall
+     that ate part of the 10 ms slice leaves the remainder.
+  2. Make the kernel preemptible (`SIE = 1` in S), so a tick can switch
+     mid-syscall.
+  Either one reopens D-0020 / D-0028 / D-0036. M2 keeps tick accounting.
+
+## D-0036: Resolve D-0028 by preallocation, enforced with `frame::freeze()`
+- Date: 2026-08-14 — Status: accepted (resolves D-0028 for M2)
+- **Decision:** M2 takes D-0028's third option — preallocate everything the
+  trap path could need, so the "trap handlers must not allocate" invariant
+  holds by construction — and enforces it with `frame::freeze()`, called
+  immediately before the first `sret` into U-mode. After the freeze,
+  `alloc_frame` and `free_frame` panic printing the request. We do **not**
+  mask `sstatus.SIE` around frame-list mutation, and we do not add a
+  frame-side re-entry detector. Allocator logic is unchanged; the heap keeps
+  its existing `IN_ALLOC` detector.
+- **Two independent reasons the hazard disappears in M2. They fail
+  independently, which is why both are recorded:**
+  1. **Nothing in the trap path allocates.** Kernel stacks and user sections
+     are static and linker-placed (D-0030, D-0031); the map is complete before
+     activation and never edited (D-0031); `sbrk` moves a pointer inside a
+     preallocated 64 KiB window. The frame allocator is used only by
+     `page::build` at boot. **Broken by:** M3 unfreezing to allocate virtio
+     buffers, or any new syscall that backs memory on demand.
+  2. **After the first `sret`, no kernel code runs with `SIE = 1` at all.**
+     `kmain` never returns (D-0035), so from that point kernel code executes
+     only inside trap handlers, where hardware cleared `SIE` and we never set
+     it (D-0020). There is no interruptible kernel-side allocator caller left
+     to be interrupted. The storm's 20 timer interrupts landed inside
+     `alloc_frame` only because `kmain` ran with interrupts enabled.
+     **Broken by:** any future kernel-side loop that runs with `SIE = 1` — an
+     idle loop that polls, a boot-like phase re-entered later, or M3 polling
+     virtio in kernel context with interrupts on.
+- **Alternatives considered:** masking `SIE` around the frame-list mutation
+  (rejected as M2's answer, and the cost was not the reason: the critical
+  section is three instructions in `alloc_frame` — the 4 KiB zeroing stays
+  outside it — and two stores in `free_frame`, so the tick jitter is
+  nanoseconds. It was rejected because it is the only option that *authorizes*
+  allocation from a handler while protecting just one of the structures such a
+  handler would touch: a handler that pops a frame while the interrupted code
+  was midway through `page::map` corrupts the page table, which no lock on the
+  free list protects, and a handler that hits exhaustion panics in interrupt
+  context, which is a dead machine rather than a diagnostic. It buys real
+  atomicity for one structure and false confidence about the operation).
+  A frame-side re-entry detector mirroring `IN_ALLOC` (rejected as
+  unnecessary while frozen: the freeze asserts the invariant globally instead
+  of catching one failure shape, and it is the stronger check — but the
+  detector is the natural fallback the moment M3 unfreezes). Freezing the
+  kernel heap too (rejected: `IN_ALLOC` already panics loudly on the shape
+  that matters, and freezing would be a claim to walk back the first time a
+  diagnostic wants a `String`).
+- **Rationale:** the storm found no allocator bug, so the evidence did not ask
+  for a lock — it asked why the invariant was unenforced. Preallocation
+  removes the hazard's precondition rather than guarding it, which is also
+  what M2's design wanted for independent reasons (static stacks come from the
+  allocator's inability to promise contiguity, D-0030). `freeze()` converts
+  "unenforced invariant held by the handler's current contents" into a loud
+  runtime assertion.
+- **Consequences:** `just test-stress` still passes because the storm runs
+  before the freeze (`stress` never calls `enter`, so it never freezes). Any
+  M3 requirement to allocate after boot must reopen this entry explicitly
+  rather than quietly calling `unfreeze()`; the likely answer there is `SIE`
+  masking plus preallocated pools, and it would amend D-0028 rather than
+  replace it. Boot prints `frames frozen: free=N` so the transition is
+  visible in every serial log.
+
+  T2.9's scheduler does not break reason 2. After `kmain` the only kernel
+  code that runs is `trap_handler` and what it calls (`preempt`, `yield_cpu`,
+  `after_exit`, syscall bodies). Hardware clears `SIE` on trap; those
+  functions return a frame pointer and never `sstatus::set(SIE)`. `sret`
+  restores `SIE` from `SPIE` in U only. There is still no interruptible
+  kernel-side allocator caller.
+
+  **67 frames consumed before freeze.** `frames frozen: free=N` compared
+  with the `FRAME OK` total is a gap of 67 on the default image: 65 page
+  tables plus 2. The 65 are `page::tables_used()` — one Sv39 root, one L1
+  (VPN[2]=2 covers `0x8000_0000..0xC000_0000`; we do not allocate an L0 for
+  the unmapped OpenSBI 2 MiB at `0x8000_0000`), and 63 L0 tables for
+  `0x8020_0000..0x8800_0000`. The other two are the `FRAME OK` self-test's
+  leftover pair: it allocates `a` and `b`, frees `a`, reallocates `c==a`,
+  and never frees `b` or `c`. That is a deliberate LIFO check, not a leak
+  to plug; freeze then pins them. Feature images can print a different
+  `FRAME OK` total (`__heap_end` moves with code size) — `just test-stress`
+  compares exhaust's panic against **that boot's** `FRAME OK` line, not
+  against `just run`.

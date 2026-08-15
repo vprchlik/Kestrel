@@ -1,7 +1,8 @@
 //! Supervisor CSRs this kernel reads and writes.
 //!
 //! Owns the only `csrr`/`csrw`/`csrs`/`csrc` path for `sstatus`, `sie`, `sip`,
-//! `stvec`, `scause`, `sepc`, `stval`, `satp`, and the read-only `time` counter.
+//! `stvec`, `sscratch`, `scause`, `sepc`, `stval`, `satp`, and the read-only
+//! `time` counter.
 //! Trap setup, interrupt enable, paging, and the timer all go through here;
 //! without it each of those would grow its own copy of the same four
 //! instructions. Accessors are `#[inline(always)]` so a debug build still
@@ -103,6 +104,8 @@ rw_csr!(sstatus, write_opts: [nostack, preserves_flags], {
     pub const MXR: usize = 1 << 19;
     /// User XLEN, bits 33:32. §4.1.1. Value `2` means UXLEN = 64.
     pub const UXL: usize = 0b11 << 32;
+    /// `sstatus.UXL` field value 2: UXLEN = 64. §4.1.1.
+    pub const UXL_64: usize = 2 << 32;
     /// Dirty: FS/XS/VS some-dirty summary. §4.1.1, bit 63 on RV64.
     pub const SD: usize = 1 << 63;
 });
@@ -134,6 +137,10 @@ rw_csr!(stvec, write_opts: [nomem, nostack, preserves_flags], {
     /// Vectored: interrupts jump to BASE + 4 × cause. §4.1.2.
     pub const MODE_VECTORED: usize = 1;
 });
+
+// sscratch: trap-handler scratch. Privileged spec 20211203 §4.1.1.
+// D-0029: kernel stack top in U-mode, 0 in S-mode.
+rw_csr!(sscratch, write_opts: [nomem, nostack, preserves_flags]);
 
 rw_csr!(scause, write_opts: [nomem, nostack, preserves_flags], {
     /// Interrupt vs exception. Privileged spec 20211203 §4.1.8, bit SXLEN-1.

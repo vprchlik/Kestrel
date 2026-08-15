@@ -1,4 +1,4 @@
-//! Kestrel — a minimal rv64gc unikernel for QEMU virt, booted via OpenSBI.
+//! Whimbrel — a minimal rv64gc unikernel for QEMU virt, booted via OpenSBI.
 //!
 //! OpenSBI enters `_start` in S-mode with `a0` = hartid and `a1` = physical
 //! address of the device tree blob. `_start` sets `gp` and `sp`, zeros `.bss`,
@@ -7,8 +7,8 @@
 //! deliberate `ebreak`, waits for 30 timer ticks, runs a frame-allocator
 //! self-test, builds Sv39 page tables and walks them in software
 //! (`PAGETABLE OK`), activates Sv39 (`PAGING OK`), runs a heap self-test
-//! (`HEAP OK`), and `M1 FUNDAMENTALS OK`, then asks OpenSBI to shut the machine
-//! down. A panic prints `PANIC at file:line: message` and parks.
+//! (`HEAP OK`), and `M1 FUNDAMENTALS OK`. M2 then `sret`s into U-mode tasks,
+//! prints `M2 EXECUTION OK`, and asks OpenSBI to shut the machine down.
 
 #![no_std]
 #![no_main]
@@ -23,8 +23,12 @@ mod page;
 mod sbi;
 #[cfg(feature = "stress")]
 mod stress;
+mod syscall;
+mod task;
 mod timer;
 mod trap;
+mod uaccess;
+mod user;
 
 use core::arch::{asm, global_asm};
 
@@ -75,22 +79,24 @@ _start:
 /// 10 ms ticks, continues past an `ebreak` (`TRAP OK`), waits for `tick 30`,
 /// checks the DTB then the frame allocator (`FRAME OK`), builds page tables
 /// without writing `satp` (`PAGETABLE OK`), activates Sv39 (`PAGING OK`),
-/// runs the heap self-test (`HEAP OK`), and `M1 FUNDAMENTALS OK`, then shuts
-/// down via SRST. The `panic-selftest` / `hang-selftest` features
-/// divert that path so the harness can exercise FAIL and HANG without
-/// editing this file.
+/// runs the heap self-test (`HEAP OK`), and `M1 FUNDAMENTALS OK`, then
+/// `sret`s into U-mode (D-0035: does not return). The `panic-selftest` /
+/// `hang-selftest` features divert that path so the harness can exercise
+/// FAIL and HANG without editing this file.
 #[no_mangle]
 extern "C" fn kmain(hartid: usize, dtb_pa: usize) -> ! {
     sbi::require_dbcn();
-    println!("kestrel: hello from hart {}, dtb at {:#x}", hartid, dtb_pa);
+    println!("whimbrel: hello from hart {}, dtb at {:#x}", hartid, dtb_pa);
     {
         let sstatus = csr::sstatus::read();
         let sie = csr::sie::read();
         let stvec = csr::stvec::read();
+        let sscratch = csr::sscratch::read();
         let satp = csr::satp::read();
         println!("sstatus {:#x}", sstatus);
         println!("sie {:#x}", sie);
         println!("stvec {:#x}", stvec);
+        println!("sscratch {:#x}", sscratch);
         println!("satp {:#x}", satp);
         if satp != 0 {
             panic!("satp={:#x}, expected Bare (0)", satp);
@@ -98,6 +104,7 @@ extern "C" fn kmain(hartid: usize, dtb_pa: usize) -> ! {
         println!("CSR OK");
     }
     trap::install();
+    println!("sscratch {:#x}", csr::sscratch::read());
     timer::init();
     #[cfg(feature = "panic-selftest")]
     panic!("selftest");
@@ -134,6 +141,8 @@ extern "C" fn kmain(hartid: usize, dtb_pa: usize) -> ! {
         frame::check_dtb(dtb_pa);
         frame::init();
         frame::self_test();
+        task::check_layout();
+        task::init();
         page::init();
         page::activate();
         heap::init();
@@ -148,7 +157,34 @@ extern "C" fn kmain(hartid: usize, dtb_pa: usize) -> ! {
             crate::stress::run();
             println!("STRESS OK");
         }
-        #[cfg(not(feature = "frame-exhaust-selftest"))]
+        #[cfg(not(any(
+            feature = "frame-exhaust-selftest",
+            feature = "stress",
+            feature = "freeze-selftest"
+        )))]
+        {
+            // D-0035: kmain does not return after the first sret to U.
+            #[cfg(any(
+                feature = "userptr-kernel-selftest",
+                feature = "userptr-span-selftest"
+            ))]
+            task::enter(0);
+            #[cfg(feature = "user-fault-selftest")]
+            task::enter(2);
+            #[cfg(not(any(
+                feature = "userptr-kernel-selftest",
+                feature = "userptr-span-selftest",
+                feature = "user-fault-selftest"
+            )))]
+            task::enter(1);
+        }
+        #[cfg(feature = "freeze-selftest")]
+        {
+            frame::freeze();
+            let _ = frame::alloc_frame();
+            panic!("alloc_frame after freeze returned");
+        }
+        #[cfg(feature = "stress")]
         {
             let ret = sbi::shutdown();
             println!(
@@ -167,9 +203,12 @@ static mut IN_PANIC: bool = false;
 
 /// Required by `no_std`: where `core` lands when an invariant fails.
 /// Prints location and message, then parks. Nested panics `ebreak` and park
-/// without printing.
+/// without printing. Clears `sstatus.SUM` first: a page fault inside a
+/// copy window arrives here with SUM still set, and formatting must not
+/// run with ambient user-memory authority.
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
+    csr::sstatus::clear(csr::sstatus::SUM);
     let nested = unsafe {
         if IN_PANIC {
             true

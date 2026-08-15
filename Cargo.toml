@@ -1,5 +1,5 @@
 [package]
-name = "kestrel"
+name = "whimbrel"
 version = "0.1.0"
 edition = "2021"
 
@@ -13,6 +13,14 @@ hang-selftest = []
 stress = []
 # Boot through HEAP OK, then alloc frames until the free list is empty.
 frame-exhaust-selftest = []
+# T2.7/T2.8: write a kernel address; task is killed (D-0034).
+userptr-kernel-selftest = []
+# T2.7/T2.8: write a pointer that starts valid and runs past its interval.
+userptr-span-selftest = []
+# T2.10: U-mode load page fault; the other task continues (D-0034).
+user-fault-selftest = []
+# T2.11: freeze, then a deliberate alloc_frame that must panic.
+freeze-selftest = []
 
 [dependencies]
 

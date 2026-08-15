@@ -1,4 +1,4 @@
-# Kestrel
+# Whimbrel
 
 A minimal RISC-V (rv64gc) unikernel in Rust: QEMU `virt` machine, booted via
 OpenSBI, Sv39 paging, single hart, single address space — one application
