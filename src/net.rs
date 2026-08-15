@@ -1,17 +1,18 @@
-//! virtio-net device: handshake, RX post, TX, and RX classify (D-0038, D-0040).
+//! virtio-net device: handshake, RX/TX, ARP classify and reply (D-0038, D-0040).
 //!
-//! Owns the feature negotiation, QueueReady, RX posting, the first TX
-//! (gratuitous ARP), the first RX (classify EtherType, re-post, no reply),
-//! MAC print, and `dump` / stall observability. The rings themselves stay
-//! in `virtq`. `FEATURES_OK` readback is the one place the handshake can
-//! tell us the device rejected our feature set. Without this module the
-//! NIC never leaves reset and nothing hits the wire.
+//! Owns the feature negotiation, QueueReady, RX posting, TX (gratuitous
+//! ARP and ARP replies), MAC print, and `dump` / stall / DEVICE_NEEDS_RESET
+//! observability. ARP parse and the 4-entry cache live in `arp`. The rings
+//! stay in `virtq`. `FEATURES_OK` readback is the one place the handshake
+//! can tell us the device rejected our feature set. Without this module
+//! the NIC never leaves reset and nothing hits the wire.
 
 #![cfg_attr(
     any(feature = "panic-selftest", feature = "hang-selftest"),
     allow(dead_code)
 )]
 
+use crate::arp;
 use crate::csr;
 use crate::print;
 use crate::println;
@@ -28,6 +29,9 @@ const DRIVER_OK: u32 = 4;
 /// FEATURES_OK. §2.1. The loud failure point: the device clears this if
 /// it cannot live with the features we wrote.
 const FEATURES_OK: u32 = 8;
+/// DEVICE_NEEDS_RESET. §2.1 bit 6. Once set, the device has stopped
+/// cooperating; polling `used.idx` will not recover.
+const NEEDS_RESET: u32 = 64;
 /// FAILED. §2.1.
 const FAILED: u32 = 128;
 
@@ -74,6 +78,7 @@ static mut RX_DROP_SHORT: u32 = 0;
 static mut RX_DROP_OTHER: u32 = 0;
 static mut TX_POSTED: u32 = 0;
 static mut TX_COMPLETED: u32 = 0;
+static mut TX_SEEN: u16 = 0;
 static mut STALL_ARMED_TIME: usize = 0;
 static mut STALL_USED_AT_ARM: u16 = 0;
 static mut STALL_DUMPED: bool = false;
@@ -88,7 +93,24 @@ fn write_status(base: usize, st: u32) -> u32 {
     if got & FAILED != 0 {
         panic!("virtio-net: FAILED status={got:#x} after write {st:#x}");
     }
+    if got & NEEDS_RESET != 0 {
+        panic!("virtio-net: DEVICE_NEEDS_RESET status={got:#x} after write {st:#x}");
+    }
     got
+}
+
+fn require_device(base: usize) {
+    let st = status(base);
+    if st & NEEDS_RESET != 0 {
+        dump();
+        panic!(
+            "virtio-net: DEVICE_NEEDS_RESET status={st:#x}; device has stopped cooperating"
+        );
+    }
+    if st & FAILED != 0 {
+        dump();
+        panic!("virtio-net: FAILED status={st:#x}");
+    }
 }
 
 fn read_mac(base: usize) -> [u8; 6] {
@@ -130,8 +152,20 @@ pub fn dump() {
     let tx_c = unsafe { TX_COMPLETED };
     let d_short = unsafe { RX_DROP_SHORT };
     let d_other = unsafe { RX_DROP_OTHER };
+    let tag = if st & NEEDS_RESET != 0 {
+        " DEVICE_NEEDS_RESET"
+    } else {
+        ""
+    };
     println!(
-        "net: dump status={st:#x} isr={isr:#x} rx avail={rx_a} used={rx_u} posted={rx_p} completed={rx_c} tx avail={tx_a} used={tx_u} posted={tx_p} completed={tx_c} drop_short={d_short} drop_other={d_other}"
+        "net: dump{tag} status={st:#x} isr={isr:#x} rx avail={rx_a} used={rx_u} posted={rx_p} completed={rx_c} tx avail={tx_a} used={tx_u} posted={tx_p} completed={tx_c} drop_short={d_short} drop_other={d_other} arp_drop short={} htype={} ptype={} hlen={} plen={} op={} tpa={}",
+        arp::drop_short(),
+        arp::drop_htype(),
+        arp::drop_ptype(),
+        arp::drop_hlen(),
+        arp::drop_plen(),
+        arp::drop_op(),
+        arp::drop_tpa(),
     );
 }
 
@@ -261,10 +295,12 @@ pub fn init() {
     }
     unsafe { MAC = mac };
 
+    arp::wrap_selftest();
     dump();
     poll_stall();
     // RX before GARP: slirp learns our MAC from the GARP and will not
-    // ARP. The T3.5 trigger is that ARP, so wait for it first.
+    // ARP. The T3.5 trigger is that ARP, so wait for it first. T3.6
+    // replies; a second hostfwd connect then proceeds past ARP.
     wait_rx_arp(base);
     tx_gratuitous_arp(base);
 }
@@ -279,85 +315,114 @@ fn tx_gratuitous_arp(base: usize) {
     }
     virtq::post_tx(0, TX_LEN);
     unsafe { TX_POSTED = TX_POSTED.wrapping_add(1) };
+    arm_tx_stall();
+    println!("virtio-net: TX GARP posted=1 len={TX_LEN} (hdr {VNET_HDR} + eth {ETH_MIN})");
+    virtq::notify(base, virtq::Q_TX);
+    wait_tx(base, "GARP");
+    dump();
+}
+
+fn arm_tx_stall() {
     unsafe {
         STALL_ARMED_TIME = csr::time::read();
         STALL_USED_AT_ARM = virtq::tx_used_idx();
         STALL_DUMPED = false;
     }
-    println!("virtio-net: TX GARP posted=1 len={TX_LEN} (hdr {VNET_HDR} + eth {ETH_MIN})");
-    virtq::notify(base, virtq::Q_TX);
+}
 
+/// Wait until `tx used.idx` advances past `TX_SEEN`, or ~100 ms.
+fn wait_tx(base: usize, why: &str) {
+    require_device(base);
     let t0 = csr::time::read();
-    let seen: u16 = 0;
     loop {
-        if let Some((_next, id, len)) = virtq::take_tx_used(seen) {
-            unsafe { TX_COMPLETED = TX_COMPLETED.wrapping_add(1) };
-            println!("virtio-net: TX GARP completed=1 id={id} len={len}");
-            break;
+        require_device(base);
+        let seen = unsafe { TX_SEEN };
+        if let Some((next, id, len)) = virtq::take_tx_used(seen) {
+            unsafe {
+                TX_SEEN = next;
+                TX_COMPLETED = TX_COMPLETED.wrapping_add(1);
+            }
+            println!(
+                "virtio-net: TX {why} completed={} id={id} len={len}",
+                unsafe { TX_COMPLETED }
+            );
+            return;
         }
         poll_stall();
         if csr::time::read().wrapping_sub(t0) >= STALL_TICKS {
-            println!("virtio-net: TX GARP used.idx unmoved after ~100ms");
+            println!("virtio-net: TX {why} used.idx unmoved after ~100ms");
             dump();
-            break;
+            panic!("virtio-net: TX {why} did not complete; refusing to reuse the descriptor");
         }
     }
-    dump();
 }
 
-/// Poll the RX used ring until one frame classifies as ARP, or ~2 s.
-/// Consumed buffers are re-posted (never freed). No reply — T3.6.
+/// Drain the RX used ring until we have replied to slirp's request, or
+/// panic. Consumed buffers are re-posted (never freed). A timeout here
+/// is not "try GARP anyway": without a request there is no reply, and
+/// T3.6's pcap chain never starts (D-0046).
 fn wait_rx_arp(base: usize) {
     let t0 = csr::time::read();
     loop {
+        require_device(base);
         if poll_rx(base) {
             dump();
             return;
         }
         poll_stall();
         if csr::time::read().wrapping_sub(t0) >= RX_WAIT_TICKS {
-            println!("virtio-net: RX no ARP after ~2s");
+            println!("virtio-net: RX no ARP request after ~2s");
             dump();
-            return;
+            panic!(
+                "virtio-net: no ARP request for us; slirp never asked (DRIVER_OK connect missed the window, or DEVICE_NEEDS_RESET)"
+            );
         }
-        // Timer tick wakes us; do not busy-spin the host for 2 s.
         unsafe { asm!("wfi") };
     }
 }
 
-/// Take one used RX entry if `used.idx` moved, classify, re-post.
-/// Returns true iff that frame was ARP.
+/// Drain every used RX entry. Returns true iff we transmitted an ARP reply.
 fn poll_rx(base: usize) -> bool {
-    let seen = unsafe { RX_SEEN };
-    let Some((next, id, used_len)) = virtq::take_rx_used(seen) else {
-        return false;
-    };
-    if id as usize >= virtq::RX_BUFS {
-        panic!("virtio-net: RX used id={id} >= {}", virtq::RX_BUFS);
+    require_device(base);
+    let mut took = 0u32;
+    let mut replied = false;
+    loop {
+        let seen = unsafe { RX_SEEN };
+        let Some((next, id, used_len)) = virtq::take_rx_used(seen) else {
+            break;
+        };
+        if id as usize >= virtq::RX_BUFS {
+            panic!("virtio-net: RX used id={id} >= {}", virtq::RX_BUFS);
+        }
+        unsafe {
+            RX_SEEN = next;
+            RX_COMPLETED = RX_COMPLETED.wrapping_add(1);
+        }
+        if classify_rx(base, id as usize, used_len) {
+            replied = true;
+        }
+        virtq::repost_rx(id as usize);
+        unsafe { RX_POSTED = RX_POSTED.wrapping_add(1) };
+        took += 1;
     }
-    unsafe {
-        RX_SEEN = next;
-        RX_COMPLETED = RX_COMPLETED.wrapping_add(1);
+    if took != 0 {
+        let posted = unsafe { RX_POSTED };
+        let completed = unsafe { RX_COMPLETED };
+        let inflight = posted.wrapping_sub(completed);
+        if inflight != virtq::RX_BUFS as u32 {
+            panic!(
+                "virtio-net: RX inflight {inflight} want {} (posted={posted} completed={completed}); a leaked buffer starves the device",
+                virtq::RX_BUFS
+            );
+        }
+        virtq::notify(base, virtq::Q_RX);
     }
-    let got_arp = classify_rx(id as usize, used_len);
-    virtq::repost_rx(id as usize);
-    unsafe { RX_POSTED = RX_POSTED.wrapping_add(1) };
-    let posted = unsafe { RX_POSTED };
-    let completed = unsafe { RX_COMPLETED };
-    let inflight = posted.wrapping_sub(completed);
-    if inflight != virtq::RX_BUFS as u32 {
-        panic!(
-            "virtio-net: RX inflight {inflight} want {} (posted={posted} completed={completed}); a leaked buffer starves the device",
-            virtq::RX_BUFS
-        );
-    }
-    virtq::notify(base, virtq::Q_RX);
-    got_arp
+    replied
 }
 
-/// Strip the 12-byte virtio-net header, then classify on EtherType.
-/// `used.elem.len` includes the header (unlike TX, where it was 0).
-fn classify_rx(desc_i: usize, used_len: u32) -> bool {
+/// Strip the 12-byte virtio-net header, classify EtherType, maybe reply.
+/// Returns true iff we posted an ARP reply (and waited for TX complete).
+fn classify_rx(base: usize, desc_i: usize, used_len: u32) -> bool {
     let buf = virtq::rx_buf(desc_i);
     let n = used_len as usize;
     if n < VNET_HDR + ETH_HDR || n > buf.len() {
@@ -365,8 +430,6 @@ fn classify_rx(desc_i: usize, used_len: u32) -> bool {
         println!("virtio-net: RX drop short used.len={used_len}");
         return false;
     }
-    // Device wrote [0, used_len): header then Ethernet. Do not parse
-    // the header; we declined CSUM/GSO/MRG_RXBUF.
     let frame = &buf[VNET_HDR..n];
     let etype = u16::from_be_bytes([frame[12], frame[13]]);
     if etype != ETH_TYPE_ARP {
@@ -382,7 +445,31 @@ fn classify_rx(desc_i: usize, used_len: u32) -> bool {
         frame.len()
     );
     print_hex(frame);
+    let Some(req) = arp::process(frame, &IP) else {
+        return false;
+    };
+    tx_arp_reply(base, &req);
     true
+}
+
+fn tx_arp_reply(base: usize, req: &arp::RequestForUs) {
+    let mac = unsafe { MAC };
+    {
+        let buf = virtq::tx_buf(0);
+        for b in buf.iter_mut().take(TX_LEN as usize) {
+            *b = 0;
+        }
+        arp::write_reply(&mut buf[VNET_HDR..], &mac, &IP, req);
+    }
+    virtq::post_tx(0, TX_LEN);
+    unsafe { TX_POSTED = TX_POSTED.wrapping_add(1) };
+    arm_tx_stall();
+    println!(
+        "virtio-net: TX ARP reply to {}.{}.{}.{}",
+        req.spa[0], req.spa[1], req.spa[2], req.spa[3]
+    );
+    virtq::notify(base, virtq::Q_TX);
+    wait_tx(base, "ARP reply");
 }
 
 /// Zero the virtio-net header, then Ethernet+ARP (42 bytes) padded to 60.

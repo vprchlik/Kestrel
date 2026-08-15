@@ -1399,3 +1399,54 @@ D-0011 onward are working decisions made under those constraints.
   U-mode, this entry reopens together with a TrapFrame FP-state design.
   T3.9 carries the checker work and its acceptance includes a planted
   `c.fld` being caught.
+
+## D-0045: ARP cache wraparound is exercised at init, then cleared
+- Date: 2026-08-15 — Status: accepted
+- **Decision:** the 4-entry ARP cache's wraparound eviction runs a
+  five-insert self-test at driver init (distinct synthetic IPs), asserts
+  the oldest is gone and the newest four remain, prints `ARP CACHE WRAP
+  OK`, then **clears** the table so dummy entries do not shadow the
+  gateway. slirp only ever offers one peer (10.0.2.2); a wraparound path
+  that ships unrun is an untested path.
+- **Alternatives considered:** leave wraparound untested and document it
+  (rejected: the user-facing rule is not to ship an unrun wrap; a comment
+  is not a test). Wait for five real peers (rejected: they will not
+  arrive). Keep the dummy entries after the self-test (rejected: they
+  occupy the only slots the gateway then has to evict into — a live
+  table polluted by a test).
+- **Rationale:** a 4-slot ring whose occupancy never exceeds 1 is a lie
+  about being a cache. The self-test is the same shape as `heap::self_test`
+  / `frame::self_test`: prove the invariant on every boot, then leave
+  production state clean.
+- **Consequences:** every image that reaches `net::init` prints
+  `ARP CACHE WRAP OK`. `just test` greps it. If eviction breaks, boot
+  panics before any packet.
+
+## D-0046: T3.6 ARP test does not depend on GARP teaching slirp
+- Date: 2026-08-15 — Status: accepted
+- **Decision:** the first hostfwd connect fires on `DRIVER_OK`, which is
+  printed **before** the GARP (T3.5 item 10: slirp caches a GARP and
+  then never ARPs). That connect is the ARP trigger. After the guest
+  prints `TX ARP reply`, the harness connects a **second** time. Pcap
+  asserts slirp's request, then our unicast reply, then IPv4
+  10.0.2.2→10.0.2.15 with a later frame number. The GARP still goes out
+  after the reply so T3.4's greps hold; it is not how this test teaches
+  slirp our MAC.
+- **Alternatives considered:** skip the GARP for this task (rejected:
+  T3.4 acceptance still runs on the same boot). Fire the first connect
+  after the GARP (rejected: that is the T3.5 failure — no request).
+  Treat the first connect's SYN as the "proceeds past ARP" proof
+  (rejected: the stated acceptance is a *subsequent* connect; relying
+  on slirp sending SYN on the same attempt that elicited ARP couples
+  the proof to one slirp timing). A second QEMU `-netdev` trick or a
+  static ARP on the host (rejected: extra moving parts; two connects
+  on the existing hostfwd is the same trigger T3.5 already uses).
+- **Rationale:** GARP-caching makes "one connect after DRIVER_OK"
+  order-dependent. Splitting provoke (connect #1, before GARP, must
+  ARP) from prove (connect #2, after our reply, must be IPv4) keeps
+  both halves deterministic.
+- **Consequences:** `scripts/boot-test.sh` waits for `TX ARP reply`
+  before the second `provoke-hostfwd`. `assert-pcap-arp-reply.sh`
+  fail-closes on request-only, reply-before-request, and reply-without
+  a later IPv4 frame. Panic/hang images never print `DRIVER_OK` and
+  are not provoked.

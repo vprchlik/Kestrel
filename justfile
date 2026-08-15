@@ -105,8 +105,16 @@ test expect="M2 EXECUTION OK" timeout_s="5":
             echo 'TEST FAIL: missing DRIVER_OK'
             exit 1
         fi
-        if ! grep -a -q 'tx avail=1 used=1 posted=1 completed=1' "$log"; then
-            echo 'TEST FAIL: TX GARP posted/completed is not 1/1'
+        if ! grep -a -q 'ARP CACHE WRAP OK' "$log"; then
+            echo 'TEST FAIL: missing ARP CACHE WRAP OK'
+            exit 1
+        fi
+        if ! grep -a -q 'tx avail=2 used=2 posted=2 completed=2' "$log"; then
+            echo 'TEST FAIL: TX posted/completed is not 2/2 (ARP reply + GARP)'
+            exit 1
+        fi
+        if ! grep -a -q 'TX ARP reply' "$log"; then
+            echo 'TEST FAIL: missing TX ARP reply'
             exit 1
         fi
         # This recipe is `set -u` not `set -e`. A failing assert must
@@ -130,6 +138,10 @@ test expect="M2 EXECUTION OK" timeout_s="5":
         fi
         if ! bash scripts/assert-pcap-slirp-arp.sh whimbrel.pcap; then
             echo 'TEST FAIL: pcap slirp ARP assertion'
+            exit 1
+        fi
+        if ! bash scripts/assert-pcap-arp-reply.sh whimbrel.pcap; then
+            echo 'TEST FAIL: pcap ARP reply / post-ARP IPv4 assertion'
             exit 1
         fi
         if ! grep -a -q 'task 2 exit 0' "$log"; then
@@ -296,8 +308,16 @@ test-net-init:
         echo 'TEST FAIL: missing net::dump'
         exit 1
     fi
-    if ! grep -a -q 'tx avail=1 used=1 posted=1 completed=1' serial.log; then
-        echo 'TEST FAIL: TX GARP posted/completed is not 1/1'
+    if ! grep -a -q 'ARP CACHE WRAP OK' serial.log; then
+        echo 'TEST FAIL: missing ARP CACHE WRAP OK'
+        exit 1
+    fi
+    if ! grep -a -q 'tx avail=2 used=2 posted=2 completed=2' serial.log; then
+        echo 'TEST FAIL: TX posted/completed is not 2/2 (ARP reply + GARP)'
+        exit 1
+    fi
+    if ! grep -a -q 'TX ARP reply' serial.log; then
+        echo 'TEST FAIL: missing TX ARP reply'
         exit 1
     fi
     if ! bash scripts/assert-pcap-garp.sh whimbrel.pcap; then
@@ -316,7 +336,11 @@ test-net-init:
         echo 'TEST FAIL: pcap slirp ARP assertion'
         exit 1
     fi
-    echo 'TEST PASS: DRIVER_OK, MAC, dump, GARP, RX ARP'
+    if ! bash scripts/assert-pcap-arp-reply.sh whimbrel.pcap; then
+        echo 'TEST FAIL: pcap ARP reply / post-ARP IPv4 assertion'
+        exit 1
+    fi
+    echo 'TEST PASS: DRIVER_OK, MAC, dump, GARP, RX ARP, ARP reply'
 
 # Disassemble the kernel. Extra flags as one quoted arg, e.g. just objdump '-d --source'
 objdump flags="-d": build

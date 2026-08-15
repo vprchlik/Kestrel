@@ -71,8 +71,10 @@ Read: `async:0` = exception (1 = interrupt), `cause`/`desc` = what happened,
 
 - **It's noisy.** Every SBI console byte is an `ecall` (`desc=supervisor_ecall`
   → M-mode and back). Filter: `grep -v supervisor_ecall qemu.log`.
-- `guest_errors` is gold: it reports accesses to unmapped *physical* addresses
-  (MMIO typos) that otherwise fail silently or as store faults.
+- `guest_errors` is gold for MMIO typos and unmapped *physical* addresses
+  that otherwise fail silently or as store faults. It is **not** where
+  the virtio device model reports a broken ring — that is QEMU stderr
+  (`Looped descriptor`, `in_num`/`out_num`). See M3 ladder item 1.
 - A rapidly repeating identical trap block = trap loop (see §4).
 - `-d in_asm` additionally logs every translated code block — extreme but
   definitive when you doubt the CPU is reaching your code at all.
@@ -308,13 +310,28 @@ stack, which costs a load and a comparison in the hottest path because RISC-V
 S-mode has only one `sscratch` and no hardware IST equivalent.
 
 **M3 (expand at milestone start)**
-1. Virtqueue memory not physically contiguous / wrong physical address given
-   to the device → device silently does nothing (no trap at all — the worst
-   kind; check with `-d guest_errors` and the device's status field).
-2. Missing memory barrier between writing descriptors and ringing the
+
+Silent-device ladder — work **in this order**. A dead virtqueue produces
+no trap; the first channel that can name the bug is the one to read.
+
+1. **QEMU stderr** — a distinct diagnostic channel from `-d guest_errors`.
+   The device model prints structural virtqueue complaints there and
+   nowhere else: `Looped descriptor`, `virtio-net receive queue contains
+   no in buffers`, `in_num`/`out_num` via `virtio_error` → `error_vreport`
+   (`qemu-system-riscv64: …` on the host). `-d guest_errors` is MMIO and
+   physical-access noise (write-only register reads, unmapped GPAs).
+   **`-D qemu.log` captures only `-d` items; it does not capture stderr.**
+   `just test` redirects stderr into `serial.log` (`2>&1`) — grep
+   `qemu-system-riscv64:`. This named the T3.5 WRITE-vs-NEXT bug
+   directly; `guest_errors` did not.
+2. Virtqueue memory not physically contiguous / wrong physical address
+   given to the device → device silently does nothing (no trap at all —
+   the worst kind; check with `-d guest_errors` and the device's status
+   field).
+3. Missing memory barrier between writing descriptors and ringing the
    doorbell.
-3. Legacy vs modern virtio-mmio register layout mismatch.
-4. Reading QueueDesc/QueueDriver/QueueDevice Low/High returns 0 on QEMU.
+4. Legacy vs modern virtio-mmio register layout mismatch.
+5. Reading QueueDesc/QueueDriver/QueueDevice Low/High returns 0 on QEMU.
    Those six registers are write-only (virtio 1.2 §4.2.2); QEMU logs
    `read of write-only register` under `-d guest_errors`. A zero read is
    not proof the write stuck. QueueReady (0x044) *is* readable — if it is
@@ -323,18 +340,18 @@ S-mode has only one `sscratch` and no hardware IST equivalent.
    transport** (the readback cannot distinguish it from a correct write).
    If the ring is dead in T3.3, re-derive the offsets against the spec
    table first, not last.
-5. A Status=0 soft reset (`virtio_mmio_soft_reset`) clears the queue
+6. A Status=0 soft reset (`virtio_mmio_soft_reset`) clears the queue
    address registers. Any re-init path must rewrite them before
    QueueReady. A driver that writes them once at startup and resets later
    has a dead ring with no diagnostic — `used.idx` never moves, the pcap
    stays empty.
-6. `net::dump` showing `isr=0x1` after the first used-ring update is
+7. `net::dump` showing `isr=0x1` after the first used-ring update is
    expected under polling. Virtio-mmio InterruptStatus bit 0
    (`VIRTIO_MMIO_INT_VRING`) stays set until a write to InterruptACK
    (0x064). We never ACK: the PLIC is unmapped (D-0040) and the bit is
    not how we notice work — `used.idx` is. Do not "fix" this by ACK-ing
    in the dump path; that would hide a later accidental interrupt enable.
-7. **Harness assertions fail closed, and every new one must have its
+8. **Harness assertions fail closed, and every new one must have its
    failure modes exercised before it is trusted.** A missing file, an
    empty file, a well-formed file with zero matching frames, and a
    missing tool (`tshark`, `llvm-objdump`) are four different bugs; if
@@ -346,18 +363,22 @@ S-mode has only one `sscratch` and no hardware IST equivalent.
    still printed PASS. Wrap every new assert with `if ! …; then exit 1;
    fi` (or give the recipe `set -e`). It will recur in each new test
    script — treat an untested failure mode as an unwritten assert.
-8. RX `used.idx` stuck, status gains `0x40` (`DEVICE_NEEDS_RESET`), QEMU
-   prints `Looped descriptor` and `virtqueue_pop … in_num 0 out_num 1`:
-   `VIRTQ_DESC_F_WRITE` is **2**, `NEXT` is **1**. Flagging RX buffers
-   with 1 makes the device follow `next` (often 0) around the table.
-   TX still works — those descriptors are device-readable (`flags=0`).
-   Confirm with `-trace virtqueue_pop` and QEMU stderr, not by guessing
-   at notify or offsets (TX already proved those).
-9. A hostfwd connect after our GARP does not produce an ARP request.
-   slirp caches the GARP and sends IPv4 (TCP SYN) unicast. T3.5's
-   trigger is slirp's ARP, so the guest must poll RX **before**
-   transmitting the GARP, or the slirp-ARP pcap assert fails while the
-   capture still looks "alive".
+9. RX `used.idx` stuck, status gains `0x40` (`DEVICE_NEEDS_RESET`), QEMU
+   **stderr** prints `Looped descriptor` and `virtqueue_pop … in_num 0
+   out_num 1`: `VIRTQ_DESC_F_WRITE` is **2**, `NEXT` is **1**. Flagging
+   RX buffers with 1 makes the device follow `next` (often 0) around the
+   table. TX still works — those descriptors are device-readable
+   (`flags=0`). Read stderr (item 1) before `-d guest_errors`.
+10. A hostfwd connect after our GARP does not produce an ARP request.
+    slirp caches the GARP and sends IPv4 (TCP SYN) unicast. T3.5's
+    trigger is slirp's ARP, so the guest must poll RX **before**
+    transmitting the GARP, or the slirp-ARP pcap assert fails while the
+    capture still looks "alive". T3.6 does not treat the GARP as the
+    way slirp learns us (D-0046): `DRIVER_OK` (and connect #1) still
+    precede the GARP so slirp must ARP; the harness waits for
+    `TX ARP reply` and connects again; pcap asserts IPv4 after that
+    reply. The first connect's SYN may also appear after the reply —
+    surplus, not the trigger.
 
 ## 5. QEMU monitor — inspect a hung machine *without* GDB
 
@@ -386,7 +407,9 @@ Work the list in order; each step either finds it or shrinks the search space.
 2. **`git stash` / diff against the last green commit.** What changed since
    the acceptance test last passed? (Commit at every green state precisely to
    make this step cheap.)
-3. **Rerun with `-d int,guest_errors -D qemu.log`**, grep away the `ecall`
+3. **QEMU stderr, then `-d int,guest_errors`.** Structural virtqueue
+   failures (`Looped descriptor`) print on stderr, not under `-d`. Then
+   rerun with `-d int,guest_errors -D qemu.log`, grep away the `ecall`
    noise, read the *first* abnormal trap block — later ones are usually
    fallout.
 4. **Verify the binary, not the source:** `just objdump` — is the entry where

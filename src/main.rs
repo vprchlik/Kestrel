@@ -31,6 +31,7 @@ mod uaccess;
 mod user;
 mod virtio;
 mod virtq;
+mod arp;
 mod net;
 
 use core::arch::{asm, global_asm};
