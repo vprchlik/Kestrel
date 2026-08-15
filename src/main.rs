@@ -30,6 +30,7 @@ mod trap;
 mod uaccess;
 mod user;
 mod virtio;
+mod virtq;
 
 use core::arch::{asm, global_asm};
 
@@ -147,6 +148,7 @@ extern "C" fn kmain(hartid: usize, dtb_pa: usize) -> ! {
         page::init();
         page::activate();
         virtio::probe();
+        virtq::init();
         heap::init();
         heap::self_test();
         println!("M1 FUNDAMENTALS OK");

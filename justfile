@@ -96,6 +96,10 @@ test expect="M2 EXECUTION OK" timeout_s="5":
             echo 'TEST FAIL: no virtio-mmio net device in probe table'
             exit 1
         fi
+        if ! grep -a -q 'VIRTQ OK' "$log"; then
+            echo 'TEST FAIL: missing VIRTQ OK'
+            exit 1
+        fi
         if ! grep -a -q 'task 2 exit 0' "$log"; then
             echo 'TEST FAIL: missing "task 2 exit 0"'
             exit 1

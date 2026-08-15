@@ -314,6 +314,11 @@ S-mode has only one `sscratch` and no hardware IST equivalent.
 2. Missing memory barrier between writing descriptors and ringing the
    doorbell.
 3. Legacy vs modern virtio-mmio register layout mismatch.
+4. Reading QueueDesc/QueueDriver/QueueDevice Low/High returns 0 on QEMU.
+   Those six registers are write-only (virtio 1.2 §4.2.2); QEMU logs
+   `read of write-only register` under `-d guest_errors`. A zero read is
+   not proof the write stuck. QueueReady (0x044) *is* readable — if it is
+   already 1, the device owns the ring and `verify()` is too late.
 
 ## 5. QEMU monitor — inspect a hung machine *without* GDB
 

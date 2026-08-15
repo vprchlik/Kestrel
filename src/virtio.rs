@@ -1,11 +1,12 @@
-//! Virtio-mmio transport window and discovery probe (D-0039).
+//! Virtio-mmio transport window, MMIO accessors, and discovery probe (D-0039).
 //!
 //! Owns the eight-page MMIO window constants QEMU `virt` uses for
-//! virtio-mmio, and the post-activation probe that reads Magic / Version /
-//! DeviceID in that order. `page::build` maps the window from these
-//! constants before `activate`, so D-0031's ban on later PTE edits stands.
-//! Without this module the walker has nothing to assert and a netless
-//! harness looks like a working boot.
+//! virtio-mmio, the 32-bit register accessors the virtqueue code uses, and
+//! the post-activation probe that reads Magic / Version / DeviceID in that
+//! order. `page::build` maps the window from these constants before
+//! `activate`, so D-0031's ban on later PTE edits stands. Without this
+//! module the walker has nothing to assert and a netless harness looks
+//! like a working boot.
 
 #![cfg_attr(
     any(feature = "panic-selftest", feature = "hang-selftest"),
@@ -33,16 +34,46 @@ const DEVICE_NET: u32 = 1;
 const OFF_MAGIC: usize = 0x000;
 const OFF_VERSION: usize = 0x004;
 const OFF_DEVICE_ID: usize = 0x008;
+/// Queue selector. Virtio 1.2 §4.2.2; write-only.
+pub(crate) const OFF_QUEUE_SEL: usize = 0x030;
+/// QueueReady. §4.2.2; read/write. Zero until T3.3 enables the queue.
+pub(crate) const OFF_QUEUE_READY: usize = 0x044;
+/// QueueNotify. §4.2.2; write-only.
+pub(crate) const OFF_QUEUE_NOTIFY: usize = 0x050;
+/// Descriptor table GPA, low 32 bits. §4.2.2 QueueDescLow; write-only.
+pub(crate) const OFF_QUEUE_DESC_LOW: usize = 0x080;
+/// Avail (driver) ring GPA, low 32 bits. §4.2.2 QueueDriverLow; write-only.
+pub(crate) const OFF_QUEUE_DRIVER_LOW: usize = 0x090;
+/// Used (device) ring GPA, low 32 bits. §4.2.2 QueueDeviceLow; write-only.
+pub(crate) const OFF_QUEUE_DEVICE_LOW: usize = 0x0a0;
 
 const _: () = assert!(MMIO_END == MMIO_BASE + N_TRANSPORTS * STRIDE);
 const _: () = assert!(MAGIC == u32::from_le_bytes(*b"virt"));
 
+static mut NET_BASE: usize = 0;
+
 /// Read one 32-bit MMIO register. `base` is a mapped transport; `off` is
 /// 4-byte aligned. Volatile: the device, not RAM, answers.
 #[inline]
-fn read32(base: usize, off: usize) -> u32 {
+pub(crate) fn read32(base: usize, off: usize) -> u32 {
     let p = (base + off) as *const u32;
     unsafe { core::ptr::read_volatile(p) }
+}
+
+/// Write one 32-bit MMIO register. Same volatility rule as `read32`.
+#[inline]
+pub(crate) fn write32(base: usize, off: usize, val: u32) {
+    let p = (base + off) as *mut u32;
+    unsafe { core::ptr::write_volatile(p, val) };
+}
+
+/// MMIO base of the net transport. Panics if `probe` has not found one.
+pub(crate) fn net_base() -> usize {
+    let b = unsafe { NET_BASE };
+    if b == 0 {
+        panic!("virtio::net_base before probe found a net device");
+    }
+    b
 }
 
 fn device_name(id: u32) -> &'static str {
@@ -85,7 +116,10 @@ pub fn probe() {
         }
     }
     match net_slot {
-        Some(n) => println!("virtio-mmio: net at slot {n}"),
+        Some(n) => {
+            unsafe { NET_BASE = MMIO_BASE + n * STRIDE };
+            println!("virtio-mmio: net at slot {n}");
+        }
         None => panic!(
             "virtio-mmio: no net device (device ID {DEVICE_NET}) in {N_TRANSPORTS} slots"
         ),

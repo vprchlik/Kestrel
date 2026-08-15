@@ -1158,6 +1158,22 @@ D-0011 onward are working decisions made under those constraints.
   `virtq::verify()` joins the boot cost that `fast-boot` may eventually
   strip, with the same price-of-paranoia accounting as the map verify.
 
+  **T3.2: the six queue-address registers are write-only.** Virtio 1.2
+  §4.2.2 marks QueueDesc/QueueDriver/QueueDevice Low/High as write-only.
+  QEMU 8.2 `virtio_mmio_read` returns 0 and logs `LOG_GUEST_ERROR`, so a
+  FEATURES_OK-style readback cannot catch a wrong offset or a swapped
+  high/low word on this transport — a missed write and a successful write
+  both read as 0. The load-bearing guards are: a single `write_addr`
+  helper that always stores `gpa as u32` at `off` and `gpa >> 32` at
+  `off+4` (swapped halves are unrepresentable at the call site); named
+  offsets citing the spec; and `verify()` still reading both halves, so a
+  device that implements the registers as RW panics on mismatch
+  (`wrote=… read=…; wrong offset or swapped high/low`). A zero read of a
+  nonzero write is printed as write-only MMIO, not treated as a match.
+  QueueReady is readable and must stay 0 across the write+verify window
+  — that one readback *does* work, and it is what keeps the device from
+  owning the ring while we check it.
+
 ## D-0039: Map the virtio-mmio window at build; map-then-probe
 - Date: 2026-08-15 — Status: accepted (amends D-0025; D-0031 intact)
 - **Decision:** `page::build` maps the 8-page virtio-mmio window

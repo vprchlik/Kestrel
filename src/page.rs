@@ -720,6 +720,24 @@ fn require_leaf(va: usize, r: bool, w: bool, x: bool, what: &str) {
     }
 }
 
+/// Panic unless `va` identity-maps at L0 R+W, U=0, X=0 (A=1 D=1).
+pub fn require_identity_rw(va: usize, what: &str) {
+    require_leaf(va, true, true, false, what);
+}
+
+/// Walk every page covering `[start, end)` plus the last byte.
+pub fn require_identity_rw_range(start: usize, end: usize, what: &str) {
+    if start >= end {
+        return;
+    }
+    let mut va = start & !(PAGE_SIZE - 1);
+    while va < end {
+        require_identity_rw(va, what);
+        va += PAGE_SIZE;
+    }
+    require_identity_rw(end - 1, what);
+}
+
 /// Write `satp`, `sfence.vma`, keep executing. D-0022: SIE is clear across
 /// the four-instruction window so a tick cannot vector through an unfenced
 /// translation. `sfence.vma x0, x0` is *after* the write — QEMU flushes on
