@@ -100,6 +100,10 @@ test expect="M2 EXECUTION OK" timeout_s="5":
             echo 'TEST FAIL: missing VIRTQ OK'
             exit 1
         fi
+        if ! grep -a -q 'DRIVER_OK' "$log"; then
+            echo 'TEST FAIL: missing DRIVER_OK'
+            exit 1
+        fi
         if ! grep -a -q 'task 2 exit 0' "$log"; then
             echo 'TEST FAIL: missing "task 2 exit 0"'
             exit 1
@@ -242,6 +246,29 @@ test-freeze:
         exit 1
     fi
     echo 'TEST PASS: freeze then alloc_frame panicked'
+
+# T3.3: handshake to DRIVER_OK. Feature image shuts down before U-mode.
+test-net-init:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    EXPECT="NET INIT OK" TIMEOUT_S=5 bash scripts/boot-test.sh net-init-selftest
+    if ! grep -a -q 'virtio-net: FEATURES_OK status=' serial.log; then
+        echo 'TEST FAIL: missing FEATURES_OK readback'
+        exit 1
+    fi
+    if ! grep -a -q 'DRIVER_OK' serial.log; then
+        echo 'TEST FAIL: missing DRIVER_OK'
+        exit 1
+    fi
+    if ! grep -aE -q 'virtio-net: mac [0-9a-f]{2}(:[0-9a-f]{2}){5}' serial.log; then
+        echo 'TEST FAIL: missing MAC'
+        exit 1
+    fi
+    if ! grep -a -q 'net: dump status=' serial.log; then
+        echo 'TEST FAIL: missing net::dump'
+        exit 1
+    fi
+    echo 'TEST PASS: DRIVER_OK, MAC, dump'
 
 # Disassemble the kernel. Extra flags as one quoted arg, e.g. just objdump '-d --source'
 objdump flags="-d": build

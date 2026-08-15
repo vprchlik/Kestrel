@@ -3,11 +3,11 @@
 //! Owns the page-aligned `.bss` pool (RX 16×2048, TX 8×2048, three ring
 //! structures per queue), the descriptor tables that point into it, and
 //! `verify()` — alignment, pool membership, identity map, idx == 0, and
-//! the six queue-address register readbacks. Writes those registers
-//! before `verify` and never sets QueueReady or DRIVER_OK: checking a
-//! ring the device has already been told to use is too late. Barriers
-//! live here from day one because QEMU will not catch their absence.
-//! Without this module the NIC has nowhere legal to DMA.
+//! the six queue-address register readbacks. `verify` runs after the
+//! address registers are written and before QueueReady: checking a ring
+//! the device already owns is too late. Barriers live here from day one
+//! because QEMU will not catch their absence. Without this module the
+//! NIC has nowhere legal to DMA.
 
 #![cfg_attr(
     any(feature = "panic-selftest", feature = "hang-selftest"),
@@ -22,7 +22,7 @@ use core::arch::asm;
 use core::ptr::{addr_of, addr_of_mut};
 
 /// Descriptors per queue. D-0038.
-const QSIZE: usize = 16;
+pub(crate) const QSIZE: usize = 16;
 /// RX buffers: one per RX descriptor, whole-frame, no `MRG_RXBUF`.
 const RX_BUFS: usize = 16;
 /// TX buffers. Fewer than `QSIZE`; unused TX descriptors stay addr=0.
@@ -31,9 +31,9 @@ const TX_BUFS: usize = 8;
 /// frame without chaining.
 const BUF: usize = 2048;
 /// virtio-net receiveq. Virtio 1.2 §5.1.2.
-const Q_RX: u32 = 0;
+pub(crate) const Q_RX: u32 = 0;
 /// virtio-net transmitq. §5.1.2.
-const Q_TX: u32 = 1;
+pub(crate) const Q_TX: u32 = 1;
 /// Device writes this buffer. Virtio 1.2 §2.7.5 `VIRTQ_DESC_F_WRITE`.
 const DESC_WRITE: u16 = 1;
 
@@ -342,7 +342,8 @@ fn check_queue(name: &str, q: &Queue, filled: usize) {
 
 /// Guest-side checks, then the six-register readback. Called after the
 /// address registers are written and while QueueReady is still 0.
-fn verify(base: usize, p: &Pool) {
+pub(crate) fn verify(base: usize) {
+    let p = pool();
     let (lo, hi) = pool_range();
     if lo % PAGE_SIZE != 0 {
         panic!("virtq: pool at {lo:#x} not page-aligned (repr(align(4096)) failed)");
@@ -354,9 +355,80 @@ fn verify(base: usize, p: &Pool) {
     readback_queue(base, Q_TX, &p.tx);
 }
 
-/// Fence + store `avail.idx`. Not called until T3.4; present now because
-/// a missing `fence w,w` cannot be provoked on QEMU (PLAN concept 3).
-#[allow(dead_code)]
+/// Rewrite both queues' address registers. Reset (Status=0) wipes the
+/// T3.2 programming; T3.3 calls this after FEATURES_OK.
+pub(crate) fn program_addrs(base: usize) {
+    let p = pool();
+    write_queue_addrs(base, Q_RX, &p.rx);
+    write_queue_addrs(base, Q_TX, &p.tx);
+}
+
+/// Select `q`, require QueueNumMax >= `n`, write QueueNum. Does not
+/// touch the ring.
+pub(crate) fn set_queue_num(base: usize, q: u32, n: u32) {
+    virtio::write32(base, virtio::OFF_QUEUE_SEL, q);
+    let max = virtio::read32(base, virtio::OFF_QUEUE_NUM_MAX);
+    if max < n {
+        panic!("virtq: q{q} QueueNumMax={max} want >= {n}");
+    }
+    virtio::write32(base, virtio::OFF_QUEUE_NUM, n);
+    println!("virtq: q{q} QueueNum={n} (max={max})");
+}
+
+/// QueueReady=1: the device owns the ring from this store onward.
+pub(crate) fn set_queue_ready(base: usize, q: u32) {
+    virtio::write32(base, virtio::OFF_QUEUE_SEL, q);
+    let before = virtio::read32(base, virtio::OFF_QUEUE_READY);
+    if before != 0 {
+        panic!("virtq: q{q} QueueReady={before} before enable");
+    }
+    virtio::write32(base, virtio::OFF_QUEUE_READY, 1);
+    let got = virtio::read32(base, virtio::OFF_QUEUE_READY);
+    if got != 1 {
+        panic!("virtq: q{q} QueueReady readback={got} want 1");
+    }
+}
+
+/// Post every RX descriptor to the avail ring and publish `avail.idx`.
+/// First real `fence w,w`. Does not notify — spec 3.1.1 forbids notify
+/// before DRIVER_OK.
+pub(crate) fn post_rx() -> u16 {
+    let p = pool();
+    for i in 0..RX_BUFS {
+        unsafe {
+            core::ptr::write_volatile(&mut p.rx.avail.ring[i], i as u16);
+        }
+    }
+    let idx = RX_BUFS as u16;
+    publish_avail_idx(&mut p.rx.avail, idx);
+    idx
+}
+
+pub(crate) fn notify(base: usize, q: u32) {
+    // The idx store must reach RAM before the device observes the MMIO
+    // doorbell. QEMU handles notify in the same CPU thread as the store,
+    // so a missing `fence w,o` will not fail here.
+    unsafe { asm!("fence w,o", options(nostack, preserves_flags)) };
+    virtio::write32(base, virtio::OFF_QUEUE_NOTIFY, q);
+}
+
+pub(crate) fn rx_avail_idx() -> u16 {
+    unsafe { core::ptr::read_volatile(&pool().rx.avail.idx) }
+}
+
+pub(crate) fn tx_avail_idx() -> u16 {
+    unsafe { core::ptr::read_volatile(&pool().tx.avail.idx) }
+}
+
+pub(crate) fn rx_used_idx() -> u16 {
+    load_used_idx(&pool().rx.used)
+}
+
+pub(crate) fn tx_used_idx() -> u16 {
+    load_used_idx(&pool().tx.used)
+}
+
+/// Fence + store `avail.idx`. First used when posting RX (T3.3).
 fn publish_avail_idx(avail: &mut Avail, idx: u16) {
     // Descriptor and `avail.ring[]` stores must be visible to the device
     // before it observes the new idx. QEMU's device model is synchronous
@@ -366,24 +438,11 @@ fn publish_avail_idx(avail: &mut Avail, idx: u16) {
     unsafe { core::ptr::write_volatile(&mut avail.idx, idx) };
 }
 
-/// Fence + QueueNotify. Not called until T3.4; same concept-3 reason.
-#[allow(dead_code)]
-fn notify(base: usize, q: u32) {
-    // The idx store must reach RAM before the device observes the MMIO
-    // doorbell. QEMU handles notify in the same CPU thread as the store,
-    // so a missing `fence w,o` will not fail here.
-    unsafe { asm!("fence w,o", options(nostack, preserves_flags)) };
-    virtio::write32(base, virtio::OFF_QUEUE_NOTIFY, q);
-}
-
 /// Load `used.idx`, then fence before the caller reads `used.ring`.
-/// Not called until T3.5; same concept-3 reason.
-#[allow(dead_code)]
+/// QEMU completes the used-ring write before returning from notify, so
+/// a missing `fence r,r` will not fail here.
 fn load_used_idx(used: &Used) -> u16 {
     let idx = unsafe { core::ptr::read_volatile(&used.idx) };
-    // idx must be read before the `used.ring` entry the device just
-    // wrote. QEMU completes that write before returning from notify, so
-    // a missing `fence r,r` will not fail here.
     unsafe { asm!("fence r,r", options(nostack, preserves_flags)) };
     idx
 }
@@ -408,10 +467,11 @@ pub fn init() {
 
     fill_descriptors(p);
     let base = virtio::net_base();
-    // Address registers first, verify second, QueueReady/DRIVER_OK never
-    // in this task. The device must not own the ring while we check it.
+    // Address registers first, verify second. QueueReady stays 0 here.
+    // T3.3 reset will wipe these MMIO writes; net::init programs them
+    // again after FEATURES_OK, then verifies, then sets QueueReady.
     write_queue_addrs(base, Q_RX, &p.rx);
     write_queue_addrs(base, Q_TX, &p.tx);
-    verify(base, p);
+    verify(base);
     println!("VIRTQ OK");
 }

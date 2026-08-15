@@ -21,6 +21,8 @@ userptr-span-selftest = []
 user-fault-selftest = []
 # T2.11: freeze, then a deliberate alloc_frame that must panic.
 freeze-selftest = []
+# T3.3: handshake to DRIVER_OK, then stop before U-mode.
+net-init-selftest = []
 
 [dependencies]
 

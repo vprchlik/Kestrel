@@ -540,7 +540,8 @@ pub fn init() {
         feature = "hang-selftest",
         feature = "stress",
         feature = "frame-exhaust-selftest",
-        feature = "freeze-selftest"
+        feature = "freeze-selftest",
+        feature = "net-init-selftest"
     ),
     allow(dead_code)
 )]

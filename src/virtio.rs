@@ -36,16 +36,34 @@ const OFF_VERSION: usize = 0x004;
 const OFF_DEVICE_ID: usize = 0x008;
 /// Queue selector. Virtio 1.2 §4.2.2; write-only.
 pub(crate) const OFF_QUEUE_SEL: usize = 0x030;
-/// QueueReady. §4.2.2; read/write. Zero until T3.3 enables the queue.
+/// QueueNumMax. §4.2.2; read-only.
+pub(crate) const OFF_QUEUE_NUM_MAX: usize = 0x034;
+/// QueueNum. §4.2.2; write-only.
+pub(crate) const OFF_QUEUE_NUM: usize = 0x038;
+/// QueueReady. §4.2.2; read/write. Zero until we enable the queue.
 pub(crate) const OFF_QUEUE_READY: usize = 0x044;
 /// QueueNotify. §4.2.2; write-only.
 pub(crate) const OFF_QUEUE_NOTIFY: usize = 0x050;
+/// InterruptStatus. §4.2.2; read-only.
+pub(crate) const OFF_INTERRUPT_STATUS: usize = 0x060;
+/// Device status. §4.2.2 / §2.1; read/write. Writing 0 is reset.
+pub(crate) const OFF_STATUS: usize = 0x070;
+/// DeviceFeatures. §4.2.2; read-only. Indexed by DeviceFeaturesSel.
+pub(crate) const OFF_DEVICE_FEATURES: usize = 0x010;
+/// DeviceFeaturesSel. §4.2.2; write-only.
+pub(crate) const OFF_DEVICE_FEATURES_SEL: usize = 0x014;
+/// DriverFeatures. §4.2.2; write-only. Indexed by DriverFeaturesSel.
+pub(crate) const OFF_DRIVER_FEATURES: usize = 0x020;
+/// DriverFeaturesSel. §4.2.2; write-only.
+pub(crate) const OFF_DRIVER_FEATURES_SEL: usize = 0x024;
 /// Descriptor table GPA, low 32 bits. §4.2.2 QueueDescLow; write-only.
 pub(crate) const OFF_QUEUE_DESC_LOW: usize = 0x080;
 /// Avail (driver) ring GPA, low 32 bits. §4.2.2 QueueDriverLow; write-only.
 pub(crate) const OFF_QUEUE_DRIVER_LOW: usize = 0x090;
 /// Used (device) ring GPA, low 32 bits. §4.2.2 QueueDeviceLow; write-only.
 pub(crate) const OFF_QUEUE_DEVICE_LOW: usize = 0x0a0;
+/// Device-specific configuration space. §4.2.2. virtio-net MAC starts here.
+pub(crate) const OFF_CONFIG: usize = 0x100;
 
 const _: () = assert!(MMIO_END == MMIO_BASE + N_TRANSPORTS * STRIDE);
 const _: () = assert!(MAGIC == u32::from_le_bytes(*b"virt"));
@@ -65,6 +83,13 @@ pub(crate) fn read32(base: usize, off: usize) -> u32 {
 pub(crate) fn write32(base: usize, off: usize, val: u32) {
     let p = (base + off) as *mut u32;
     unsafe { core::ptr::write_volatile(p, val) };
+}
+
+/// Byte read. Config space (MAC) is a byte array, not a little-endian word.
+#[inline]
+pub(crate) fn read8(base: usize, off: usize) -> u8 {
+    let p = (base + off) as *const u8;
+    unsafe { core::ptr::read_volatile(p) }
 }
 
 /// MMIO base of the net transport. Panics if `probe` has not found one.

@@ -319,6 +319,10 @@ S-mode has only one `sscratch` and no hardware IST equivalent.
    `read of write-only register` under `-d guest_errors`. A zero read is
    not proof the write stuck. QueueReady (0x044) *is* readable — if it is
    already 1, the device owns the ring and `verify()` is too late.
+   **A wrong register offset remains undetectable at init on this
+   transport** (the readback cannot distinguish it from a correct write).
+   If the ring is dead in T3.3, re-derive the offsets against the spec
+   table first, not last.
 
 ## 5. QEMU monitor — inspect a hung machine *without* GDB
 

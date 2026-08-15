@@ -31,6 +31,7 @@ mod uaccess;
 mod user;
 mod virtio;
 mod virtq;
+mod net;
 
 use core::arch::{asm, global_asm};
 
@@ -149,6 +150,7 @@ extern "C" fn kmain(hartid: usize, dtb_pa: usize) -> ! {
         page::activate();
         virtio::probe();
         virtq::init();
+        net::init();
         heap::init();
         heap::self_test();
         println!("M1 FUNDAMENTALS OK");
@@ -164,7 +166,8 @@ extern "C" fn kmain(hartid: usize, dtb_pa: usize) -> ! {
         #[cfg(not(any(
             feature = "frame-exhaust-selftest",
             feature = "stress",
-            feature = "freeze-selftest"
+            feature = "freeze-selftest",
+            feature = "net-init-selftest"
         )))]
         {
             // D-0035: kmain does not return after the first sret to U.
@@ -181,6 +184,16 @@ extern "C" fn kmain(hartid: usize, dtb_pa: usize) -> ! {
                 feature = "user-fault-selftest"
             )))]
             task::enter(1);
+        }
+        #[cfg(feature = "net-init-selftest")]
+        {
+            println!("NET INIT OK");
+            let ret = sbi::shutdown();
+            println!(
+                "shutdown failed: SRST error={} value={}",
+                ret.error, ret.value
+            );
+            park()
         }
         #[cfg(feature = "freeze-selftest")]
         {
