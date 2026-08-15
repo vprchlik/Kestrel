@@ -108,7 +108,13 @@ test expect="M2 EXECUTION OK" timeout_s="5":
             echo 'TEST FAIL: TX GARP posted/completed is not 1/1'
             exit 1
         fi
-        bash scripts/assert-pcap-garp.sh whimbrel.pcap
+        # This recipe is `set -u` not `set -e`. A failing assert must
+        # exit 1 here or `just test` would pass on a missing tshark or
+        # an empty pcap — the same fail-closed hole check-utext refuses.
+        if ! bash scripts/assert-pcap-garp.sh whimbrel.pcap; then
+            echo 'TEST FAIL: pcap GARP assertion'
+            exit 1
+        fi
         if ! grep -a -q 'task 2 exit 0' "$log"; then
             echo 'TEST FAIL: missing "task 2 exit 0"'
             exit 1
@@ -277,7 +283,10 @@ test-net-init:
         echo 'TEST FAIL: TX GARP posted/completed is not 1/1'
         exit 1
     fi
-    bash scripts/assert-pcap-garp.sh whimbrel.pcap
+    if ! bash scripts/assert-pcap-garp.sh whimbrel.pcap; then
+        echo 'TEST FAIL: pcap GARP assertion'
+        exit 1
+    fi
     echo 'TEST PASS: DRIVER_OK, MAC, dump, GARP'
 
 # Disassemble the kernel. Extra flags as one quoted arg, e.g. just objdump '-d --source'
