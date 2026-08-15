@@ -12,7 +12,8 @@ FEATURE="${1:-}"
 TARGET="riscv64gc-unknown-none-elf"
 KERNEL="target/${TARGET}/debug/whimbrel"
 QEMU="qemu-system-riscv64"
-QEMU_ARGS=(-machine virt -nographic -bios default)
+# D-0038 / D-0039: keep in sync with justfile qemu_args and .cargo/config.toml.
+QEMU_ARGS=(-machine virt -nographic -bios default -global virtio-mmio.force-legacy=false -netdev user,id=net0 -device virtio-net-device,netdev=net0)
 
 feat=()
 if [ -n "$FEATURE" ]; then

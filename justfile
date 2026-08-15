@@ -5,7 +5,9 @@ set shell := ["bash", "-uc"]
 target    := "riscv64gc-unknown-none-elf"
 kernel    := "target/" + target + "/debug/whimbrel"
 qemu      := "qemu-system-riscv64"
-qemu_args := "-machine virt -nographic -bios default"
+# D-0038 / D-0039: modern virtio-mmio + a net device on every invocation.
+# hostfwd and filter-dump land in later tasks; do not add them here.
+qemu_args := "-machine virt -nographic -bios default -global virtio-mmio.force-legacy=false -netdev user,id=net0 -device virtio-net-device,netdev=net0"
 
 # Build the kernel (debug profile; target + linker script via .cargo/config.toml).
 build:
@@ -76,6 +78,22 @@ test expect="M2 EXECUTION OK" timeout_s="5":
         fi
         if ! grep -a -q 'task 1 exit 0' "$log"; then
             echo 'TEST FAIL: missing "task 1 exit 0"'
+            exit 1
+        fi
+        if ! grep -aE -q 'virtio lo[[:space:]]+0x0010001000 -> 0x0010001000  V R W   U=0 A D' "$log"; then
+            echo 'TEST FAIL: virtio-mmio window lo not mapped R+W U=0 non-X'
+            exit 1
+        fi
+        if ! grep -aE -q 'virtio hi[[:space:]]+0x0010008fff -> 0x0010008fff  V R W   U=0 A D' "$log"; then
+            echo 'TEST FAIL: virtio-mmio window hi not mapped R+W U=0 non-X'
+            exit 1
+        fi
+        if ! grep -a -q 'virtio-mmio 0 0x10001000 magic=0x74726976 version=2' "$log"; then
+            echo 'TEST FAIL: virtio-mmio slot 0 missing modern magic/version'
+            exit 1
+        fi
+        if ! grep -a -q 'device=1 (net)' "$log"; then
+            echo 'TEST FAIL: no virtio-mmio net device in probe table'
             exit 1
         fi
         if ! grep -a -q 'task 2 exit 0' "$log"; then

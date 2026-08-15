@@ -560,17 +560,19 @@ pub fn enter(id: usize) -> ! {
     //    `SIE` from `SPIE` in U only. The handler is the only kernel code
     //    that runs at all.
     //
-    // Consumed frames are 65 tables (root + L1 + 63 L0) plus the two
-    // FRAME OK self-test leftovers (D-0036). Feature images can shift
-    // `total` with `__heap_end`; the split must still hold.
+    // Consumed frames are 67 tables (M2's 65 plus D-0039's L1+L0 for
+    // the virtio-mmio VPN[2]) plus the two FRAME OK self-test leftovers
+    // (D-0036). The MMIO pages themselves are not RAM and do not come
+    // from the pool — `total_frames()` is unchanged. Feature images can
+    // shift `total` with `__heap_end`; the split must still hold.
     {
         let total = crate::frame::total_frames();
         let free = crate::frame::free_count();
         let tables = crate::page::tables_used();
         let held = total - free;
-        if tables != 65 || held != tables + 2 {
+        if tables != 67 || held != tables + 2 {
             panic!(
-                "frames held {} tables {} want tables=65 held=67 (root+L1+63 L0 + FRAME OK pair)",
+                "frames held {} tables {} want tables=67 held=69 (root+2 L1+64 L0 + FRAME OK pair)",
                 held, tables
             );
         }

@@ -1075,18 +1075,21 @@ D-0011 onward are working decisions made under those constraints.
   restores `SIE` from `SPIE` in U only. There is still no interruptible
   kernel-side allocator caller.
 
-  **67 frames consumed before freeze.** `frames frozen: free=N` compared
-  with the `FRAME OK` total is a gap of 67 on the default image: 65 page
-  tables plus 2. The 65 are `page::tables_used()` — one Sv39 root, one L1
-  (VPN[2]=2 covers `0x8000_0000..0xC000_0000`; we do not allocate an L0 for
-  the unmapped OpenSBI 2 MiB at `0x8000_0000`), and 63 L0 tables for
-  `0x8020_0000..0x8800_0000`. The other two are the `FRAME OK` self-test's
-  leftover pair: it allocates `a` and `b`, frees `a`, reallocates `c==a`,
-  and never frees `b` or `c`. That is a deliberate LIFO check, not a leak
-  to plug; freeze then pins them. Feature images can print a different
-  `FRAME OK` total (`__heap_end` moves with code size) — `just test-stress`
-  compares exhaust's panic against **that boot's** `FRAME OK` line, not
-  against `just run`.
+  **69 frames consumed before freeze (was 67 before T3.1).** `frames frozen:
+  free=N` compared with the `FRAME OK` total is a gap of 69 on the default
+  image: 67 page tables plus 2. The 67 are `page::tables_used()` — one Sv39
+  root, one L1 (VPN[2]=2 covers `0x8000_0000..0xC000_0000`; we do not
+  allocate an L0 for the unmapped OpenSBI 2 MiB at `0x8000_0000`), 63 L0
+  tables for `0x8020_0000..0x8800_0000`, plus D-0039's extra L1 (VPN[2]=0)
+  and L0 (VPN[1]=0x80) for the virtio-mmio window. Those two table frames
+  come from the RAM pool; the eight MMIO pages themselves do not, so
+  `FRAME OK`'s `frames N` (`total_frames()`) does not move. The other two
+  held frames are the `FRAME OK` self-test's leftover pair: it allocates
+  `a` and `b`, frees `a`, reallocates `c==a`, and never frees `b` or `c`.
+  That is a deliberate LIFO check, not a leak to plug; freeze then pins
+  them. Feature images can print a different `FRAME OK` total (`__heap_end`
+  moves with code size) — `just test-stress` compares exhaust's panic
+  against **that boot's** `FRAME OK` line, not against `just run`.
 
 ## D-0037: Hand-rolled network stack; the TCP scope tripwire
 - Date: 2026-08-15 — Status: accepted
@@ -1180,7 +1183,10 @@ D-0011 onward are working decisions made under those constraints.
   stray kernel pointer that previously would have faulted — the cost
   D-0025's rationale conceded the moment a driver exists. The T2.2 verify
   walk asserts the window's mapping and permissions. sifive_test remains
-  unmapped (D-0017's escape hatch stays an `ecall`).
+  unmapped (D-0017's escape hatch stays an `ecall`). Mapping a new VPN[2]
+  costs two page-table frames (L1 + L0); `tables_used` is 67 and freeze
+  holds 69. The MMIO pages are not RAM, so the frame allocator's
+  `total_frames()` / `FRAME OK` count is untouched.
 
 ## D-0040: Driver and stack in the kernel; `recv`/`send`; polling, no PLIC
 - Date: 2026-08-15 — Status: accepted (amends D-0010 and D-0033)

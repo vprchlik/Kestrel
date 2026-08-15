@@ -21,11 +21,14 @@ Version note: any QEMU ≥ 7.x is fine (Ubuntu 22.04+ ships qemu ≥ 6.2 which
 also works). The exact version in use gets recorded in the M4 report for
 reproducibility: `qemu-system-riscv64 --version`.
 
-M3 note: the net recipes add `-global virtio-mmio.force-legacy=false`
-(modern virtio-mmio, D-0038), `-netdev user` with `hostfwd`, and
-`-object filter-dump,...,file=whimbrel.pcap` (packet capture, D-0043) to
-the QEMU invocation. `tshark` above is what the harness uses to assert on
-those captures — without it, `just test-net` fails on a machine that has
+M3 note: from T3.1 every QEMU invocation (`just run`, `just test`,
+`just panic`, `just debug`, and `scripts/boot-test.sh`) carries
+`-global virtio-mmio.force-legacy=false` (modern virtio-mmio, D-0038)
+and a `virtio-net-device` on `-netdev user,id=net0` (D-0039: a netless
+boot is a misconfigured harness). `hostfwd` and
+`-object filter-dump,...,file=whimbrel.pcap` land with the later net
+recipes. `tshark` above is what the harness uses to assert on those
+captures — without it, `just test-net` fails on a machine that has
 everything else.
 
 ## 2. Rust toolchain
