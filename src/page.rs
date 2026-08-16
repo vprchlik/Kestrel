@@ -75,29 +75,34 @@ const _: () = assert!(PAGE_SIZE / core::mem::size_of::<u64>() == PTES);
 static mut ROOT_PA: usize = 0;
 static mut TABLES: usize = 0;
 
+fn linker_pa(sym: *const u8) -> usize {
+    // See `task::pa`: LTO folds `==` of distinct `extern static`s to false.
+    core::hint::black_box(sym as usize)
+}
+
 fn kernel_start() -> usize {
-    core::ptr::addr_of!(__kernel_start) as usize
+    linker_pa(core::ptr::addr_of!(__kernel_start))
 }
 fn rodata_start() -> usize {
-    core::ptr::addr_of!(__rodata_start) as usize
+    linker_pa(core::ptr::addr_of!(__rodata_start))
 }
 fn data_start() -> usize {
-    core::ptr::addr_of!(__data_start) as usize
+    linker_pa(core::ptr::addr_of!(__data_start))
 }
 fn bss_end() -> usize {
-    core::ptr::addr_of!(__bss_end) as usize
+    linker_pa(core::ptr::addr_of!(__bss_end))
 }
 fn boot_stack_bottom() -> usize {
-    core::ptr::addr_of!(__boot_stack_bottom) as usize
+    linker_pa(core::ptr::addr_of!(__boot_stack_bottom))
 }
 fn boot_stack_top() -> usize {
-    core::ptr::addr_of!(__boot_stack_top) as usize
+    linker_pa(core::ptr::addr_of!(__boot_stack_top))
 }
 fn heap_start() -> usize {
-    core::ptr::addr_of!(__heap_start) as usize
+    linker_pa(core::ptr::addr_of!(__heap_start))
 }
 fn heap_end() -> usize {
-    core::ptr::addr_of!(__heap_end) as usize
+    linker_pa(core::ptr::addr_of!(__heap_end))
 }
 
 /// Physical address of the root table. Zero until `init`.

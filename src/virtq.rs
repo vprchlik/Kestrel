@@ -148,7 +148,8 @@ fn pool() -> &'static mut Pool {
 }
 
 fn pa<T>(p: *const T) -> usize {
-    p as usize
+    // See `task::pa`: LTO folds `==` / `!=` of distinct `extern static`s.
+    core::hint::black_box(p as usize)
 }
 
 fn pool_range() -> (usize, usize) {

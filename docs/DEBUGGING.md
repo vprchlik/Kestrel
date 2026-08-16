@@ -409,6 +409,14 @@ no trap; the first channel that can name the bug is the one to read.
     while `hold_acks` is true (D-0053). Truncated TIME_WAIT also must
     not clear the app's EOF, and `recv` 0 must wait until inflight is
     gone, or the app exits before the timer can fire.
+14. `cargo build --release` panics in `check_layout` with addresses that
+    already look adjacent (`__kernel_end` and `__heap_start` both
+    `0x80272000`). LLVM treats distinct `extern static`s as non-aliasing,
+    so `addr_of!(a) == addr_of!(b)` constant-folds to false under LTO
+    even when the linker placed them at the same VA. `!=` of two linker
+    symbols (`.utext must follow boot stack`) is the same bug with the
+    opposite fold. `core::hint::black_box` on the address keeps the
+    comparison as a runtime load. Debug `opt-level=0` never hits this.
 
 ## 5. QEMU monitor — inspect a hung machine *without* GDB
 

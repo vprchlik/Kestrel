@@ -1378,7 +1378,9 @@ D-0011 onward are working decisions made under those constraints.
   E2→sret (stack-ready is E2→listen). Debug `opt-level=0` paging (~150 ms
   walking ~32k pages twice) is not the cost of paging; M4 cites
   `cargo build --release --features fast-boot`. The default `just test`
-  curl-after-`HTTP READY` path stays a correctness gate.
+  curl-after-`HTTP READY` path stays a correctness gate. Release LTO
+  constant-folds `==` of distinct linker symbols (DEBUGGING.md §4.14);
+  `task::pa` / page / virtq address helpers `black_box` those loads.
 
 ## D-0044: App crate in the user sections; check-utext bans FP, including compressed
 - Date: 2026-08-15 — Status: accepted

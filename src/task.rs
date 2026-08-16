@@ -79,7 +79,11 @@ extern "C" {
 }
 
 fn pa(sym: *const u8) -> usize {
-    sym as usize
+    // Distinct `extern static`s are non-aliasing to LLVM, so `==` on
+    // their addresses constant-folds to false under LTO even when the
+    // linker placed them at the same VA (`__kernel_end` == `__heap_start`).
+    // `black_box` keeps the comparison as a runtime load of the symbol.
+    core::hint::black_box(sym as usize)
 }
 
 /// One task slot's linker addresses. All 4 KiB-aligned. D-0030.
