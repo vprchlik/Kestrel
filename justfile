@@ -147,8 +147,10 @@ test expect="M2 EXECUTION OK" timeout_s="5":
             echo 'TEST FAIL: missing TCP SYN/ACK BUILD OK'
             exit 1
         fi
-        if ! grep -a -q 'tx avail=2 used=2 posted=2 completed=2' "$log"; then
-            echo 'TEST FAIL: TX posted/completed is not 2/2 (ARP reply + GARP)'
+        # GARP dump is no longer posted=2: a hostfwd SYN can complete
+        # (and T3.11 close) during wait_rx_arp, before the GARP TX.
+        if ! grep -a -q 'TX GARP completed=' "$log"; then
+            echo 'TEST FAIL: missing TX GARP completed'
             exit 1
         fi
         if ! grep -a -q 'TX ARP reply' "$log"; then
@@ -406,8 +408,9 @@ test-net-init:
         echo 'TEST FAIL: missing TCP SYN/ACK BUILD OK'
         exit 1
     fi
-    if ! grep -a -q 'tx avail=2 used=2 posted=2 completed=2' serial.log; then
-        echo 'TEST FAIL: TX posted/completed is not 2/2 (ARP reply + GARP)'
+    # Same as just test: TCP may TX before GARP, so posted=2 is gone.
+    if ! grep -a -q 'TX GARP completed=' serial.log; then
+        echo 'TEST FAIL: missing TX GARP completed'
         exit 1
     fi
     if ! grep -a -q 'TX ARP reply' serial.log; then
