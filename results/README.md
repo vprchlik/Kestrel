@@ -13,15 +13,23 @@ Collapsing them now would make that checklist stale mid-milestone.
 
 `client_granularity_ns` is per-batch metadata duplicated onto every run
 row (C1): median inter-attempt interval from a 200-try calibration of
-the persistent client, target 1 ms.
+the persistent client, target 1 ms. `shuffle_seed` is the same kind of
+batch-level field. Recorded trials of every config in a batch are
+interleaved and shuffled so monotonic host drift cannot masquerade as a
+config effect.
+
+The stability criterion still compares **two interleaved batches**
+(batch 1 vs batch 2 medians, same N=30 recorded per config), not the two
+arms inside one batch. Within-batch default vs fast-boot is the
+price-of-paranoia contrast; it is supposed to differ.
 
 ## `runs.csv` — one row per trial
 
 | column | meaning |
 |---|---|
 | `batch_id` | UTC stamp + batch index (`20260816T090000Z-1`) |
-| `trial` | 1-based index in the batch (warmup first) |
-| `warmup` | `1` for the first 3 trials, else `0` (summarizer drops warmup) |
+| `trial` | per-config 1-based index (warmup 1..W, recorded W+1..W+N). Wall-clock order is `run_order`, not this column. |
+| `warmup` | `1` for the first 3 trials of that config in the batch (round-robin warmup), else `0` |
 | `system` | `whimbrel` |
 | `config` | `release-default` / `release-fast-boot` / `release-fast-boot-nofp` |
 | `git_sha` | `git rev-parse HEAD` |
@@ -36,6 +44,10 @@ the persistent client, target 1 ms.
 | `qemu_cpu` | `taskset` core for QEMU |
 | `client_cpu` | `taskset` core for the client (must differ) |
 | `client_granularity_ns` | C1: measured client cadence (batch-level) |
+| `shuffle_seed` | RNG seed for recorded-trial shuffle (batch-level; `seed + batch_index`) |
+| `run_order` | 1-based wall-clock sequence across the whole run (warmup included) |
+| `steal_ticks` | `/proc/stat` aggregate `cpu` steal column, delta across the trial |
+| `steal_ns` | `steal_ticks * 1e9 / SC_CLK_TCK` (10 ms/tick when USER_HZ=100) |
 | `e0_mono_ns` | `time.monotonic_ns()` immediately before QEMU exec |
 | `e0_wall_ns` | `time.time_ns()` at the same moment (diagnostic; not used for E3w) |
 | `e0_to_first_connect_ns` | first successful `connect` − E0 (monotonic) |

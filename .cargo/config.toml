@@ -8,8 +8,10 @@ target = "riscv64gc-unknown-none-elf"
 rustflags = [
     # Place sections per linker.ld (entry at 0x8020_0000 etc.).
     "-C", "link-arg=-Tlinker.ld",
-    # Frame pointers make GDB backtraces work on bare metal.
-    "-C", "force-frame-pointers=yes",
+    # Finding 14: do not force frame pointers on release. Image size is a
+    # reported metric; the T4.1 A/B sat inside the stability floor while
+    # .text dropped ~15%. Debug builds re-add the flag via
+    # scripts/cargo-debug.sh so GDB backtraces still work.
 ]
 # `cargo run` boots QEMU directly (cargo appends the ELF path after -kernel).
 # The justfile is the primary interface; this is a convenience. Argv must

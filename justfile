@@ -11,8 +11,9 @@ qemu      := "qemu-system-riscv64"
 qemu_args := `bash scripts/qemu-args.sh`
 
 # Cross-compile the debug kernel for riscv64gc-unknown-none-elf.
+# Frame pointers: scripts/cargo-debug.sh (finding 14).
 build:
-    cargo build
+    bash scripts/cargo-debug.sh build
 
 # Boot the default kernel in QEMU (extra flags as one quoted arg).
 run qemu_extra="": build
@@ -20,12 +21,12 @@ run qemu_extra="": build
 
 # Boot the persist HTTP image and sit on :8080 until QEMU is killed.
 run-http:
-    cargo build --features http-persist
+    bash scripts/cargo-debug.sh build --features http-persist
     {{qemu}} {{qemu_args}} -kernel {{kernel}}
 
 # Boot a kmain panic image (live serial; prefer test-panic for the verdict).
 panic timeout_s="5":
-    cargo build --features panic-selftest
+    bash scripts/cargo-debug.sh build --features panic-selftest
     timeout --foreground {{timeout_s}} {{qemu}} {{qemu_args}} -kernel {{kernel}}
 
 # Boot frozen at reset with the GDB stub on tcp::1234.
@@ -48,7 +49,7 @@ check-utext: build
 check-utext-planted:
     #!/usr/bin/env bash
     set -euo pipefail
-    cargo build --features utext-c-fld-selftest
+    bash scripts/cargo-debug.sh build --features utext-c-fld-selftest
     set +e
     out=$(bash scripts/check-utext.sh {{kernel}} 2>&1)
     st=$?
@@ -63,7 +64,7 @@ check-utext-planted:
         exit 1
     fi
     echo 'TEST PASS: planted c.fld rejected by name'
-    cargo build
+    bash scripts/cargo-debug.sh build
 
 # Headless default boot: M3 UNIKERNEL OK, curl 200, phases, gateway ARP.
 test expect="M3 UNIKERNEL OK" timeout_s="12":
@@ -716,9 +717,9 @@ test-fast-release:
     fi
     echo 'TEST PASS: release fast-boot M3 UNIKERNEL OK, curl 200, phases'
 
-# T4.1 / D-0055: N=30 recorded + 3 warmup, two consecutive batches,
-# release-default and release+fast-boot. Writes results/runs.csv,
-# results/phases.csv, results/summary.txt.
+# T4.1 / D-0055: N=30 recorded + 3 warmup per config, two interleaved
+# batches (configs mixed, recorded trial order shuffled). Writes
+# results/runs.csv, results/phases.csv, results/summary.txt.
 bench-whimbrel:
     bash scripts/bench.sh whimbrel
 

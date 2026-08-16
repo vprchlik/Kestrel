@@ -17,6 +17,11 @@ is mitigated-and-measured or stated. This is a seed, not the section.
 7. **Unikraft pin** (D-0063) — stated when that row exists.
 8. **Instrumentation observer effect.** Stamp overhead is measured in T4.2.
 9. **Host variance.** `taskset`, recorded load average, N=30, median/IQR.
+    This harness host is a shared KVM guest (`hypervisor` in `/proc/cpuinfo`,
+    `systemd-detect-virt=kvm`, cgroup `pod-…`) with **no cpufreq**,
+    **nonzero `/proc/stat` steal**, and USER_HZ=100 (10 ms steal ticks).
+    D-0055's performance governor is `unavailable`. Report-grade numbers
+    need a dedicated machine; this host is for harness bring-up.
 10. **E3w fidelity.** filter-dump pcap timestamps are a QEMU realtime
     clock that does not match Python `time.time_ns()` (offsets of tens to
     hundreds of ms observed). `e0_to_e3w_ns` is therefore first-connect

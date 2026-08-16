@@ -37,13 +37,19 @@ fi
 profile_flag=()
 if [ "$PROFILE" = release ]; then
     profile_flag=(--release)
-elif [ "$PROFILE" != debug ]; then
+    if ! cargo build "${feat[@]}" "${profile_flag[@]}"; then
+        echo 'TEST FAIL: cargo build failed (refusing to boot a stale kernel)'
+        exit 1
+    fi
+elif [ "$PROFILE" = debug ]; then
+    # Finding 14: frame pointers on debug only. Wrapper merges `--config`
+    # with linker.ld; RUSTFLAGS would drop the script.
+    if ! bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/cargo-debug.sh" build "${feat[@]}"; then
+        echo 'TEST FAIL: cargo build failed (refusing to boot a stale kernel)'
+        exit 1
+    fi
+else
     echo "TEST FAIL: PROFILE=${PROFILE} is not debug or release"
-    exit 1
-fi
-
-if ! cargo build "${feat[@]}" "${profile_flag[@]}"; then
-    echo 'TEST FAIL: cargo build failed (refusing to boot a stale kernel)'
     exit 1
 fi
 # Feature builds that never enter U-mode can GC .utext. Userptr selftests

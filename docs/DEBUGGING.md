@@ -37,6 +37,10 @@ Bread-and-butter commands:
 (gdb) load                   # re-download the kernel after rebuild (with -S)
 ```
 
+Debug builds merge `-C force-frame-pointers=yes` via
+`scripts/cargo-debug.sh` (`just build` / `just debug`). Release does
+not (finding 14); GDB on a measured image will not have frame pointers.
+
 Notes:
 - QEMU's stub implements software breakpoints internally — `break` works even
   in ROM-like conditions; reach for `hbreak` if a breakpoint mysteriously

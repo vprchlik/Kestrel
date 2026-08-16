@@ -1,5 +1,6 @@
 /target
 /target-nofp
+/target-fp
 serial.log
 qemu.log
 whimbrel.pcap

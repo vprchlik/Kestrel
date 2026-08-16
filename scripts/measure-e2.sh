@@ -12,7 +12,8 @@ KERNEL="target/${TARGET}/debug/whimbrel"
 QEMU="qemu-system-riscv64"
 PORT="${E2_GDB_PORT:-1234}"
 
-cargo build
+# Debug image: keep frame pointers for GDB (finding 14).
+bash scripts/cargo-debug.sh build
 
 if [ ! -f "$KERNEL" ]; then
     echo "TEST FAIL: no kernel at ${KERNEL}"

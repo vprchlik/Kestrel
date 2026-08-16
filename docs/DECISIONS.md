@@ -1776,9 +1776,11 @@ D-0011 onward are working decisions made under those constraints.
 
 ## D-0055: M4 methodology frozen before any optimization
 - Date: 2026-08-16 — Status: accepted
-- **Decision:** the benchmark protocol is fixed now and every M4 number
+-   **Decision:** the benchmark protocol is fixed now and every M4 number
   obeys it. Per (system, config) batch: 3 warmup trials marked and
-  excluded, 30 recorded trials. Statistics: median and IQR for every
+  excluded, 30 recorded trials. Warmup is round-robin across configs;
+  recorded trials of every config in a batch are interleaved and
+  shuffled so elapsed-time drift hits both arms. Statistics: median and IQR for every
   comparison and before/after claim; minimum shown alongside as the
   observed floor bound; means never. Host controls: one host machine for
   all report numbers, performance governor, `taskset`-pinned QEMU and
@@ -1796,9 +1798,10 @@ D-0011 onward are working decisions made under those constraints.
   the batch. The measurement client is a persistent process stamping a
   monotonic clock at ~1 ms cadence (audit finding 32 retires the
   fork-per-attempt curl loop); its measured granularity is reported.
-  **Stability criterion (the T4.1 finish line):** two consecutive
+  **Stability criterion (the T4.1 finish line):** two interleaved
   30-trial batches whose per-metric medians agree within max(2%, 200 µs)
-  for every metric ≥ 1 ms. **No optimization work until that criterion
+  for every metric ≥ 1 ms. This is batch 1 vs batch 2, not safe vs fast
+  inside one batch. **No optimization work until that criterion
   holds and the baseline is frozen at a recorded SHA.** Pre-baseline
   corrections (D-0056) and instrumentation (D-0057) are exempt from the
   no-optimization rule, never from the gate list.
@@ -1835,8 +1838,8 @@ D-0011 onward are working decisions made under those constraints.
   N=30 recorded, git `9871d87`, QEMU 8.2.2):** E2→E3g median with
   `-C force-frame-pointers=yes` is 31.062 ms, without is 30.812 ms,
   Δ = +0.250 ms (FP slower). E0→E4 Δ = +0.078 ms. Both sit inside
-  max(2%, 200 µs). Strip-vs-record is the operator's call; this entry
-  does not strip the flag. **Stability criterion (two consecutive
+  max(2%, 200 µs). The operator chose strip (see Finding 14 strip
+  below). **Stability criterion (two consecutive
   30-trial batches, git `356b37a`):** not met. release-default shifted
   systematically slower on batch 2 (E2→E3g 98.5 → 105.6 ms; paging,
   DRIVER_OK, listen, freeze, first_rx all moved). release-fast-boot's
@@ -1844,6 +1847,28 @@ D-0011 onward are working decisions made under those constraints.
   missed by a little (E0→E4 74.0 → 75.6 ms; first-connect 17.58 →
   18.08 ms). The criterion is not widened. Client granularity median
   1.000232 ms (C1; curl was 5–15 ms).
+  **Finding 14 strip:** both A/B deltas sat inside the floor, but `.text`
+  dropped ~15% (0xc32c → 0xaa1c) and image size is a reported metric.
+  `-C force-frame-pointers=yes` is removed from `.cargo/config.toml`
+  (release / measured path). Debug re-adds it by merging
+  `scripts/cargo-debug.sh` (`just build`, `just debug`, `boot-test.sh`
+  PROFILE=debug) so GDB backtraces still work. `RUSTFLAGS` is not used:
+  it replaces linker.ld.
+  **Batch-order confound:** the first T4.1 pair ran configs as sequential
+  blocks and batch 2 always after batch 1, so monotonic host drift reads
+  as a systematic batch difference. Recorded trials are now interleaved
+  within a batch and shuffled (`shuffle_seed` on every run row; warmup is
+  round-robin, 3 per config, then the shuffled recorded schedule).
+  **Stability under interleaving:** the criterion still compares **two
+  interleaved batches** (batch 1 vs batch 2 per-metric medians, same
+  N=30 recorded per config, same max(2%, 200 µs) bar). It is not a
+  within-batch comparison of the two arms — default vs fast-boot is the
+  treatment contrast and is supposed to differ. The bar is not widened.
+  **Steal:** each trial records `/proc/stat` aggregate steal delta
+  (`steal_ticks`, `steal_ns`). USER_HZ=100 ⇒ 10 ms/tick, coarser than
+  the 200 µs floor and coarser than the first miss (E0→E4 Δ 1.64 ms).
+  The first batch-2 CSV had no steal column; correlation is on a fresh
+  interleaved pair. Steal is diagnostic, not a stability metric.
 
 ## D-0056: Pre-baseline corrections (T4.0b)
 - Date: 2026-08-16 — Status: accepted

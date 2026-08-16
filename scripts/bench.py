@@ -15,6 +15,7 @@ import hashlib
 import json
 import math
 import os
+import random
 import re
 import shutil
 import socket
@@ -49,6 +50,10 @@ RUNS_FIELDS = [
     "qemu_cpu",
     "client_cpu",
     "client_granularity_ns",
+    "shuffle_seed",
+    "run_order",
+    "steal_ticks",
+    "steal_ns",
     "e0_mono_ns",
     "e0_wall_ns",
     "e0_to_first_connect_ns",
@@ -174,6 +179,87 @@ def pin_cpus() -> tuple[int, int]:
     if qemu_cpu == client_cpu:
         raise BenchFail("TEST FAIL: QEMU and client must pin to separate cores")
     return qemu_cpu, client_cpu
+
+
+def steal_ticks_from_stat(text: str) -> int:
+    """Aggregate `cpu` line, steal column (field 8 after the `cpu` token)."""
+    for line in text.splitlines():
+        if line.startswith("cpu "):
+            parts = line.split()
+            if len(parts) < 9:
+                raise BenchFail(
+                    "TEST FAIL: /proc/stat cpu line has no steal column"
+                )
+            return int(parts[8])
+    raise BenchFail("TEST FAIL: /proc/stat has no cpu line")
+
+
+def read_steal_ticks() -> int:
+    path = Path("/proc/stat")
+    if not path.is_file():
+        raise BenchFail("TEST FAIL: /proc/stat missing (cannot record steal)")
+    return steal_ticks_from_stat(path.read_text())
+
+
+def steal_ticks_to_ns(ticks: int) -> int:
+    hz = os.sysconf("SC_CLK_TCK")
+    if hz <= 0:
+        raise BenchFail("TEST FAIL: SC_CLK_TCK is not positive")
+    return int(ticks) * 1_000_000_000 // int(hz)
+
+
+def recorded_schedule(
+    configs: list[str], n: int, warmup: int, seed: int, batch_i: int
+) -> list[tuple[str, int]]:
+    """Shuffled (config, trial) pairs for recorded trials in one batch.
+
+    Trial numbers stay per-config (warmup+1 .. warmup+n) so CSV identity
+    is unchanged. Wall-clock order is `run_order`, not `trial`.
+    """
+    schedule = [
+        (cfg, trial)
+        for cfg in configs
+        for trial in range(warmup + 1, warmup + n + 1)
+    ]
+    rng = random.Random(seed + batch_i)
+    rng.shuffle(schedule)
+    return schedule
+
+
+def pearson(xs: list[float], ys: list[float]) -> float | None:
+    n = len(xs)
+    if n < 3 or n != len(ys):
+        return None
+    mx = sum(xs) / n
+    my = sum(ys) / n
+    num = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    dx = math.sqrt(sum((x - mx) ** 2 for x in xs))
+    dy = math.sqrt(sum((y - my) ** 2 for y in ys))
+    if dx == 0.0 or dy == 0.0:
+        return None
+    return num / (dx * dy)
+
+
+def _average_ranks(vals: list[float]) -> list[float]:
+    n = len(vals)
+    order = sorted(range(n), key=lambda i: vals[i])
+    ranks = [0.0] * n
+    i = 0
+    while i < n:
+        j = i
+        while j + 1 < n and vals[order[j + 1]] == vals[order[i]]:
+            j += 1
+        avg = (i + j) / 2.0 + 1.0
+        for k in range(i, j + 1):
+            ranks[order[k]] = avg
+        i = j + 1
+    return ranks
+
+
+def spearman(xs: list[float], ys: list[float]) -> float | None:
+    if len(xs) < 3 or len(xs) != len(ys):
+        return None
+    return pearson(_average_ranks(xs), _average_ranks(ys))
 
 
 def parse_phases(serial_text: str) -> list[dict]:
@@ -573,23 +659,29 @@ def run_trial(
     }
 
 
-def configs_for(kind: str) -> list[tuple[str, list[str], dict[str, str]]]:
+def configs_for(
+    kind: str,
+) -> list[tuple[str, list[str], dict[str, str], list[str]]]:
+    # Release default is no frame pointers (finding 14 stripped). The
+    # with-FP arm merges via --config so linker.ld is not dropped.
+    fp_yes = [
+        "--config",
+        'target.riscv64gc-unknown-none-elf.rustflags=["-C","force-frame-pointers=yes"]',
+    ]
     if kind == "whimbrel":
         return [
-            ("release-default", [], {}),
-            ("release-fast-boot", ["fast-boot"], {}),
+            ("release-default", [], {}, []),
+            ("release-fast-boot", ["fast-boot"], {}, []),
         ]
     if kind == "fp-ab":
-        nofp = {
-            "CARGO_TARGET_DIR": str(ROOT / "target-nofp"),
-            "RUSTFLAGS": (
-                f"-C link-arg=-T{ROOT / 'linker.ld'} "
-                "-C force-frame-pointers=no"
-            ),
-        }
         return [
-            ("release-fast-boot", ["fast-boot"], {}),
-            ("release-fast-boot-nofp", ["fast-boot"], nofp),
+            (
+                "release-fast-boot-fp",
+                ["fast-boot"],
+                {"CARGO_TARGET_DIR": str(ROOT / "target-fp")},
+                fp_yes,
+            ),
+            ("release-fast-boot", ["fast-boot"], {}, []),
         ]
     raise BenchFail(f"TEST FAIL: unknown bench kind {kind}")
 
@@ -621,90 +713,119 @@ def cmd_run(args: argparse.Namespace) -> int:
     timeout_s = float(os.environ.get("BENCH_TIMEOUT_S", "12"))
 
     kernels: dict[str, tuple[Path, str]] = {}
-    for config, features, env_extra in configs_for(args.kind):
-        kernel_src = cargo_build(features, env_extra=env_extra or None)
+    cfg_list = configs_for(args.kind)
+    cfg_names = [c[0] for c in cfg_list]
+    for config, features, env_extra, extra in cfg_list:
+        kernel_src = cargo_build(
+            features, extra=extra or None, env_extra=env_extra or None
+        )
         kdir = out_dir / "bin"
         kdir.mkdir(parents=True, exist_ok=True)
         kernel = kdir / config
         shutil.copy2(kernel_src, kernel)
         kernels[config] = (kernel, sha256_file(kernel))
 
+    shuffle_seed = getattr(args, "shuffle_seed", None)
+    if shuffle_seed is None:
+        env_seed = os.environ.get("BENCH_SHUFFLE_SEED")
+        shuffle_seed = (
+            int(env_seed) if env_seed else (time.time_ns() % (2**63))
+        )
+    print(f"bench: shuffle_seed={shuffle_seed}", flush=True)
+    run_order = 0
+
+    def one_trial(batch_id: str, config: str, trial: int, is_warmup: int) -> None:
+        nonlocal run_order
+        run_order += 1
+        kernel, k_hash = kernels[config]
+        tdir = out_dir / "trials" / batch_id / config / f"{trial:02d}"
+        tdir.mkdir(parents=True, exist_ok=True)
+        pcap = tdir / "qemu.pcap"
+        serial_path = tdir / "serial.log"
+        client_out = tdir / "client.json"
+        ready_path = tdir / "client.ready"
+        print(
+            f"bench: batch={batch_id} config={config} "
+            f"trial={trial} warmup={is_warmup} run_order={run_order}",
+            flush=True,
+        )
+        steal0 = read_steal_ticks()
+        result = run_trial(
+            kernel=kernel,
+            pcap=pcap,
+            serial_path=serial_path,
+            client_out=client_out,
+            ready_path=ready_path,
+            qemu_cpu=qemu_cpu,
+            client_cpu=client_cpu,
+            port=port,
+            timeout_s=timeout_s,
+        )
+        steal_delta = read_steal_ticks() - steal0
+        if steal_delta < 0:
+            raise BenchFail("TEST FAIL: /proc/stat steal went backwards")
+        rel_pcap = os.path.relpath(pcap, ROOT)
+        run_rows.append(
+            {
+                "batch_id": batch_id,
+                "trial": trial,
+                "warmup": is_warmup,
+                "system": "whimbrel",
+                "config": config,
+                "git_sha": git_sha,
+                "dirty": dirty,
+                "kernel_sha256": k_hash,
+                "qemu_version": host["qemu_version"],
+                "qemu_hash": host["qemu_hash"],
+                "host_kernel": host["host_kernel"],
+                "cpu_model": host["cpu_model"],
+                "governor": host["governor"],
+                "loadavg_1m": host["loadavg_1m"],
+                "qemu_cpu": qemu_cpu,
+                "client_cpu": client_cpu,
+                "client_granularity_ns": gran,
+                "shuffle_seed": shuffle_seed,
+                "run_order": run_order,
+                "steal_ticks": steal_delta,
+                "steal_ns": steal_ticks_to_ns(steal_delta),
+                "e0_mono_ns": result["e0_mono_ns"],
+                "e0_wall_ns": result["e0_wall_ns"],
+                "e0_to_first_connect_ns": result["e0_to_first_connect_ns"],
+                "e0_to_e3w_ns": result["e0_to_e3w_ns"],
+                "e0_to_e4_ns": result["e0_to_e4_ns"],
+                "attempts": result["attempts"],
+                "pcap_path": rel_pcap,
+            }
+        )
+        for ph in result["phases"]:
+            phase_rows.append(
+                {
+                    "batch_id": batch_id,
+                    "trial": trial,
+                    "warmup": is_warmup,
+                    "system": "whimbrel",
+                    "config": config,
+                    "phase": ph["phase"],
+                    "ticks": ph["ticks"],
+                    "ns_since_e2": ph["ns_since_e2"],
+                    "delta_ticks": ph["delta_ticks"],
+                    "delta_ns": ph["delta_ns"],
+                    "source": ph["source"],
+                }
+            )
+        write_csv(out_dir / "runs.csv", RUNS_FIELDS, run_rows)
+        write_csv(out_dir / "phases.csv", PHASES_FIELDS, phase_rows)
+
     for batch_i in range(1, batches + 1):
         batch_id = f"{stamp}-{batch_i}"
-        for config, _features, _env in configs_for(args.kind):
-            kernel, k_hash = kernels[config]
-            total = warmup + n
-            for trial in range(1, total + 1):
-                is_warmup = 1 if trial <= warmup else 0
-                tdir = out_dir / "trials" / batch_id / config / f"{trial:02d}"
-                tdir.mkdir(parents=True, exist_ok=True)
-                pcap = tdir / "qemu.pcap"
-                serial_path = tdir / "serial.log"
-                client_out = tdir / "client.json"
-                ready_path = tdir / "client.ready"
-                print(
-                    f"bench: batch={batch_id} config={config} "
-                    f"trial={trial}/{total} warmup={is_warmup}",
-                    flush=True,
-                )
-                result = run_trial(
-                    kernel=kernel,
-                    pcap=pcap,
-                    serial_path=serial_path,
-                    client_out=client_out,
-                    ready_path=ready_path,
-                    qemu_cpu=qemu_cpu,
-                    client_cpu=client_cpu,
-                    port=port,
-                    timeout_s=timeout_s,
-                )
-                rel_pcap = os.path.relpath(pcap, ROOT)
-                run_rows.append(
-                    {
-                        "batch_id": batch_id,
-                        "trial": trial,
-                        "warmup": is_warmup,
-                        "system": "whimbrel",
-                        "config": config,
-                        "git_sha": git_sha,
-                        "dirty": dirty,
-                        "kernel_sha256": k_hash,
-                        "qemu_version": host["qemu_version"],
-                        "qemu_hash": host["qemu_hash"],
-                        "host_kernel": host["host_kernel"],
-                        "cpu_model": host["cpu_model"],
-                        "governor": host["governor"],
-                        "loadavg_1m": host["loadavg_1m"],
-                        "qemu_cpu": qemu_cpu,
-                        "client_cpu": client_cpu,
-                        "client_granularity_ns": gran,
-                        "e0_mono_ns": result["e0_mono_ns"],
-                        "e0_wall_ns": result["e0_wall_ns"],
-                        "e0_to_first_connect_ns": result["e0_to_first_connect_ns"],
-                        "e0_to_e3w_ns": result["e0_to_e3w_ns"],
-                        "e0_to_e4_ns": result["e0_to_e4_ns"],
-                        "attempts": result["attempts"],
-                        "pcap_path": rel_pcap,
-                    }
-                )
-                for ph in result["phases"]:
-                    phase_rows.append(
-                        {
-                            "batch_id": batch_id,
-                            "trial": trial,
-                            "warmup": is_warmup,
-                            "system": "whimbrel",
-                            "config": config,
-                            "phase": ph["phase"],
-                            "ticks": ph["ticks"],
-                            "ns_since_e2": ph["ns_since_e2"],
-                            "delta_ticks": ph["delta_ticks"],
-                            "delta_ns": ph["delta_ns"],
-                            "source": ph["source"],
-                        }
-                    )
-            write_csv(out_dir / "runs.csv", RUNS_FIELDS, run_rows)
-            write_csv(out_dir / "phases.csv", PHASES_FIELDS, phase_rows)
+        # Warmup: round-robin so neither config is always last-to-cache.
+        for w in range(1, warmup + 1):
+            for config in cfg_names:
+                one_trial(batch_id, config, w, 1)
+        for config, trial in recorded_schedule(
+            cfg_names, n, warmup, int(shuffle_seed), batch_i
+        ):
+            one_trial(batch_id, config, trial, 0)
 
     rc = cmd_summarize(
         argparse.Namespace(
@@ -737,8 +858,8 @@ def print_fp_ab_delta(out_dir: Path) -> None:
             continue
         by_cfg.setdefault(p["config"], {"e0_to_e4_ns": [], "e2_to_e3g_ns": []})
         by_cfg[p["config"]]["e2_to_e3g_ns"].append(float(p["ns_since_e2"]))
-    with_fp = by_cfg.get("release-fast-boot", {})
-    no_fp = by_cfg.get("release-fast-boot-nofp", {})
+    with_fp = by_cfg.get("release-fast-boot-fp", {})
+    no_fp = by_cfg.get("release-fast-boot", {})
     print("## finding 14: -C force-frame-pointers=yes A/B (release+fast-boot)")
     for metric in ("e2_to_e3g_ns", "e0_to_e4_ns"):
         a = with_fp.get(metric, [])
@@ -755,9 +876,85 @@ def print_fp_ab_delta(out_dir: Path) -> None:
             f"Δ(with-without)={delta:.0f} ns  floor={floor:.0f} ns  ({vs})"
         )
     print(
-        "strip-vs-record is the operator's call; this harness does not "
-        "change .cargo/config.toml."
+        "release measured builds omit the flag (D-0055); debug re-adds it "
+        "via scripts/cargo-debug.sh."
     )
+
+
+def _fmt_corr(label: str, rho: float | None) -> str:
+    if rho is None:
+        return f"{label}: undefined (constant or n<3)"
+    return f"{label}: {rho:.3f}"
+
+
+def steal_diagnosis(runs: list[dict], phases: list[dict]) -> list[str]:
+    """Correlate per-trial steal with latency. Not a stability metric."""
+    if not runs or "steal_ticks" not in runs[0]:
+        return ["## steal (not recorded in this CSV)", ""]
+    rec = [r for r in runs if int(r["warmup"]) == 0]
+    if not rec:
+        return ["## steal (no recorded trials)", ""]
+    steal = [float(r["steal_ticks"]) for r in rec]
+    e4 = [float(r["e0_to_e4_ns"]) for r in rec]
+    conn = [float(r["e0_to_first_connect_ns"]) for r in rec]
+    rec_keys = {(r["batch_id"], r["trial"], r["config"]) for r in rec}
+    e3g_by: dict[tuple[str, str, str], float] = {}
+    for p in phases:
+        if (
+            int(p["warmup"]) == 0
+            and p["phase"] == "E3g"
+            and (p["batch_id"], p["trial"], p["config"]) in rec_keys
+        ):
+            e3g_by[(p["batch_id"], p["trial"], p["config"])] = float(
+                p["ns_since_e2"]
+            )
+    e3g_pairs = [
+        (s, e3g_by[(r["batch_id"], r["trial"], r["config"])])
+        for s, r in zip(steal, rec)
+        if (r["batch_id"], r["trial"], r["config"]) in e3g_by
+    ]
+    hz = os.sysconf("SC_CLK_TCK")
+    tick_ns = steal_ticks_to_ns(1)
+    nonzero = sum(1 for s in steal if s > 0)
+    lines = [
+        "## steal vs latency (recorded trials; not a stability metric)",
+        f"SC_CLK_TCK={hz} steal_tick={tick_ns} ns "
+        f"n={len(steal)} nonzero={nonzero} "
+        f"median_steal_ticks={statistics.median(steal):.0f} "
+        f"max_steal_ticks={max(steal):.0f}",
+        _fmt_corr("spearman(steal_ticks, e0_to_e4_ns)", spearman(steal, e4)),
+        _fmt_corr(
+            "spearman(steal_ticks, e0_to_first_connect_ns)",
+            spearman(steal, conn),
+        ),
+    ]
+    if e3g_pairs:
+        lines.append(
+            _fmt_corr(
+                "spearman(steal_ticks, e2_to_e3g_ns)",
+                spearman(
+                    [s for s, _ in e3g_pairs], [g for _, g in e3g_pairs]
+                ),
+            )
+        )
+    order = sorted(range(len(e4)), key=lambda i: e4[i])
+    q = max(1, len(e4) // 4)
+    slow = [steal[i] for i in order[-q:]]
+    rest = [steal[i] for i in order[:-q]]
+    lines.append(
+        f"slow-quartile e0_to_e4 n={len(slow)} mean_steal_ticks="
+        f"{(sum(slow) / len(slow)):.3f}; rest n={len(rest)} mean_steal_ticks="
+        f"{(sum(rest) / len(rest)):.3f}"
+    )
+    if nonzero == 0:
+        lines.append(
+            f"steal was 0 on every recorded trial. USER_HZ={hz} cannot "
+            f"resolve host interference below {tick_ns / 1e6:.1f} ms/tick, "
+            "so a sub-tick median shift cannot be confirmed or denied by "
+            "this column."
+        )
+    lines.append("")
+    return lines
 
 
 def cmd_summarize(args: argparse.Namespace) -> int:
@@ -777,6 +974,8 @@ def cmd_summarize(args: argparse.Namespace) -> int:
         f"client_granularity_ns={runs[0]['client_granularity_ns']}",
         "",
     ]
+    if "shuffle_seed" in runs[0]:
+        lines.insert(-1, f"shuffle_seed={runs[0]['shuffle_seed']}")
     groups: dict[tuple[str, str, str], list[dict]] = {}
     for r in runs:
         key = (r["batch_id"], r["system"], r["config"])
@@ -799,12 +998,17 @@ def cmd_summarize(args: argparse.Namespace) -> int:
         lines.extend(summarize_group(title, mets))
         lines.append("")
 
+    lines.extend(steal_diagnosis(runs, phases))
+
     failed: list[str] = []
     if getattr(args, "stability", False):
         by_cfg: dict[str, list[tuple[str, dict[str, list[float]]]]] = {}
         for (batch, _sys, cfg), mets in metric_by_group.items():
             by_cfg.setdefault(cfg, []).append((batch, mets))
-        lines.append("## stability (consecutive batches, metrics ≥ 1 ms)")
+        lines.append(
+            "## stability (two interleaved batches, metrics ≥ 1 ms; "
+            "not within-batch arm comparison)"
+        )
         for cfg, items in sorted(by_cfg.items()):
             items.sort()
             if len(items) < 2:
@@ -853,6 +1057,10 @@ def _write_fixture_runs(path: Path, rows: list[dict]) -> None:
         "qemu_cpu": 2,
         "client_cpu": 3,
         "client_granularity_ns": 1000000,
+        "shuffle_seed": 1,
+        "run_order": 1,
+        "steal_ticks": 0,
+        "steal_ns": 0,
         "e0_mono_ns": 0,
         "e0_wall_ns": 0,
         "e0_to_first_connect_ns": 10_000_000,
@@ -957,6 +1165,32 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
     if [r["phase"] for r in rows] != ["_start", "E3g"]:
         raise BenchFail(f"good PHASE parse unexpected: {rows}")
 
+    if steal_ticks_from_stat("cpu  1 0 2 3 4 5 6 7 8 9\ncpu0 0 0 0 0 0 0 0 0 0 0\n") != 7:
+        raise BenchFail("steal column parse unexpected")
+    try:
+        steal_ticks_from_stat("cpu  1 2 3\n")
+        raise BenchFail("short /proc/stat cpu line did not fire")
+    except BenchFail as e:
+        if "no steal column" not in str(e):
+            raise
+        fired.append(f"short steal column: {e}")
+    live = read_steal_ticks()
+    if live < 0:
+        raise BenchFail("live steal ticks negative")
+    fired.append(f"live /proc/stat steal ticks={live}")
+
+    sched_a = recorded_schedule(["a", "b"], 5, 3, 42, 1)
+    sched_b = recorded_schedule(["a", "b"], 5, 3, 42, 1)
+    if sched_a != sched_b:
+        raise BenchFail("recorded_schedule is not deterministic")
+    expected_pairs = {(c, t) for c in ("a", "b") for t in range(4, 9)}
+    if set(sched_a) != expected_pairs:
+        raise BenchFail(f"recorded_schedule lost pairs: {sched_a}")
+    sequential = [(c, t) for c in ("a", "b") for t in range(4, 9)]
+    if sched_a == sequential:
+        raise BenchFail("recorded_schedule did not shuffle (seed 42)")
+    fired.append(f"recorded_schedule shuffled: {sched_a}")
+
     print("TEST PASS: bench fail-closed selftest")
     for line in fired:
         print(f"  fired: {line}")
@@ -978,6 +1212,12 @@ def main() -> int:
     run_p.add_argument("--out-dir", default=os.environ.get("BENCH_OUT", "results"))
     run_p.add_argument("--port", type=int, default=int(os.environ.get("BENCH_PORT", "8080")))
     run_p.add_argument("--allow-dirty", action="store_true")
+    run_p.add_argument(
+        "--shuffle-seed",
+        type=int,
+        default=None,
+        help="recorded RNG seed for trial shuffle (or BENCH_SHUFFLE_SEED)",
+    )
     run_p.set_defaults(kind="whimbrel", func=cmd_run)
 
     fp = sub.add_parser("fp-ab", help="finding 14: frame-pointer A/B")

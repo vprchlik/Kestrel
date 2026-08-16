@@ -1523,17 +1523,21 @@ Pinning is enforced fail-loudly: QEMU version + binary hash, whimbrel SHA
 + dirty flag, host kernel, CPU model, governor, load average recorded per
 batch; the harness refuses to aggregate rows with mismatched QEMU version
 or a dirty tree. QEMU and client are `taskset`-pinned to separate cores.
-Warmup: first 3 trials of a batch are marked and excluded by the
-summarizer. Every failure mode of every new assert is exercised once
+Warmup: first 3 trials of each config in a batch are marked and
+excluded by the summarizer (round-robin, then shuffled recorded
+trials). Every failure mode of every new assert is exercised once
 (missing tshark, malformed PHASE line, zero-trial CSV). **Finding 14 is
 settled here with a number:** one A/B batch, release+fast-boot with and
-without `-C force-frame-pointers=yes`; if the delta clears the stability
-floor, strip it from measured builds (recorded amendment), else record it
-as a stated condition.
+without `-C force-frame-pointers=yes`; deltas inside the floor (E2→E3g
+Δ +0.250 ms, E0→E4 Δ +0.078 ms) and `.text` −15%, so the flag is
+stripped from release and kept for debug via `scripts/cargo-debug.sh`.
+Each trial records `/proc/stat` steal. Stability compares two
+interleaved batches, not the two arms inside one batch; the bar is not
+widened.
 
 - **Acceptance:** `just bench-whimbrel` produces both CSVs and the summary
   for release-default ("safe") and release+fast-boot configs; two
-  consecutive 30-trial batches meet the stability criterion (per-metric
+  interleaved 30-trial batches meet the stability criterion (per-metric
   medians within max(2%, 200 µs) for all metrics ≥ 1 ms); the fail-closed
   checks demonstrably fail; the frame-pointer decision is recorded with
   its measured delta.
