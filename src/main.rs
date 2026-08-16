@@ -107,19 +107,19 @@ compile_error!("net-udp-selftest is exclusive of the HTTP images");
 /// `hang-selftest` features divert that path so the harness can exercise
 /// FAIL and HANG without editing this file.
 #[no_mangle]
-extern "C" fn kmain(hartid: usize, dtb_pa: usize) -> ! {
+extern "C" fn kmain(_hartid: usize, dtb_pa: usize) -> ! {
     sbi::require_dbcn();
-    println!("whimbrel: hello from hart {}, dtb at {:#x}", hartid, dtb_pa);
+    println!("whimbrel: hello from hart {}, dtb at {:#x}", _hartid, dtb_pa);
     {
-        let sstatus = csr::sstatus::read();
-        let sie = csr::sie::read();
-        let stvec = csr::stvec::read();
-        let sscratch = csr::sscratch::read();
+        let _sstatus = csr::sstatus::read();
+        let _sie = csr::sie::read();
+        let _stvec = csr::stvec::read();
+        let _sscratch = csr::sscratch::read();
         let satp = csr::satp::read();
-        println!("sstatus {:#x}", sstatus);
-        println!("sie {:#x}", sie);
-        println!("stvec {:#x}", stvec);
-        println!("sscratch {:#x}", sscratch);
+        println!("sstatus {:#x}", _sstatus);
+        println!("sie {:#x}", _sie);
+        println!("stvec {:#x}", _stvec);
+        println!("sscratch {:#x}", _sscratch);
         println!("satp {:#x}", satp);
         if satp != 0 {
             panic!("satp={:#x}, expected Bare (0)", satp);

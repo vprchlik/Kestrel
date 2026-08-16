@@ -44,7 +44,8 @@ pub(crate) const OFF_QUEUE_NUM: usize = 0x038;
 pub(crate) const OFF_QUEUE_READY: usize = 0x044;
 /// QueueNotify. §4.2.2; write-only.
 pub(crate) const OFF_QUEUE_NOTIFY: usize = 0x050;
-/// InterruptStatus. §4.2.2; read-only.
+/// InterruptStatus. §4.2.2; read-only. Printed by `net::dump`.
+#[cfg(not(feature = "fast-boot"))]
 pub(crate) const OFF_INTERRUPT_STATUS: usize = 0x060;
 /// Device status. §4.2.2 / §2.1; read/write. Writing 0 is reset.
 pub(crate) const OFF_STATUS: usize = 0x070;
@@ -101,14 +102,6 @@ pub(crate) fn net_base() -> usize {
     b
 }
 
-fn device_name(id: u32) -> &'static str {
-    match id {
-        0 => "empty",
-        DEVICE_NET => "net",
-        _ => "other",
-    }
-}
-
 /// Probe all eight transports after paging is live. Magic is read first.
 /// A slot with no backend still returns MagicValue — DeviceID 0 is empty,
 /// a wrong magic is a broken transport. Version must be 2 on every slot
@@ -132,9 +125,13 @@ pub fn probe() {
             );
         }
         let device = read32(base, OFF_DEVICE_ID);
+        let _kind = match device {
+            0 => "empty",
+            DEVICE_NET => "net",
+            _ => "other",
+        };
         println!(
-            "virtio-mmio {i} {base:#x} magic={magic:#010x} version={version} device={device} ({})",
-            device_name(device)
+            "virtio-mmio {i} {base:#x} magic={magic:#010x} version={version} device={device} ({_kind})"
         );
         if device == DEVICE_NET {
             net_slot = Some(i);

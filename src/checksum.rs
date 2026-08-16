@@ -15,6 +15,7 @@
     allow(dead_code)
 )]
 
+#[cfg(not(feature = "fast-boot"))]
 use crate::println;
 
 /// Fold carries until `sum` fits in 16 bits. RFC 1071.
@@ -58,6 +59,7 @@ pub fn valid(data: &[u8]) -> bool {
 }
 
 /// Fold-until-stable, odd-length pad, and a built header that verifies.
+#[cfg(not(feature = "fast-boot"))]
 pub fn selftest() {
     // One fold of 0x1ffff is 0x10000; as u16 that is 0. We need 1.
     if fold(0x1ffff) != 1 {

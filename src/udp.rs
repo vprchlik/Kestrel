@@ -25,23 +25,10 @@ const HDR: usize = 8;
 /// Echo port. PLAN T3.8 / `hostfwd=udp::7777-:7`.
 pub const ECHO_PORT: u16 = 7;
 
-static mut DROP_SHORT: u32 = 0;
-static mut DROP_LEN: u32 = 0;
-static mut DROP_CSUM: u32 = 0;
-static mut DROP_PORT: u32 = 0;
-
-pub fn drop_short() -> u32 {
-    unsafe { DROP_SHORT }
-}
-pub fn drop_len() -> u32 {
-    unsafe { DROP_LEN }
-}
-pub fn drop_csum() -> u32 {
-    unsafe { DROP_CSUM }
-}
-pub fn drop_port() -> u32 {
-    unsafe { DROP_PORT }
-}
+pub static mut DROP_SHORT: u32 = 0;
+pub static mut DROP_LEN: u32 = 0;
+pub static mut DROP_CSUM: u32 = 0;
+pub static mut DROP_PORT: u32 = 0;
 
 fn be16(b: &[u8], off: usize) -> u16 {
     u16::from_be_bytes([b[off], b[off + 1]])
@@ -157,6 +144,7 @@ pub fn write_dgram(
 }
 
 /// Mirror payload and length; swap ports; recompute checksum. Returns length.
+#[cfg(not(feature = "fast-boot"))]
 pub fn write_echo(dst_udp: &mut [u8], req: &[u8], src_ip: &[u8; 4], dst_ip: &[u8; 4]) -> usize {
     if req.len() < HDR {
         panic!("udp: echo copy {} < {HDR}", req.len());
@@ -176,6 +164,7 @@ pub fn write_echo(dst_udp: &mut [u8], req: &[u8], src_ip: &[u8; 4], dst_ip: &[u8
 }
 
 /// Pseudo-header layout, 0→0xFFFF, and echo swap (D-0050).
+#[cfg(not(feature = "fast-boot"))]
 pub fn selftest() {
     let ours = [10, 0, 2, 15];
     let peer = [10, 0, 2, 2];

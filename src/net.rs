@@ -13,6 +13,7 @@
 )]
 
 use crate::arp;
+#[cfg(not(feature = "fast-boot"))]
 use crate::checksum;
 use crate::csr;
 use crate::icmp;
@@ -43,14 +44,8 @@ const FAILED: u32 = 128;
 
 /// `VIRTIO_NET_F_MAC` — bit 5, word 0. §5.1.3.
 const F_MAC: u32 = 1 << 5;
-/// `VIRTIO_NET_F_MRG_RXBUF` — bit 15, word 0. We decline it (D-0038).
-const F_MRG_RXBUF: u32 = 1 << 15;
 /// `VIRTIO_F_VERSION_1` — bit 32, so bit 0 of word 1. §6.
 const F_VERSION_1: u32 = 1 << 0;
-/// `VIRTIO_NET_F_STATUS` — bit 16, word 0. Declined.
-const F_STATUS: u32 = 1 << 16;
-/// `VIRTIO_F_RING_EVENT_IDX` — bit 29, word 0. Declined.
-const F_EVENT_IDX: u32 = 1 << 29;
 
 /// 100 ms at the 10 MHz `rdtime` timebase (`timer::PERIOD` is 10 ms).
 const STALL_TICKS: usize = 1_000_000;
@@ -164,58 +159,61 @@ fn write_driver_features(base: usize, w0: u32, w1: u32) {
 
 /// Status, ISR, both rings' shadow indices, posted/completed counters.
 pub fn dump() {
-    let base = virtio::net_base();
-    let st = status(base);
-    let isr = virtio::read32(base, virtio::OFF_INTERRUPT_STATUS);
-    let rx_a = virtq::rx_avail_idx();
-    let rx_u = virtq::rx_used_idx();
-    let tx_a = virtq::tx_avail_idx();
-    let tx_u = virtq::tx_used_idx();
-    let rx_p = unsafe { RX_POSTED };
-    let rx_c = unsafe { RX_COMPLETED };
-    let tx_p = unsafe { TX_POSTED };
-    let tx_c = unsafe { TX_COMPLETED };
-    let d_short = unsafe { RX_DROP_SHORT };
-    let d_other = unsafe { RX_DROP_OTHER };
-    let tag = if st & NEEDS_RESET != 0 {
-        " DEVICE_NEEDS_RESET"
-    } else {
-        ""
-    };
-    println!(
-        "net: dump{tag} status={st:#x} isr={isr:#x} rx avail={rx_a} used={rx_u} posted={rx_p} completed={rx_c} tx avail={tx_a} used={tx_u} posted={tx_p} completed={tx_c} drop_short={d_short} drop_other={d_other} arp_drop short={} htype={} ptype={} hlen={} plen={} op={} tpa={} ip_drop short={} ver={} ihl={} csum={} frag={} dst={} proto={} icmp_drop short={} csum={} type={} udp_drop short={} len={} csum={} port={} tcp_drop short={} doff={} csum={} opt={} port={} noarp={} busy={} unexpected={} established={} rexmit={}",
-        arp::drop_short(),
-        arp::drop_htype(),
-        arp::drop_ptype(),
-        arp::drop_hlen(),
-        arp::drop_plen(),
-        arp::drop_op(),
-        arp::drop_tpa(),
-        ipv4::drop_short(),
-        ipv4::drop_ver(),
-        ipv4::drop_ihl(),
-        ipv4::drop_csum(),
-        ipv4::drop_frag(),
-        ipv4::drop_dst(),
-        ipv4::drop_proto(),
-        icmp::drop_short(),
-        icmp::drop_csum(),
-        icmp::drop_type(),
-        udp::drop_short(),
-        udp::drop_len(),
-        udp::drop_csum(),
-        udp::drop_port(),
-        tcp::drop_short(),
-        tcp::drop_doff(),
-        tcp::drop_csum(),
-        tcp::drop_opt(),
-        tcp::drop_port(),
-        tcp::drop_noarp(),
-        tcp::drop_busy(),
-        tcp::drop_unexpected(),
-        tcp::established(),
-        tcp::rexmit(),
-    );
+    #[cfg(not(feature = "fast-boot"))]
+    {
+        let base = virtio::net_base();
+        let st = status(base);
+        let isr = virtio::read32(base, virtio::OFF_INTERRUPT_STATUS);
+        let rx_a = virtq::rx_avail_idx();
+        let rx_u = virtq::rx_used_idx();
+        let tx_a = virtq::tx_avail_idx();
+        let tx_u = virtq::tx_used_idx();
+        let rx_p = unsafe { RX_POSTED };
+        let rx_c = unsafe { RX_COMPLETED };
+        let tx_p = unsafe { TX_POSTED };
+        let tx_c = unsafe { TX_COMPLETED };
+        let d_short = unsafe { RX_DROP_SHORT };
+        let d_other = unsafe { RX_DROP_OTHER };
+        let tag = if st & NEEDS_RESET != 0 {
+            " DEVICE_NEEDS_RESET"
+        } else {
+            ""
+        };
+        println!(
+            "net: dump{tag} status={st:#x} isr={isr:#x} rx avail={rx_a} used={rx_u} posted={rx_p} completed={rx_c} tx avail={tx_a} used={tx_u} posted={tx_p} completed={tx_c} drop_short={d_short} drop_other={d_other} arp_drop short={} htype={} ptype={} hlen={} plen={} op={} tpa={} ip_drop short={} ver={} ihl={} csum={} frag={} dst={} proto={} icmp_drop short={} csum={} type={} udp_drop short={} len={} csum={} port={} tcp_drop short={} doff={} csum={} opt={} port={} noarp={} busy={} unexpected={} established={} rexmit={}",
+            unsafe { arp::DROP_SHORT },
+            unsafe { arp::DROP_HTYPE },
+            unsafe { arp::DROP_PTYPE },
+            unsafe { arp::DROP_HLEN },
+            unsafe { arp::DROP_PLEN },
+            unsafe { arp::DROP_OP },
+            unsafe { arp::DROP_TPA },
+            unsafe { ipv4::DROP_SHORT },
+            unsafe { ipv4::DROP_VER },
+            unsafe { ipv4::DROP_IHL },
+            unsafe { ipv4::DROP_CSUM },
+            unsafe { ipv4::DROP_FRAG },
+            unsafe { ipv4::DROP_DST },
+            unsafe { ipv4::DROP_PROTO },
+            unsafe { icmp::DROP_SHORT },
+            unsafe { icmp::DROP_CSUM },
+            unsafe { icmp::DROP_TYPE },
+            unsafe { udp::DROP_SHORT },
+            unsafe { udp::DROP_LEN },
+            unsafe { udp::DROP_CSUM },
+            unsafe { udp::DROP_PORT },
+            unsafe { tcp::DROP_SHORT },
+            unsafe { tcp::DROP_DOFF },
+            unsafe { tcp::DROP_CSUM },
+            unsafe { tcp::DROP_OPT },
+            unsafe { tcp::DROP_PORT },
+            unsafe { tcp::DROP_NOARP },
+            unsafe { tcp::DROP_BUSY },
+            unsafe { tcp::DROP_UNEXPECTED },
+            unsafe { tcp::ESTABLISHED },
+            tcp::rexmit(),
+        );
+    }
 }
 
 /// If TX has been posted and `used.idx` has not moved for ~100 ms of
@@ -266,19 +264,19 @@ pub fn init() {
     }
     println!("virtio-net: reset status=0");
 
-    let got = write_status(base, ACKNOWLEDGE);
-    println!("virtio-net: ACKNOWLEDGE status={got:#x}");
-    let got = write_status(base, ACKNOWLEDGE | DRIVER);
-    println!("virtio-net: DRIVER status={got:#x}");
+    let _got = write_status(base, ACKNOWLEDGE);
+    println!("virtio-net: ACKNOWLEDGE status={_got:#x}");
+    let _got = write_status(base, ACKNOWLEDGE | DRIVER);
+    println!("virtio-net: DRIVER status={_got:#x}");
 
     let (dev0, dev1) = read_device_features(base);
     println!("virtio-net: device features word0={dev0:#x} word1={dev1:#x}");
     println!(
         "virtio-net: offered MAC={} MRG_RXBUF={} STATUS={} EVENT_IDX={} VERSION_1={}",
         dev0 & F_MAC != 0,
-        dev0 & F_MRG_RXBUF != 0,
-        dev0 & F_STATUS != 0,
-        dev0 & F_EVENT_IDX != 0,
+        dev0 & (1 << 15) != 0,
+        dev0 & (1 << 16) != 0,
+        dev0 & (1 << 29) != 0,
         dev1 & F_VERSION_1 != 0
     );
     if dev0 & F_MAC == 0 {
@@ -393,13 +391,13 @@ fn wait_tx(base: usize, why: &str) {
     loop {
         require_device(base);
         let seen = unsafe { TX_SEEN };
-        if let Some((next, id, len)) = virtq::take_tx_used(seen) {
+        if let Some((next, _id, _len)) = virtq::take_tx_used(seen) {
             unsafe {
                 TX_SEEN = next;
                 TX_COMPLETED = TX_COMPLETED.wrapping_add(1);
             }
             println!(
-                "virtio-net: TX {why} completed={} id={id} len={len}",
+                "virtio-net: TX {why} completed={} id={_id} len={_len}",
                 unsafe { TX_COMPLETED }
             );
             return;
@@ -572,8 +570,8 @@ fn classify_ipv4(base: usize, frame: &[u8]) {
         return;
     }
     match icmp::parse(d.payload) {
-        Some(icmp::Msg::EchoReq { id, seq, raw }) => {
-            println!("virtio-net: RX icmp echo-req id={id} seq={seq}");
+        Some(icmp::Msg::EchoReq { id: _id, seq: _seq, raw }) => {
+            println!("virtio-net: RX icmp echo-req id={_id} seq={_seq}");
             tx_icmp_echo_reply(base, d.src, raw);
         }
         Some(icmp::Msg::EchoReply { id, seq }) => {
@@ -1026,9 +1024,9 @@ fn print_ping_rtt() {
     let tx = unsafe { PING_TX };
     let rx = unsafe { PING_RX };
     let ticks = rx.wrapping_sub(tx);
-    let ns = ticks.wrapping_mul(timer::TICK_NS);
+    let _ns = ticks.wrapping_mul(timer::TICK_NS);
     println!(
-        "PING RTT dst=10.0.2.2 id={PING_ID} seq={PING_SEQ} tx={tx} rx={rx} ticks={ticks} ns={ns}"
+        "PING RTT dst=10.0.2.2 id={PING_ID} seq={PING_SEQ} tx={tx} rx={rx} ticks={ticks} ns={_ns}"
     );
 }
 

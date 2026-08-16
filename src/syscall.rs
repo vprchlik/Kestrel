@@ -102,11 +102,11 @@ pub fn from_ecall(frame: &mut TrapFrame) -> &mut TrapFrame {
 
 /// Every invalid pointer kills (D-0034). The two failure shapes are
 /// separate feature boots so the kill of one cannot hide the other.
-fn kill_invalid_ptr(frame: &mut TrapFrame, ptr: usize, len: usize, why: &str, who: &str) -> ! {
+fn kill_invalid_ptr(frame: &mut TrapFrame, ptr: usize, _len: usize, _why: &str, _who: &str) -> ! {
     frame.set_retval(ERR_INVALID_ADDRESS, 0);
     println!(
-        "{who}: ptr={:#x} len={} {} err={} val=0",
-        ptr, len, why, ERR_INVALID_ADDRESS
+        "{_who}: ptr={:#x} len={} {} err={} val=0",
+        ptr, _len, _why, ERR_INVALID_ADDRESS
     );
     task::kill_invalid_user_ptr(frame.sepc, ptr);
     println!("USERPTR OK");

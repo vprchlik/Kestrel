@@ -103,46 +103,25 @@ static mut TCB: Tcb = Tcb {
     rexmit: 0,
 };
 
-static mut DROP_SHORT: u32 = 0;
-static mut DROP_DOFF: u32 = 0;
-static mut DROP_CSUM: u32 = 0;
-static mut DROP_OPT: u32 = 0;
-static mut DROP_PORT: u32 = 0;
-static mut DROP_NOARP: u32 = 0;
-static mut DROP_BUSY: u32 = 0;
-static mut DROP_UNEXPECTED: u32 = 0;
-static mut ESTABLISHED: u32 = 0;
+pub static mut DROP_SHORT: u32 = 0;
+pub static mut DROP_DOFF: u32 = 0;
+pub static mut DROP_CSUM: u32 = 0;
+pub static mut DROP_OPT: u32 = 0;
+pub static mut DROP_PORT: u32 = 0;
+pub static mut DROP_NOARP: u32 = 0;
+pub static mut DROP_BUSY: u32 = 0;
+pub static mut DROP_UNEXPECTED: u32 = 0;
+pub static mut ESTABLISHED: u32 = 0;
 
-pub fn drop_short() -> u32 {
-    unsafe { DROP_SHORT }
-}
-pub fn drop_doff() -> u32 {
-    unsafe { DROP_DOFF }
-}
-pub fn drop_csum() -> u32 {
-    unsafe { DROP_CSUM }
-}
-pub fn drop_opt() -> u32 {
-    unsafe { DROP_OPT }
-}
-pub fn drop_port() -> u32 {
-    unsafe { DROP_PORT }
-}
-pub fn drop_noarp() -> u32 {
-    unsafe { DROP_NOARP }
-}
-pub fn drop_busy() -> u32 {
-    unsafe { DROP_BUSY }
-}
-pub fn drop_unexpected() -> u32 {
-    unsafe { DROP_UNEXPECTED }
-}
+#[cfg(feature = "net-init-selftest")]
 pub fn established() -> u32 {
     unsafe { ESTABLISHED }
 }
+#[cfg(any(not(feature = "fast-boot"), feature = "tcp-drop-first-tx"))]
 pub fn rexmit() -> u32 {
     unsafe { TCB.rexmit }
 }
+#[cfg(feature = "net-init-selftest")]
 pub fn listening() -> bool {
     unsafe { TCB.state == State::Listen }
 }
@@ -423,11 +402,11 @@ fn queue_rx(t: &mut Tcb, data: &[u8]) -> bool {
 }
 
 fn rx_fin(t: &mut Tcb) {
-    let old = t.rcv_nxt;
+    let _old = t.rcv_nxt;
     t.rcv_nxt = t.rcv_nxt.wrapping_add(1);
     println!(
         "tcp: RX FIN seq={} rcv_nxt {} -> {} (FIN consumes 1)",
-        old, old, t.rcv_nxt
+        _old, _old, t.rcv_nxt
     );
     if t.saw_data || t.app_sent {
         t.eof = true;
@@ -739,6 +718,7 @@ fn ack_only_saved(src: &[u8; 4], sport: u16, ack: u32, seq: u32) -> Out {
     }
 }
 
+#[cfg(not(feature = "fast-boot"))]
 pub fn selftest() {
     let ours = [10, 0, 2, 15];
     let peer = [10, 0, 2, 2];

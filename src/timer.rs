@@ -19,7 +19,7 @@ pub const PERIOD: usize = 100_000;
 const _: () = assert!(TICK_NS == 1_000_000_000 / TIMEBASE_HZ);
 const _: () = assert!(PERIOD == TIMEBASE_HZ / 100);
 /// 1 ms at the same timebase. Stress widens the interrupt-during-alloc window.
-#[cfg_attr(not(feature = "stress"), allow(dead_code))]
+#[cfg(feature = "stress")]
 pub const PERIOD_1MS: usize = 10_000;
 
 static mut PERIOD_NOW: usize = PERIOD;
@@ -50,7 +50,7 @@ pub fn arm() {
 
 /// Next `arm` uses this many `rdtime` ticks. Re-arms immediately so the new
 /// period takes effect. Stress only; default boot never calls this.
-#[cfg_attr(not(feature = "stress"), allow(dead_code))]
+#[cfg(feature = "stress")]
 pub fn set_period(ticks: usize) {
     if ticks == 0 {
         panic!("timer period 0");
@@ -61,6 +61,7 @@ pub fn set_period(ticks: usize) {
 
 /// Tick count. Volatile: the compiler cannot see that `__trap_entry`
 /// writes this, and a `wfi` wait loop would otherwise CSE a single load.
+#[cfg(any(not(feature = "fast-boot"), feature = "stress"))]
 #[cfg_attr(
     any(feature = "panic-selftest", feature = "hang-selftest"),
     allow(dead_code)

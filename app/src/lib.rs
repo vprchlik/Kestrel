@@ -28,6 +28,7 @@ mod inner {
 mod inner {
     #[link_section = ".urodata"]
     pub static READY: [u8; 11] = *b"HTTP READY\n";
+    #[cfg(not(feature = "persist"))]
     #[link_section = ".urodata"]
     pub static DONE: [u8; 10] = *b"HTTP DONE\n";
     /// `HTTP/1.0 200 OK` + `Connection: close` + body `whimbrel\n` (D-0053).
