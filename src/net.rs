@@ -1,11 +1,11 @@
 //! virtio-net device: handshake, RX/TX, ARP, IPv4, ICMP, UDP, TCP (D-0038, D-0040, D-0041).
 //!
-//! Owns the feature negotiation, QueueReady, RX posting, TX (gratuitous
-//! ARP, ARP replies, ICMP echo, UDP), MAC print, and `dump` / stall /
-//! DEVICE_NEEDS_RESET observability. Parse lives in `arp`/`ipv4`/`icmp`/
-//! `udp`. The rings stay in `virtq`. UDP payloads wait for `recv`; `send`
-//! transmits. Without this module the NIC never leaves reset and the
-//! app has nothing to poll.
+//! Owns the feature negotiation, QueueReady, RX posting, TX (ARP
+//! request for the gateway, GARP, ARP replies, ICMP echo, UDP), MAC
+//! print, and `dump` / stall / DEVICE_NEEDS_RESET observability.
+//! Parse lives in `arp`/`ipv4`/`icmp`/`udp`. The rings stay in `virtq`.
+//! UDP payloads wait for `recv`; `send` transmits. Without this module
+//! the NIC never leaves reset and the app has nothing to poll.
 
 #![cfg_attr(
     any(feature = "panic-selftest", feature = "hang-selftest"),
@@ -54,7 +54,7 @@ const F_EVENT_IDX: u32 = 1 << 29;
 
 /// 100 ms at the 10 MHz `rdtime` timebase (`timer::PERIOD` is 10 ms).
 const STALL_TICKS: usize = 1_000_000;
-/// How long `wait_rx_arp` spins for slirp's request (~2 s).
+/// How long `wait_gateway_arp` spins for slirp's reply (~2 s).
 const RX_WAIT_TICKS: usize = 20 * STALL_TICKS;
 
 /// virtio-net header with `VIRTIO_F_VERSION_1` and without `MRG_RXBUF`:
@@ -329,6 +329,7 @@ pub fn init() {
     }
     println!("virtio-net: DRIVER_OK status={got:#x}");
     println!("DRIVER_OK");
+    crate::phase::stamp(crate::phase::DRIVER_OK);
 
     virtq::notify(base, virtq::Q_RX);
 
@@ -342,21 +343,20 @@ pub fn init() {
     }
     unsafe { MAC = mac };
 
-    arp::wrap_selftest();
-    checksum::selftest();
-    icmp::reply_selftest();
-    udp::selftest();
-    tcp::selftest();
+    #[cfg(not(feature = "fast-boot"))]
+    {
+        arp::wrap_selftest();
+        checksum::selftest();
+        icmp::reply_selftest();
+        udp::selftest();
+        tcp::selftest();
+    }
     dump();
     poll_stall();
-    // RX before GARP: slirp learns our MAC from the GARP and will not
-    // ARP. The T3.5 trigger is that ARP, so wait for it first. T3.6
-    // replies; a second hostfwd connect then proceeds past ARP.
-    wait_rx_arp(base);
+    wait_gateway_arp(base);
     tx_gratuitous_arp(base);
-    // D-0047: cache holds 10.0.2.2 from slirp's request. Ping fails
-    // loudly if that learn did not happen — no ARP-and-queue.
     ping_gateway(base);
+    crate::phase::stamp(crate::phase::LISTEN);
 }
 
 /// Build a 12-byte zero virtio-net header plus a 60-byte Ethernet frame
@@ -411,28 +411,44 @@ fn wait_tx(base: usize, why: &str) {
     }
 }
 
-/// Drain the RX used ring until we have replied to slirp's request, or
-/// panic. Consumed buffers are re-posted (never freed). A timeout here
-/// is not "try GARP anyway": without a request there is no reply, and
-/// T3.6's pcap chain never starts (D-0046).
-fn wait_rx_arp(base: usize) {
+/// ARP request for 10.0.2.2, then drain RX until the cache holds it
+/// (D-0054). Standalone boot does not wait to be asked.
+fn wait_gateway_arp(base: usize) {
+    tx_arp_request(base);
     let t0 = csr::time::read();
     loop {
         require_device(base);
-        if poll_rx(base) {
+        let _ = poll_rx(base);
+        if arp::lookup(GW).is_some() {
+            println!("virtio-net: gateway 10.0.2.2 MAC learned");
             dump();
             return;
         }
         poll_stall();
         if csr::time::read().wrapping_sub(t0) >= RX_WAIT_TICKS {
-            println!("virtio-net: RX no ARP request after ~2s");
+            println!("virtio-net: RX no ARP reply from 10.0.2.2 after ~2s");
             dump();
-            panic!(
-                "virtio-net: no ARP request for us; slirp never asked (DRIVER_OK connect missed the window, or DEVICE_NEEDS_RESET)"
-            );
+            panic!("virtio-net: no ARP reply for gateway 10.0.2.2");
         }
         unsafe { asm!("wfi") };
     }
+}
+
+fn tx_arp_request(base: usize) {
+    let mac = unsafe { MAC };
+    {
+        let buf = virtq::tx_buf(0);
+        for b in buf.iter_mut().take(TX_LEN as usize) {
+            *b = 0;
+        }
+        arp::write_request(&mut buf[VNET_HDR..], &mac, &IP, &GW);
+    }
+    virtq::post_tx(0, TX_LEN);
+    unsafe { TX_POSTED = TX_POSTED.wrapping_add(1) };
+    arm_tx_stall();
+    println!("virtio-net: TX ARP request for 10.0.2.2");
+    virtq::notify(base, virtq::Q_TX);
+    wait_tx(base, "ARP request");
 }
 
 /// Drain every used RX entry. Returns true iff we transmitted an ARP reply.
@@ -477,6 +493,7 @@ fn poll_rx(base: usize) -> bool {
 /// Strip the 12-byte virtio-net header, classify EtherType, maybe reply.
 /// Returns true iff we posted an ARP reply (and waited for TX complete).
 fn classify_rx(base: usize, desc_i: usize, used_len: u32) -> bool {
+    crate::phase::stamp(crate::phase::FIRST_RX);
     let buf = virtq::rx_buf(desc_i);
     let n = used_len as usize;
     if n < VNET_HDR + ETH_HDR || n > buf.len() {
@@ -503,11 +520,14 @@ fn classify_rx(base: usize, desc_i: usize, used_len: u32) -> bool {
         frame.len()
     );
     print_hex(frame);
-    let Some(req) = arp::process(frame, &IP) else {
-        return false;
-    };
-    tx_arp_reply(base, &req);
-    true
+    match arp::process(frame, &IP) {
+        Some(arp::Event::Request(req)) => {
+            tx_arp_reply(base, &req);
+            true
+        }
+        Some(arp::Event::Reply) => false,
+        None => false,
+    }
 }
 
 fn tx_arp_reply(base: usize, req: &arp::RequestForUs) {
@@ -713,7 +733,15 @@ fn tx_tcp_seg(
     arm_tx_stall();
     println!("virtio-net: TX TCP seg seq={seq} ack={ack} flags={flags:#04x} dlen={data_len}");
     virtq::notify(base, virtq::Q_TX);
+    let first_http = data_len > 0 && crate::phase::get(crate::phase::E3G) == 0;
+    if first_http {
+        crate::phase::stamp(crate::phase::E3G);
+    }
     wait_tx(base, "TCP seg");
+    if first_http {
+        crate::phase::print_after_response();
+        crate::println_always!("M3 UNIKERNEL OK");
+    }
 }
 
 fn classify_udp(_base: usize, d: &ipv4::Datagram<'_>) {
@@ -941,9 +969,7 @@ fn wait_ping_reply(base: usize) {
         require_device(base);
         let _ = poll_rx(base);
         pump_tcp(base);
-        // Handshake, then recycle the hostfwd probe to LISTEN so curl
-        // is not a second 4-tuple against a live TCB (D-0053).
-        if unsafe { PING_DONE } && tcp::established() != 0 && tcp::listening() {
+        if unsafe { PING_DONE } {
             print_ping_rtt();
             dump();
             return;

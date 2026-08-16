@@ -122,6 +122,7 @@ pub fn install() {
             addr, got
         );
     }
+    crate::phase::stamp(crate::phase::STVEC);
 }
 
 /// Instruction width in bytes from the trapped instruction's low halfword.

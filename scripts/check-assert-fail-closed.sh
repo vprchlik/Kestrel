@@ -28,6 +28,7 @@ trap 'rm -rf "$tmp"' EXIT
 
 expect_fail scripts/assert-pcap-garp.sh "$tmp/no-such.pcap" missing
 expect_fail scripts/assert-pcap-slirp-arp.sh "$tmp/no-such.pcap" missing
+expect_fail scripts/assert-pcap-gateway-arp.sh "$tmp/no-such.pcap" missing
 expect_fail scripts/assert-pcap-arp-reply.sh "$tmp/no-such.pcap" missing
 expect_fail scripts/assert-pcap-icmp.sh "$tmp/no-such.pcap" missing
 expect_fail scripts/assert-pcap-udp-echo.sh "$tmp/no-such.pcap" missing
@@ -38,6 +39,7 @@ expect_fail scripts/assert-pcap-tcp-retransmit.sh "$tmp/no-such.pcap" missing
 : >"$tmp/empty.pcap"
 expect_fail scripts/assert-pcap-garp.sh "$tmp/empty.pcap" empty
 expect_fail scripts/assert-pcap-slirp-arp.sh "$tmp/empty.pcap" empty
+expect_fail scripts/assert-pcap-gateway-arp.sh "$tmp/empty.pcap" empty
 expect_fail scripts/assert-pcap-arp-reply.sh "$tmp/empty.pcap" empty
 expect_fail scripts/assert-pcap-icmp.sh "$tmp/empty.pcap" empty
 expect_fail scripts/assert-pcap-udp-echo.sh "$tmp/empty.pcap" empty
@@ -140,6 +142,30 @@ write_pcap(d + "/reply-then-req.pcap", [our_reply, slirp_req, ipv4_syn])
 write_pcap(d + "/icmp-req-only.pcap", [icmp_req])
 write_pcap(d + "/icmp-happy.pcap", [icmp_req, icmp_rep])
 write_pcap(d + "/icmp-reply-then-req.pcap", [icmp_rep, icmp_req])
+
+our_gw_req = pad60(
+    bcast
+    + guest_mac
+    + bytes.fromhex("0806")
+    + bytes.fromhex("0001080006040001")
+    + guest_mac
+    + bytes.fromhex("0a00020f")
+    + bytes(6)
+    + bytes.fromhex("0a000202")
+)
+gw_reply = pad60(
+    guest_mac
+    + slirp_mac
+    + bytes.fromhex("0806")
+    + bytes.fromhex("0001080006040002")
+    + slirp_mac
+    + bytes.fromhex("0a000202")
+    + guest_mac
+    + bytes.fromhex("0a00020f")
+)
+write_pcap(d + "/gw-req-only.pcap", [our_gw_req])
+write_pcap(d + "/gw-happy.pcap", [our_gw_req, gw_reply, ipv4_syn])
+write_pcap(d + "/gw-reply-then-req.pcap", [gw_reply, our_gw_req, ipv4_syn])
 
 payload = b"whimbrel-udp-echo"
 # 14 + 20 + 8 + 17 = 59, pad to 60. UDP length 25, IP tot 45.
@@ -345,6 +371,7 @@ PY
 
 expect_fail scripts/assert-pcap-garp.sh "$tmp/hdr-only.pcap" "no gratuitous ARP"
 expect_fail scripts/assert-pcap-slirp-arp.sh "$tmp/hdr-only.pcap" "no slirp ARP"
+expect_fail scripts/assert-pcap-gateway-arp.sh "$tmp/hdr-only.pcap" "no ARP request for 10.0.2.2"
 expect_fail scripts/assert-pcap-arp-reply.sh "$tmp/hdr-only.pcap" "no slirp ARP request"
 expect_fail scripts/assert-pcap-icmp.sh "$tmp/hdr-only.pcap" "no ICMP echo request"
 expect_fail scripts/assert-pcap-udp-echo.sh "$tmp/hdr-only.pcap" "no UDP echo request"
@@ -354,6 +381,7 @@ expect_fail scripts/assert-pcap-tcp-retransmit.sh "$tmp/hdr-only.pcap" "want exa
 
 # Our GARP must not satisfy the slirp filter (spa == tpa == 10.0.2.15).
 expect_fail scripts/assert-pcap-slirp-arp.sh "$tmp/garp-only.pcap" "no slirp ARP"
+expect_fail scripts/assert-pcap-gateway-arp.sh "$tmp/garp-only.pcap" "no ARP request for 10.0.2.2"
 expect_fail scripts/assert-pcap-arp-reply.sh "$tmp/garp-only.pcap" "no slirp ARP request"
 expect_fail scripts/assert-pcap-icmp.sh "$tmp/garp-only.pcap" "no ICMP echo request"
 expect_fail scripts/assert-pcap-udp-echo.sh "$tmp/garp-only.pcap" "no UDP echo request"
@@ -368,6 +396,11 @@ expect_fail scripts/assert-pcap-arp-reply.sh "$tmp/reply-then-req.pcap" "no ARP 
 
 bash scripts/assert-pcap-slirp-arp.sh "$tmp/happy.pcap"
 bash scripts/assert-pcap-arp-reply.sh "$tmp/happy.pcap"
+
+expect_fail scripts/assert-pcap-gateway-arp.sh "$tmp/req-only.pcap" "no ARP request for 10.0.2.2"
+expect_fail scripts/assert-pcap-gateway-arp.sh "$tmp/gw-req-only.pcap" "no ARP reply from 10.0.2.2"
+expect_fail scripts/assert-pcap-gateway-arp.sh "$tmp/gw-reply-then-req.pcap" "no ARP reply"
+bash scripts/assert-pcap-gateway-arp.sh "$tmp/gw-happy.pcap"
 
 expect_fail scripts/assert-pcap-icmp.sh "$tmp/happy.pcap" "no ICMP echo request"
 expect_fail scripts/assert-pcap-icmp.sh "$tmp/icmp-req-only.pcap" "no ICMP echo reply"

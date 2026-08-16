@@ -4,7 +4,7 @@
 //! address of the device tree blob. `_start` sets `gp` and `sp`, zeros `.bss`,
 //! then calls `kmain`, which prints a hello line over the SBI debug console,
 //! a boot CSR snapshot, installs the trap handler, continues past a
-//! deliberate `ebreak`, waits for 30 timer ticks, runs a frame-allocator
+//! deliberate `ebreak`, waits for 3 timer ticks, runs a frame-allocator
 //! self-test, builds Sv39 page tables and walks them in software
 //! (`PAGETABLE OK`), activates Sv39 (`PAGING OK`), runs a heap self-test
 //! (`HEAP OK`), and `M1 FUNDAMENTALS OK`. M2 then `sret`s into U-mode tasks,
@@ -25,6 +25,7 @@ mod icmp;
 mod ipv4;
 mod net;
 mod page;
+mod phase;
 mod sbi;
 #[cfg(feature = "stress")]
 mod stress;
@@ -56,6 +57,7 @@ global_asm!(
     .section .text.entry, "ax"
     .globl _start
 _start:
+    rdtime  s2
     .option push
     .option norelax
     la      gp, __global_pointer$
@@ -74,6 +76,8 @@ _start:
     addi    t0, t0, 8
     j       1b
 2:
+    la      t0, PHASE_STAMPS
+    sd      s2, 0(t0)
     mv      a0, s0
     mv      a1, s1
     call    kmain
@@ -85,13 +89,17 @@ _start:
 
 #[cfg(all(
     feature = "net-udp-selftest",
-    any(feature = "net-http-selftest", feature = "tcp-drop-first-tx")
+    any(
+        feature = "net-http-selftest",
+        feature = "tcp-drop-first-tx",
+        feature = "http-persist"
+    )
 ))]
 compile_error!("net-udp-selftest is exclusive of the HTTP images");
 
 /// Rust entry, called from `_start` with OpenSBI's boot arguments in `a0`/`a1`.
 /// Prints hello, the boot CSR snapshot (`CSR OK`), installs `stvec`, starts
-/// 10 ms ticks, continues past an `ebreak` (`TRAP OK`), waits for `tick 30`,
+/// 10 ms ticks, continues past an `ebreak` (`TRAP OK`), waits for `tick 3`,
 /// checks the DTB then the frame allocator (`FRAME OK`), builds page tables
 /// without writing `satp` (`PAGETABLE OK`), activates Sv39 (`PAGING OK`),
 /// runs the heap self-test (`HEAP OK`), and `M1 FUNDAMENTALS OK`, then
@@ -127,34 +135,38 @@ extern "C" fn kmain(hartid: usize, dtb_pa: usize) -> ! {
     park();
     #[cfg(not(any(feature = "panic-selftest", feature = "hang-selftest")))]
     {
-        let ebreak_pc: usize;
-        unsafe {
-            asm!(
-                "lla {pc}, 1f",
-                "1: ebreak",
-                pc = out(reg) ebreak_pc,
-                options(nostack),
-            );
-        }
-        let half = unsafe { core::ptr::read(ebreak_pc as *const u16) };
-        let width = trap::instruction_width(half);
-        let sepc = csr::sepc::read();
-        if sepc != ebreak_pc + width {
-            panic!(
-                "ebreak continued at sepc={:#x}, expected {:#x} (ebreak was {:#x})",
-                sepc,
-                ebreak_pc + width,
-                ebreak_pc
-            );
-        }
-        println!("TRAP OK");
-        while timer::ticks() < 30 {
-            unsafe { asm!("wfi") };
+        #[cfg(not(feature = "fast-boot"))]
+        {
+            let ebreak_pc: usize;
+            unsafe {
+                asm!(
+                    "lla {pc}, 1f",
+                    "1: ebreak",
+                    pc = out(reg) ebreak_pc,
+                    options(nostack),
+                );
+            }
+            let half = unsafe { core::ptr::read(ebreak_pc as *const u16) };
+            let width = trap::instruction_width(half);
+            let sepc = csr::sepc::read();
+            if sepc != ebreak_pc + width {
+                panic!(
+                    "ebreak continued at sepc={:#x}, expected {:#x} (ebreak was {:#x})",
+                    sepc,
+                    ebreak_pc + width,
+                    ebreak_pc
+                );
+            }
+            println!("TRAP OK");
+            while timer::ticks() < 3 {
+                unsafe { asm!("wfi") };
+            }
         }
         // D-0023: header check before init. After this the DTB at
         // 0x87e00000 is clobberable — it lies inside the free-list range.
         frame::check_dtb(dtb_pa);
         frame::init();
+        #[cfg(not(feature = "fast-boot"))]
         frame::self_test();
         task::check_layout();
         task::init();
@@ -164,6 +176,7 @@ extern "C" fn kmain(hartid: usize, dtb_pa: usize) -> ! {
         virtq::init();
         net::init();
         heap::init();
+        #[cfg(not(feature = "fast-boot"))]
         heap::self_test();
         println!("M1 FUNDAMENTALS OK");
         #[cfg(feature = "frame-exhaust-selftest")]
@@ -187,21 +200,12 @@ extern "C" fn kmain(hartid: usize, dtb_pa: usize) -> ! {
             task::enter(0);
             #[cfg(feature = "user-fault-selftest")]
             task::enter(2);
-            #[cfg(any(
-                feature = "net-udp-selftest",
-                feature = "net-http-selftest",
-                feature = "tcp-drop-first-tx"
-            ))]
-            task::enter(3);
             #[cfg(not(any(
                 feature = "userptr-kernel-selftest",
                 feature = "userptr-span-selftest",
                 feature = "user-fault-selftest",
-                feature = "net-udp-selftest",
-                feature = "net-http-selftest",
-                feature = "tcp-drop-first-tx"
             )))]
-            task::enter(1);
+            task::enter(3);
         }
         #[cfg(feature = "net-init-selftest")]
         {
@@ -261,10 +265,11 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 
     match info.location() {
         Some(loc) => {
-            println!("PANIC at {}:{}: {}", loc.file(), loc.line(), info.message())
+            println_always!("PANIC at {}:{}: {}", loc.file(), loc.line(), info.message())
         }
-        None => println!("PANIC at ?:?: {}", info.message()),
+        None => println_always!("PANIC at ?:?: {}", info.message()),
     }
+    csr::sie::clear(csr::sie::STIE);
     park()
 }
 

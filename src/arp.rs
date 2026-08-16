@@ -1,16 +1,14 @@
-//! ARP parse, reply, and a 4-entry cache (D-0040, D-0045).
+//! ARP parse, reply, request, and a 4-entry cache (D-0040, D-0045, D-0054).
 //!
 //! Owns RFC 826 field checks, the wraparound cache, and the drop
 //! counters for every rejected shape. Remote bytes never panic: a bad
 //! packet increments a counter and is dropped. Check order, each a
 //! distinct counter: frame shorter than 14+28 → `drop_short`; htype ≠ 1
 //! → `drop_htype`; ptype ≠ 0x0800 → `drop_ptype`; hlen ≠ 6 → `drop_hlen`;
-//! plen ≠ 4 → `drop_plen`; opcode ≠ 1 → `drop_op` (replies included);
-//! TPA ≠ our IP → `drop_tpa`. The cache is the same code for one
-//! gateway as for four; wraparound is exercised at init and then
-//! cleared so dummy entries do not shadow 10.0.2.2. Without this
-//! module we classify EtherType and never answer, so slirp never
-//! learns us.
+//! plen ≠ 4 → `drop_plen`; opcode not request or reply → `drop_op`;
+//! TPA ≠ our IP → `drop_tpa`. Requests for us still produce a reply;
+//! replies for us fill the cache (the gateway client, D-0054). Without
+//! this module we classify EtherType and never resolve 10.0.2.2.
 
 #![cfg_attr(
     any(feature = "panic-selftest", feature = "hang-selftest"),
@@ -32,6 +30,8 @@ const HLEN: u8 = 6;
 const PLEN: u8 = 4;
 /// Opcode request. RFC 826.
 const OP_REQUEST: u16 = 1;
+/// Opcode reply. RFC 826.
+const OP_REPLY: u16 = 2;
 const CACHE_N: usize = 4;
 
 #[derive(Clone, Copy)]
@@ -55,6 +55,13 @@ static mut DROP_TPA: u32 = 0;
 pub struct RequestForUs {
     pub sha: [u8; 6],
     pub spa: [u8; 4],
+}
+
+/// Parsed ARP that is either a request we should answer or a reply
+/// that filled the cache.
+pub enum Event {
+    Request(RequestForUs),
+    Reply,
 }
 
 pub fn drop_short() -> u32 {
@@ -85,7 +92,7 @@ fn be16(b: &[u8], off: usize) -> u16 {
 
 /// Parse an Ethernet frame that already classified as EtherType ARP.
 /// `None` = dropped (counter already incremented).
-pub fn process(eth: &[u8], our_ip: &[u8; 4]) -> Option<RequestForUs> {
+pub fn process(eth: &[u8], our_ip: &[u8; 4]) -> Option<Event> {
     if eth.len() < ETH_HDR + ARP_LEN {
         unsafe { DROP_SHORT = DROP_SHORT.wrapping_add(1) };
         println!("arp: drop short frame.len={}", eth.len());
@@ -115,11 +122,6 @@ pub fn process(eth: &[u8], our_ip: &[u8; 4]) -> Option<RequestForUs> {
         return None;
     }
     let op = be16(a, 6);
-    if op != OP_REQUEST {
-        unsafe { DROP_OP = DROP_OP.wrapping_add(1) };
-        println!("arp: drop op={op}");
-        return None;
-    }
     let mut sha = [0u8; 6];
     let mut spa = [0u8; 4];
     let mut tpa = [0u8; 4];
@@ -131,8 +133,18 @@ pub fn process(eth: &[u8], our_ip: &[u8; 4]) -> Option<RequestForUs> {
         println!("arp: drop tpa {}.{}.{}.{}", tpa[0], tpa[1], tpa[2], tpa[3]);
         return None;
     }
+    if op == OP_REPLY {
+        learn(spa, sha);
+        println!("arp: reply spa={}.{}.{}.{}", spa[0], spa[1], spa[2], spa[3]);
+        return Some(Event::Reply);
+    }
+    if op != OP_REQUEST {
+        unsafe { DROP_OP = DROP_OP.wrapping_add(1) };
+        println!("arp: drop op={op}");
+        return None;
+    }
     learn(spa, sha);
-    Some(RequestForUs { sha, spa })
+    Some(Event::Request(RequestForUs { sha, spa }))
 }
 
 /// Fill a 60-byte Ethernet frame (42-byte ARP reply padded). Caller
@@ -157,6 +169,28 @@ pub fn write_reply(eth: &mut [u8], our_mac: &[u8; 6], our_ip: &[u8; 4], req: &Re
     a[14..18].copy_from_slice(our_ip);
     a[18..24].copy_from_slice(&req.sha);
     a[24..28].copy_from_slice(&req.spa);
+}
+
+/// Broadcast ARP request for `tpa`. 42-byte ARP padded to 60.
+pub fn write_request(eth: &mut [u8], our_mac: &[u8; 6], our_ip: &[u8; 4], tpa: &[u8; 4]) {
+    if eth.len() < 60 {
+        panic!("arp: request buf {} < 60", eth.len());
+    }
+    for b in eth.iter_mut().take(60) {
+        *b = 0;
+    }
+    eth[0..6].copy_from_slice(&[0xff; 6]);
+    eth[6..12].copy_from_slice(our_mac);
+    eth[12..14].copy_from_slice(&0x0806u16.to_be_bytes());
+    let a = &mut eth[ETH_HDR..ETH_HDR + ARP_LEN];
+    a[0..2].copy_from_slice(&HTYPE_ETH.to_be_bytes());
+    a[2..4].copy_from_slice(&PTYPE_IPV4.to_be_bytes());
+    a[4] = HLEN;
+    a[5] = PLEN;
+    a[6..8].copy_from_slice(&OP_REQUEST.to_be_bytes());
+    a[8..14].copy_from_slice(our_mac);
+    a[14..18].copy_from_slice(our_ip);
+    a[24..28].copy_from_slice(tpa);
 }
 
 fn learn(ip: [u8; 4], mac: [u8; 6]) {

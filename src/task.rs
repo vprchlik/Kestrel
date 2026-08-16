@@ -465,12 +465,11 @@ pub fn create(id: usize, entry: usize) {
     }
 }
 
-/// Create the static table. Default boot: tasks 1 and 2 are the T2.9
-/// demo (Ready); 0 and 3 are Exited so round-robin cannot `sret` into
-/// `sepc = 0`. Userptr selftests keep a single Ready task in slot 0.
-/// `user-fault-selftest` uses the same two-task table; `kmain` `enter`s
-/// task 2 so the load page fault is the first U-mode work.
-/// `net-udp-selftest` / HTTP images run the compiled app in slot 3 (D-0051).
+/// Create the static table. Default (and HTTP/UDP/persist/fast-boot)
+/// images run the compiled app in slot 3 (D-0051). Userptr selftests
+/// keep a single Ready task in slot 0. `user-fault-selftest` keeps the
+/// T2.10 two-task table; `kmain` `enter`s task 2 so the load page fault
+/// is the first U-mode work.
 pub fn init() {
     #[cfg(any(feature = "userptr-kernel-selftest", feature = "userptr-span-selftest"))]
     {
@@ -480,11 +479,20 @@ pub fn init() {
             get(id).state = State::Exited;
         }
     }
-    #[cfg(any(
-        feature = "net-udp-selftest",
-        feature = "net-http-selftest",
-        feature = "tcp-drop-first-tx"
-    ))]
+    #[cfg(feature = "user-fault-selftest")]
+    {
+        create(0, 0);
+        create(1, crate::user::task1());
+        create(2, crate::user::task2());
+        create(3, 0);
+        get(0).state = State::Exited;
+        get(3).state = State::Exited;
+    }
+    #[cfg(not(any(
+        feature = "userptr-kernel-selftest",
+        feature = "userptr-span-selftest",
+        feature = "user-fault-selftest",
+    )))]
     {
         create(0, 0);
         create(1, 0);
@@ -493,21 +501,6 @@ pub fn init() {
         get(0).state = State::Exited;
         get(1).state = State::Exited;
         get(2).state = State::Exited;
-    }
-    #[cfg(not(any(
-        feature = "userptr-kernel-selftest",
-        feature = "userptr-span-selftest",
-        feature = "net-udp-selftest",
-        feature = "net-http-selftest",
-        feature = "tcp-drop-first-tx"
-    )))]
-    {
-        create(0, 0);
-        create(1, crate::user::task1());
-        create(2, crate::user::task2());
-        create(3, 0);
-        get(0).state = State::Exited;
-        get(3).state = State::Exited;
     }
     println!(
         "fabricated sstatus {:#x} (SPIE=1 SPP=U SIE=0 FS=Off UXL=64)",
@@ -563,27 +556,30 @@ pub fn enter(id: usize) -> ! {
     //    that runs at all.
     //
     // Consumed frames are 67 tables (M2's 65 plus D-0039's L1+L0 for
-    // the virtio-mmio VPN[2]) plus the two FRAME OK self-test leftovers
-    // (D-0036). The MMIO pages themselves are not RAM and do not come
-    // from the pool — `total_frames()` is unchanged. Feature images can
-    // shift `total` with `__heap_end`; the split must still hold.
+    // the virtio-mmio VPN[2]) plus, except under `fast-boot`, the two
+    // FRAME OK self-test leftovers (D-0036). The MMIO pages themselves
+    // are not RAM and do not come from the pool — `total_frames()` is
+    // unchanged. Feature images can shift `total` with `__heap_end`;
+    // the split must still hold.
     {
         let total = crate::frame::total_frames();
         let free = crate::frame::free_count();
         let tables = crate::page::tables_used();
         let held = total - free;
-        if tables != 67 || held != tables + 2 {
+        let leftover = if cfg!(feature = "fast-boot") { 0 } else { 2 };
+        if tables != 67 || held != tables + leftover {
             panic!(
-                "frames held {} tables {} want tables=67 held=69 (root+2 L1+64 L0 + FRAME OK pair)",
-                held, tables
+                "frames held {} tables {} leftover {} want tables=67 leftover={}",
+                held, tables, leftover, leftover
             );
         }
         println!(
-            "frames consumed: tables={} selftest=2 held={}",
-            tables, held
+            "frames consumed: tables={} selftest={} held={}",
+            tables, leftover, held
         );
     }
     crate::frame::freeze();
+    crate::phase::stamp(crate::phase::FREEZE);
     let t = get(id);
     let sepc = unsafe { (*t.frame).sepc };
     println!(
@@ -592,6 +588,7 @@ pub fn enter(id: usize) -> ! {
     );
     t.state = State::Running;
     unsafe { CURRENT = Some(id) };
+    crate::phase::stamp(crate::phase::SRET);
     trap::resume(t.frame);
 }
 
@@ -607,7 +604,9 @@ pub fn has_current() -> bool {
     unsafe { core::ptr::read_volatile(&raw const CURRENT) }.is_some()
 }
 
+#[allow(dead_code)]
 static mut SWITCH_12: usize = 0;
+#[allow(dead_code)]
 static mut SWITCH_21: usize = 0;
 
 fn next_ready_after(id: usize) -> Option<usize> {
@@ -663,77 +662,21 @@ pub fn yield_cpu(frame: &mut TrapFrame) -> &mut TrapFrame {
     preempt(frame)
 }
 
-/// Last `exit` with an empty ready set: assert the T2.9 predicate, print
-/// `SCHED OK`, shut down. No idle loop (D-0035). The user-fault selftest
-/// has a different last-task path: task 2 is killed before it ever writes,
-/// so the 1→2 switch never happens and the T2.9 switch counts would panic.
+/// Last `exit` with an empty ready set: dump the stack and shut down.
+/// HTTP/UDP images print their marker here. The user-fault selftest has
+/// a different last-task path (D-0034). No idle loop (D-0035).
 fn finish_sched() -> ! {
     #[cfg(feature = "user-fault-selftest")]
     {
         finish_user_fault();
     }
-    #[cfg(any(
-        feature = "net-udp-selftest",
-        feature = "net-http-selftest",
-        feature = "tcp-drop-first-tx"
-    ))]
+    #[cfg(not(feature = "user-fault-selftest"))]
     {
         finish_app();
     }
-    #[cfg(not(any(
-        feature = "user-fault-selftest",
-        feature = "net-udp-selftest",
-        feature = "net-http-selftest",
-        feature = "tcp-drop-first-tx"
-    )))]
-    {
-        let t1 = get(1);
-        let t2 = get(2);
-        let sw12 = unsafe { SWITCH_12 };
-        let sw21 = unsafe { SWITCH_21 };
-        if t1.state != State::Exited || t2.state != State::Exited {
-            panic!(
-                "sched: task1 {} task2 {} switches 1->2={} 2->1={}",
-                state_name(t1.state),
-                state_name(t2.state),
-                sw12,
-                sw21
-            );
-        }
-        if t1.yields != 0 || t2.yields != 0 {
-            panic!(
-                "sched: yields task1={} task2={} want 0",
-                t1.yields, t2.yields
-            );
-        }
-        if t2.brk == t2.brk_base {
-            panic!("sched: task 2 never sbrk'd");
-        }
-        if sw12 == 0 || sw21 == 0 {
-            panic!(
-                "sched: switches 1->2={} 2->1={} (need at least one each way)",
-                sw12, sw21
-            );
-        }
-        println!("task 1 done writes={} yields={}", t1.writes, t1.yields);
-        println!("task 2 done writes={} yields={}", t2.writes, t2.yields);
-        println!(
-            "sched switches 1->2={} 2->1={} yields={}",
-            sw12,
-            sw21,
-            t1.yields + t2.yields
-        );
-        println!("SCHED OK");
-        println!("M2 EXECUTION OK");
-        stop_until_scheduler();
-    }
 }
 
-#[cfg(any(
-    feature = "net-udp-selftest",
-    feature = "net-http-selftest",
-    feature = "tcp-drop-first-tx"
-))]
+#[cfg(not(feature = "user-fault-selftest"))]
 fn finish_app() -> ! {
     crate::net::dump();
     #[cfg(feature = "net-udp-selftest")]
@@ -748,7 +691,7 @@ fn finish_app() -> ! {
         }
         println!("HTTP RETRANSMIT OK");
     }
-    #[cfg(all(feature = "net-http-selftest", not(feature = "tcp-drop-first-tx")))]
+    #[cfg(all(not(feature = "net-udp-selftest"), not(feature = "tcp-drop-first-tx")))]
     println!("HTTP OK");
     stop_until_scheduler();
 }

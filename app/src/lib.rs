@@ -3,12 +3,17 @@
 //! Owns the demo that runs over `recv`/`send`. HTTP: print `HTTP READY`,
 //! spin on `recv` (that spin *is* the poll loop), parse a GET in the
 //! **one segment** returned, `send` a fixed 200 with `Connection: close`
-//! and FIN, wait for EOF, `exit`. UDP echo is the T3.9 sibling.
-//! No `println!`, no `format!`, no `f32`/`f64`, no `panic!`. Abort is
-//! `usys::exit` / `unimp` so the path stays in `.utext`.
+//! and FIN, wait for EOF, `exit`. `persist` recycles that loop after EOF
+//! so `just run-http` can serve sequential connections (not keep-alive).
+//! UDP echo is the T3.9 sibling. No `println!`, no `format!`, no
+//! `f32`/`f64`, no `panic!`. Abort is `usys::exit` / `unimp` so the path
+//! stays in `.utext`.
 
 #![no_std]
 #![no_builtins]
+
+#[cfg(all(feature = "persist", feature = "udp-echo"))]
+compile_error!("persist is HTTP-only");
 
 #[cfg(feature = "udp-echo")]
 mod inner {
@@ -78,10 +83,17 @@ pub extern "C" fn app_main() -> ! {
                 usys::exit(1);
             }
             if n == 0 {
-                unsafe {
-                    let _ = usys::write(inner::DONE.as_ptr(), inner::DONE.len());
+                #[cfg(feature = "persist")]
+                {
+                    continue;
                 }
-                usys::exit(0);
+                #[cfg(not(feature = "persist"))]
+                {
+                    unsafe {
+                        let _ = usys::write(inner::DONE.as_ptr(), inner::DONE.len());
+                    }
+                    usys::exit(0);
+                }
             }
             if n > inner::BUF {
                 usys::exit(1);

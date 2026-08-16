@@ -1366,7 +1366,10 @@ D-0011 onward are working decisions made under those constraints.
 - **Consequences:** boot prints nothing new on the measured path; the
   phase block appears after first-byte. The `fast-boot` profile is a
   feature flag, not a fork — the sibling-selftest pattern already proves
-  the shape. When the E2 offset is measured, this entry gains the number.
+  the shape. **E2 offset, measured T3.12(a):** QEMU `-S` at reset,
+  `pc=0x1000` (OpenSBI), GDB `$time` = **0**. `rdtime` at `_start` is
+  therefore the OpenSBI phase with nothing to subtract. Re-measure with
+  `just measure-e2` if the firmware or QEMU version changes.
 
 ## D-0044: App crate in the user sections; check-utext bans FP, including compressed
 - Date: 2026-08-15 — Status: accepted
@@ -1446,10 +1449,10 @@ D-0011 onward are working decisions made under those constraints.
   ARP) from prove (connect #2, after our reply, must be IPv4) keeps
   both halves deterministic.
 - **Consequences:** `scripts/boot-test.sh` waits for `TX ARP reply`
-  before the second `provoke-hostfwd`. `assert-pcap-arp-reply.sh`
-  fail-closes on request-only, reply-before-request, and reply-without
-  a later IPv4 frame. Panic/hang images never print `DRIVER_OK` and
-  are not provoked.
+  before the second `provoke-hostfwd` **on `net-init-selftest` only**
+  (D-0054). `assert-pcap-arp-reply.sh` fail-closes on request-only,
+  reply-before-request, and reply-without a later IPv4 frame.
+  Panic/hang images never print `DRIVER_OK` and are not provoked.
 
 ## D-0047: TX uses the ARP cache; empty gateway is a panic, not a queue
 - Date: 2026-08-16 — Status: accepted
@@ -1457,9 +1460,9 @@ D-0011 onward are working decisions made under those constraints.
   MAC (`10.0.2.2`) looked up in the ARP cache. There is no routing
   table. If that lookup misses, the driver **panics** by name. It does
   not emit an ARP request, and it does not queue the datagram. T3.7's
-  ping runs after `wait_rx_arp`, which learns 10.0.2.2 from slirp's
-  request; an empty cache at that point is a bug in the T3.6 path, not
-  a reason to grow an ARP state machine.
+  ping runs after `wait_gateway_arp` (D-0054), which learns 10.0.2.2 from
+  slirp's reply to our request; an empty cache at that point is a real
+  resolution failure, not a missed hostfwd window.
 - **Alternatives considered:** ARP-then-queue (rejected: there is no TX
   queue, and a pending ICMP datagram plus a wait-for-ARP loop is a
   second protocol on the same descriptor we reuse after `wait_tx`).
@@ -1475,8 +1478,8 @@ D-0011 onward are working decisions made under those constraints.
 - **Consequences:** `arp::lookup([10,0,2,2])` is the only L2 resolution
   IPv4 has. The echo-reply path uses the same lookup even though the
   IPv4 destination is the requester — Ethernet dest is still the
-  gateway (no routing). If T3.6's learn step is skipped, T3.7 cannot
-  boot.
+  gateway (no routing). T3.12 (D-0054) fills the cache with an ARP
+  request at init; an empty cache after that wait is a real miss.
 
 ## D-0048: ICMP echo server exists; slirp only lets us test the client
 - Date: 2026-08-16 — Status: accepted
@@ -1669,8 +1672,8 @@ D-0011 onward are working decisions made under those constraints.
   handshake; it must not be rewritten to hide FINs. Dropping
   unexpected segments keeps the capture honest for this checkpoint
   without pretending close is implemented.
-- **Consequences:** `just test` still fires both hostfwd connects.
-  `busy` / `unexpected` in `tcp_drop` may be non-zero on a happy
+- **Consequences:** `just test-net-init` still fires both hostfwd connects.
+  `just test` no longer does (D-0054). `busy` / `unexpected` in `tcp_drop` may be non-zero on a happy
   boot (second SYN, peer FIN after ESTABLISHED). Malformed counters
   (`short`, `doff`, `csum`, `opt`) must read 0. `drop_proto` must
   read 0 (D-0049). T3.11 (D-0053) implements FIN consumption and
@@ -1698,9 +1701,8 @@ D-0011 onward are working decisions made under those constraints.
   would otherwise ACK immediately and hide the timer. While those
   ACKs are held, a peer FIN is also deferred: ACKing the close first
   lets slirp CLOSED and the RTO copy meets RST instead of an ACK.
-  The tripwire
-  (D-0037) applies the moment curl has its 200: no second `send`,
-  no second TCB, no header-driven keep-alive.
+  The tripwire (D-0037) applies the moment curl has its 200: no
+  second `send`, no second TCB, no header-driven keep-alive.
 - **Alternatives considered:** reassemble a request line across
   segments (rejected: curl's GET is one segment; a buffer is the
   start of a real HTTP parser and the tripwire forbids it). RST a
@@ -1713,13 +1715,38 @@ D-0011 onward are working decisions made under those constraints.
 - **Rationale:** the demo is one GET, one response, one FIN pair.
   Everything else is a door D-0037 says not to walk through.
 - **Consequences:** the exact body is `whimbrel\n` (9 bytes,
-  `Content-Length: 9`). `just test` stays on `M2 EXECUTION OK`
-  (T3.12 flips the default marker). `just test-net-http` is the
-  curl checkpoint; `just test-net-rto` is the timer checkpoint.
+  `Content-Length: 9`). T3.12 flips `just test` to `M3 UNIKERNEL OK`.
+  `just test-net-http` is the curl checkpoint; `just test-net-rto` is
+  the timer checkpoint. `http-persist` (T3.12) recycles LISTEN after
+  close so `just run-http` can serve sequential Connection: close
+  connections; it is not keep-alive and still one TCB.
   `recv` returns 0 only after the peer FIN **and** our inflight
   segment is ACKed — otherwise the app would `exit` before the RTO
   could fire. Truncated TIME_WAIT does not clear that EOF. A late
   FIN after LISTEN is dropped, not RST, so the happy-path capture
   stays RST-free (the hostfwd watcher and a retransmitted peer FIN
   share that pcap).
+
+## D-0054: ARP for the gateway at init; do not wait to be asked
+- Date: 2026-08-16 — Status: accepted
+- **Decision:** `net::init` transmits an ARP request for `10.0.2.2` and
+  waits for the reply. That populates the cache D-0047 panics on. The
+  kernel no longer waits to be ARPed by slirp (the ~2 s `wait_rx_arp`
+  that panics on a standalone boot). We still answer a request for our
+  IP if one arrives. GARP still goes out after the cache is filled.
+- **Alternatives considered:** keep the hostfwd watcher as a boot
+  dependency (rejected: M4 measurement runs and `just run-http` have no
+  watcher; a demo that panics without an external connect is not a
+  unikernel). Hard-code slirp's MAC (rejected: D-0047 — the cache would
+  be ornamental). ARP-and-queue on the first IPv4 TX (rejected: still
+  D-0047; init is the one place we may wait).
+- **Rationale:** being asked is a harness accident, not a protocol
+  requirement. An ARP client is the missing half of RFC 826 and the
+  only way D-0047's empty-cache panic means "resolution failed" rather
+  than "nobody poked hostfwd in time".
+- **Consequences:** `just run-http` boots to LISTEN with nothing else
+  running. The T3.5/T3.6 "slirp ARPs us first" pcap chain is no longer
+  the default-boot story; the assert becomes our request then slirp's
+  reply. D-0046's watcher remains for the `net-init-selftest` handshake
+  sibling only. D-0047 is amended: the panic is a real miss.
 

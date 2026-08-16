@@ -800,4 +800,5 @@ pub fn activate() {
         panic!("satp wrote {:#x}, read {:#x}", satp, got);
     }
     println!("PAGING OK");
+    crate::phase::stamp(crate::phase::PAGING);
 }

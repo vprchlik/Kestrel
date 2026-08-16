@@ -31,10 +31,16 @@ freeze-selftest = ["no-sret"]
 net-init-selftest = ["no-sret"]
 # T3.9: UDP echo in the app over recv/send. Enters U-mode (D-0051).
 net-udp-selftest = ["app/udp-echo"]
-# T3.11: HTTP/1.0 one-shot in the app (D-0053).
+# T3.11: HTTP/1.0 one-shot in the app (D-0053). Default boot is the same
+# image without this flag; the flag keeps just test-net-http distinct.
 net-http-selftest = []
 # T3.11: ignore ACKs until one RTO retransmit of the HTTP body.
 tcp-drop-first-tx = []
+# T3.12: sequential Connection: close HTTP for just run-http (not keep-alive).
+http-persist = ["app/persist"]
+# T3.12 / D-0043: no boot tick wait, no self-tests, no ordinary println!.
+# Panic, phase stamps, map verify, and M3 UNIKERNEL OK stay.
+fast-boot = []
 # Build-only: plant a `c.fld` in `.utext` so check-utext can fail by name
 # (D-0044). Not a boot image.
 utext-c-fld-selftest = []

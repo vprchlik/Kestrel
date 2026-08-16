@@ -13,6 +13,12 @@ A=1 and D=1 (D-0019).
 software-interrupt registers. It is M-mode hardware: OpenSBI programs it on our
 behalf when we call `sbi_set_timer`, so we never touch it directly.
 
+**checksum (Internet).** The 16-bit one's-complement checksum of RFC 1071.
+IPv4 headers, ICMP, UDP, and TCP (TCP/UDP over a 12-byte pseudo-header) all
+use it. A wrong checksum is a silent drop at slirp: hung curl, clean serial.
+The pcap asserts `tcp.checksum.status` good; the kernel self-test is
+`CHECKSUM OK`.
+
 **CSR (Control and Status Register).** Per-hart special registers (e.g.
 `sstatus`, `satp`, `scause`) accessed by dedicated instructions (`csrr`,
 `csrw`) rather than loads/stores. They configure privileged behavior and record
@@ -36,6 +42,11 @@ compressed encoding, so it is always 4 bytes and OpenSBI advances `mepc` by
 exactly 4; that fact does not license our S-mode handler to hardcode `sepc += 4`
 (see RVC).
 
+**fast-boot.** A cargo feature (D-0043) that compiles out the boot tick wait,
+self-tests, and ordinary `println!`. The panic path, the phase-timestamp
+array, map verify (`virtq::verify` and the T1.6 walk), and `M3 UNIKERNEL OK`
+stay. The safe/fast delta is the price-of-paranoia finding for M4.
+
 **first-fit.** The heap walks the free list and takes the first block that
 can satisfy the request. Combined with coalescing adjacent frees (D-0027)
 it is the K&R allocator: after `Vec` growth the old buffers merge into one
@@ -50,6 +61,11 @@ owns `[__heap_end, RAM_END)`; the heap's variable-size blocks live in the
 The 67 frames already gone are 65 page tables plus the two `FRAME OK`
 self-test leftovers.
 
+**GARP (gratuitous ARP).** An ARP request with `spa = tpa` equal to our IP,
+Ethernet-broadcast. We send one after the gateway cache is filled (D-0054)
+so a capture can see our MAC without waiting to be asked. Distinct from
+the ARP *client* request for `10.0.2.2`.
+
 **GlobalAlloc.** Rust's `no_std` heap interface (`alloc` / `dealloc` with a
 `Layout` of size plus alignment). Our implementation panics on exhaustion
 with those two numbers and never returns null (D-0027).
@@ -57,6 +73,12 @@ with those two numbers and never returns null (D-0027).
 **hart.** A HARdware Thread — one independent instruction stream with its own
 registers and CSRs; a core with hyperthreading would be multiple harts. This
 project runs on exactly one hart (hart 0), by constraint D-0007.
+
+**hostfwd.** QEMU user-net option that binds a host socket into slirp and
+re-originates a connection toward the guest. `hostfwd=tcp::8080-:80` is
+how `curl http://127.0.0.1:8080/` becomes a SYN to `10.0.2.15:80`. It is
+not a boot dependency (D-0054); the T3.5 watcher uses it only for the
+`net-init-selftest` handshake sibling (D-0046).
 
 **identity map.** A translation where the virtual address equals the physical
 address. The kernel is identity-mapped (D-0006), so the PC, stack pointer,
@@ -81,6 +103,12 @@ OpenSBI on this platform sets `0xf0b509`: codes 0, 3, 8, 10, 12, 13, 15,
 20–23 are delegated; 1, 2, 4, 5, 6, 7, 9 are not. An illegal instruction
 from a task (cause 2) therefore dumps in firmware, not in our handler
 (D-0034). We read the boot log; we do not write `medeleg`.
+
+**measurement edges (E0–E4).** Named timestamps for boot-to-first-HTTP-byte
+(D-0043): E0 = host clock at QEMU exec; E1 = machine start (`mtime` ≈ 0);
+E2 = kernel entry (`rdtime` at `_start`); E3g = `rdtime` at response-TX
+publish; E3w = pcap timestamp of that frame; E4 = first byte at the client.
+T3.12(a) measured the E2 offset as 0, so `_start` *is* the OpenSBI phase.
 
 **MMIO (Memory-Mapped I/O).** Device registers exposed at physical addresses,
 accessed with ordinary load/store instructions instead of special I/O
@@ -128,6 +156,11 @@ instruction at `sepc` (low two bits `0b11` ⇒ 32-bit, otherwise 16-bit) and
 advance by that width, or a compressed trap will skip a byte and a later
 `sret` will land mid-instruction.
 
+**RTO (retransmission timeout).** How long TCP waits for an ACK of its one
+unacked segment before posting a copy. Ours is 200 ms of `rdtime` from the
+`recv` poll loop, 8 attempts then RST (D-0041 / D-0053). The drop-first-tx
+selftest is what proves the timer fires.
+
 **satp (Supervisor Address Translation and Protection).** The CSR that turns
 paging on: it holds the translation mode (8 = Sv39) and the physical page
 number of the root page table. Writing it (plus `sfence.vma`) is the single
@@ -153,6 +186,11 @@ here (see DEBUGGING.md §3).
 memory: after changing PTEs or `satp`, older translations may still be cached
 until you execute it. Project rule: fence after every PTE change — cheap
 insurance on one hart.
+
+**slirp (libslirp).** QEMU's user-mode NAT, our TCP/UDP/ICMP peer under
+`-netdev user`. The guest is `10.0.2.15`, the gateway `10.0.2.2`, and a
+`hostfwd` connection is terminated on the host side then re-originated
+into the guest (D-0042). Curl's kernel-grade TCP options never reach us.
 
 **sscratch.** Supervisor scratch CSR. We use it as the U/S stack discriminator
 (D-0029): nonzero = current task's `kstack_top` while in U; 0 while in S.
@@ -236,6 +274,12 @@ and hypervisor share ring buffers (virtqueues) in guest memory instead of
 emulating real hardware registers. On `virt`, devices appear as virtio-mmio
 slots at 0x1000_1000–0x1000_8000; our M3 NIC is a `virtio-net-device`. M1
 maps none of that MMIO (D-0025).
+
+**virtqueue.** The split virtio ring in guest RAM: a descriptor table, an
+avail ring (driver→device), and a used ring (device→driver). We own two
+(RX and TX). Every address handed over is guest-physical; the identity
+map makes `&static as usize` the PA. `virtq::verify` runs before
+`QueueReady` (D-0038) and stays in `fast-boot`.
 
 **W^X.** Write xor execute: a page is never both writable and executable.
 Kernel `.text` is R+X, `.rodata` is R, `.data`/`.bss`/stack/heap/frames are

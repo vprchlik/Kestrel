@@ -78,7 +78,7 @@ pub fn on_interrupt() {
         n
     };
     arm();
-    if n % 10 == 0 {
+    if n <= 3 || n % 10 == 0 {
         println!("tick {}", n);
     }
 }

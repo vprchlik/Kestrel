@@ -1090,8 +1090,8 @@ descriptor address against the pool before `DRIVER_OK`.
 
 **8. Measurement edges must be named before they are argued about.**
 E0 = host clock at QEMU exec; E1 = machine start (`mtime` ≈ 0); E2 = kernel
-entry (`rdtime` at `_start` ≈ the OpenSBI phase — an assumption T3.12
-validates, not assumes); E3g = `rdtime` when the response segment's TX
+entry (`rdtime` at `_start` is the OpenSBI phase — T3.12 measured the
+reset-time offset as 0); E3g = `rdtime` when the response segment's TX
 descriptor is published; E3w = pcap timestamp of that frame; E4 = first
 byte at the client. E0→E4 is the honest number and the comparable number;
 E2→E3g decomposed by phase is the floor number. First-byte requires a
@@ -1249,19 +1249,29 @@ timer fires.
   the happy path; the retransmit selftest shows exactly one retransmission
   and then success.
 
-### T3.12 — Measurement instrumentation, fast-boot, wrap — M
-Four parts.
+### T3.12 — Measurement instrumentation, standalone boot, wrap — M
+Six parts.
 **(a) Validate E2 before using it:** freeze the machine at reset
-(`just debug`), read `time` via GDB before the first guest instruction,
-record the observed offset; `rdtime` at `_start` minus that offset is the
-OpenSBI phase. The observed offset is recorded in D-0043 — the firmware
-row of the M4 table rests on this being measured, not assumed.
+(`just measure-e2` / `just debug`), read `time` via GDB before the first
+guest instruction, record the observed offset; `rdtime` at `_start` minus
+that offset is the OpenSBI phase. The observed offset is recorded in
+D-0043 — the firmware row of the M4 table rests on this being measured,
+not assumed.
 **(b) Phase timestamps:** `rdtime` into a static array at `_start`, `stvec`
 installed, paging on, freeze, first `sret`, `DRIVER_OK`, first RX,
 listen-ready, first-response-TX (E3g); printed **after** the response is
 sent (DBCN is one `ecall` per byte; printing on the measured path would
 perturb it).
-**(c) `fast-boot` cargo feature** (same codebase, sibling-feature shape):
+**(c) Standalone boot:** ARP *for* the gateway `10.0.2.2` at init and wait
+for the reply, rather than waiting to be asked. Removes the hostfwd-watcher
+boot dependency and exercises the ARP client path. D-0047's empty-cache
+panic then means a real resolution failure (D-0054).
+**(d) `just run-http`:** boots the persist HTTP image with hostfwd, resolves
+the gateway, listens, and sits indefinitely — no assertions, no timeout —
+so `curl http://127.0.0.1:8080/` works from a cold boot with nothing else
+running. Every just recipe gets a single-line doc comment (`just --list`
+shows the last comment line).
+**(e) `fast-boot` cargo feature** (same codebase, sibling-feature shape):
 removes the boot tick wait, compiles out self-tests and non-essential
 prints, keeps the panic path, the phase array, **and the map verify** —
 the safe/fast delta is reported as the price-of-paranoia finding (D-0043).
@@ -1269,15 +1279,18 @@ The M1 timer acceptance does not get orphaned: the default profile's
 30-tick wait shrinks to 3 ticks with `tick 3` still on serial as the
 timer assertion's new home, and timer coverage additionally holds
 structurally — round-robin preemption (the T2.9 switch counters) cannot
-happen without live ticks.
-**(d) Wrap:** `M3 UNIKERNEL OK` marker after the first served response in
+happen without live ticks. The panic path clears `sie.STIE` so a parked
+hart does not print ticks forever.
+**(f) Wrap:** `M3 UNIKERNEL OK` marker after the first served response in
 the default boot; `just test` default flips to it; GLOSSARY (virtqueue,
-slirp, checksum, RTO, …) and DECISIONS catch-up; M3 summary in this file.
-Quiz handled separately per the M2 precedent.
+slirp, checksum, RTO, E0–E4, fast-boot, GARP, hostfwd, …) and DECISIONS
+catch-up; M3 summary in this file. Quiz handled separately per the M2
+precedent.
 
 - **Acceptance:** `just test` (no arguments) passes on `M3 UNIKERNEL OK`;
-  boot prints the phase-timestamp block after the response; the safe/fast
-  delta table exists in the wrap notes; every sibling selftest holds.
+  boot prints the phase-timestamp block after the response; `just run-http`
+  plus curl works with nothing else running; `just test-fast` reports the
+  fast-boot phase block; every sibling selftest holds.
 
 ## Milestone acceptance test
 
@@ -1291,7 +1304,37 @@ exact expected body; a pcap containing the gratuitous ARP, the handshake,
 the response, and a clean FIN exchange with no RST on the happy path.
 `just test` passes on `M3 UNIKERNEL OK`. `just test-panic`, `test-hang`,
 `test-stress`, `test-userptr`, `test-user-fault`, `test-freeze`,
-`test-net-init`, and `test-net-udp` all hold their verdicts.
+`test-net-init`, `test-net-udp`, `test-net-http`, `test-net-rto`, and
+`test-fast` all hold their verdicts. `just run-http` serves curl from a
+cold boot with nothing else running.
+
+## M3 summary
+
+**Produced:** a unikernel that ARPs for `10.0.2.2`, listens on TCP/80, and
+serves one HTTP/1.0 GET (`whimbrel\n`, `Connection: close`, FIN close) to
+curl on the hostfwd port. The driver is virtio-mmio modern, split
+virtqueue, static DMA pool, freeze intact. The stack is Ethernet, ARP
+(server and client), IPv4, ICMP echo, UDP echo, and one-TCB TCP with a
+200 ms RTO. The app is compiled Rust in `.utext` over `recv`/`send`.
+Phase timestamps from `_start` to E3g print after the response. E2 offset
+is 0. `fast-boot` drops the tick wait and self-tests but keeps map verify.
+
+**Acceptance proves:** `just test` finds `M3 UNIKERNEL OK` and exits 0.
+Curl returns 200 with the exact body. The pcap shows our ARP request for
+the gateway, slirp's reply, the handshake, the response, and a clean FIN
+close with no RST. `just run-http` works standalone. Sibling selftests
+keep their verdicts.
+
+**Decisions this milestone:** D-0037 hand-rolled stack and the TCP
+tripwire; D-0038 modern virtio-mmio, split virtqueue, static DMA pool;
+D-0039 MMIO window mapped at build; D-0040 driver and stack in the
+kernel, `recv`/`send`, polling, no PLIC; D-0041 minimal TCP; D-0042
+static config, no DHCP; D-0043 measurement edges, `fast-boot`, capture;
+D-0044 app crate and the check-utext FP ban; D-0045–D-0054 along the
+bring-up (GARP, slirp ARP, ARP cache, ICMP, UDP, TCP, HTTP, gateway ARP
+at init).
+
+---
 
 ## Risks and likely failure modes
 

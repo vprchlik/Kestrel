@@ -5,18 +5,13 @@
 #   panic-selftest      → FAIL (panic line echoed)
 #   hang-selftest       → HANG
 #
-# After DRIVER_OK, a sibling watcher fires a hostfwd TCP connect so slirp
-# ARPs 10.0.2.15 (T3.5). That connect is *before* our GARP (D-0046): slirp
-# has no cached MAC and must ARP. After serial shows `TX ARP reply`, a
-# second connect proves slirp proceeds past ARP (IPv4 SYN) and, from
-# T3.10, completes the TCP handshake. The second wait is 2s — long
-# enough for SYN/ACK during ping-wait, shorter than slirp's ~6s SYN
-# retry. Panic/hang images never print DRIVER_OK, so they are not
-# provoked. The watcher is killed when QEMU exits; it does not own the
-# timeout (timeout still parents QEMU, same as T0.5).
+# After DRIVER_OK, the net-init-selftest sibling still fires a hostfwd
+# TCP connect so slirp ARPs 10.0.2.15 (D-0046). Default / HTTP / UDP /
+# fast-boot images ARP for the gateway themselves (D-0054) and must not
+# wait to be asked. Panic/hang images never print DRIVER_OK.
 set -u
 
-EXPECT="${EXPECT:-M2 EXECUTION OK}"
+EXPECT="${EXPECT:-M3 UNIKERNEL OK}"
 TIMEOUT_S="${TIMEOUT_S:-5}"
 FEATURE="${1:-}"
 TARGET="riscv64gc-unknown-none-elf"
@@ -40,20 +35,21 @@ case "${FEATURE}" in
 esac
 rm -f serial.log whimbrel.pcap udp-echo.got udp-echo.status http.body http.hdr http.status
 
-# Watch serial for DRIVER_OK, then provoke twice (D-0046). Must start
-# before QEMU so a fast guest cannot print DRIVER_OK unobserved. grep
-# on a missing file is a miss, not a pass.
-(
-    while ! grep -a -q 'DRIVER_OK' serial.log 2>/dev/null; do
-        sleep 0.05
-    done
-    bash scripts/provoke-hostfwd.sh 0.3 >/dev/null 2>&1
-    while ! grep -a -q 'TX ARP reply' serial.log 2>/dev/null; do
-        sleep 0.05
-    done
-    bash scripts/provoke-hostfwd.sh 2 >/dev/null 2>&1
-) &
-wpid=$!
+# D-0046 watcher: net-init-selftest handshake sibling only (D-0054).
+wpid=""
+if [ "$FEATURE" = "net-init-selftest" ]; then
+    (
+        while ! grep -a -q 'DRIVER_OK' serial.log 2>/dev/null; do
+            sleep 0.05
+        done
+        bash scripts/provoke-hostfwd.sh 0.3 >/dev/null 2>&1
+        while ! grep -a -q 'TX ARP reply' serial.log 2>/dev/null; do
+            sleep 0.05
+        done
+        bash scripts/provoke-hostfwd.sh 2 >/dev/null 2>&1
+    ) &
+    wpid=$!
+fi
 
 # T3.8: do not send UDP until the guest is polling for it. Recv timeout
 # is inside provoke-udp-echo.py (2s) so a silent guest fails closed.
@@ -70,7 +66,8 @@ if [ "$FEATURE" = "net-udp-selftest" ]; then
 fi
 
 hpid=""
-if [ "$FEATURE" = "net-http-selftest" ] || [ "$FEATURE" = "tcp-drop-first-tx" ]; then
+if [ -z "$FEATURE" ] || [ "$FEATURE" = "net-http-selftest" ] \
+    || [ "$FEATURE" = "tcp-drop-first-tx" ] || [ "$FEATURE" = "fast-boot" ]; then
     (
         while ! grep -a -q 'HTTP READY' serial.log 2>/dev/null; do
             sleep 0.05
@@ -88,8 +85,10 @@ else
     timeout --foreground "$TIMEOUT_S" "$QEMU" "${QEMU_ARGS[@]}" -kernel "$KERNEL" > serial.log 2>&1
 fi
 status=$?
-kill "$wpid" 2>/dev/null
-wait "$wpid" 2>/dev/null
+if [ -n "$wpid" ]; then
+    kill "$wpid" 2>/dev/null
+    wait "$wpid" 2>/dev/null
+fi
 if [ -n "$upid" ]; then
     kill "$upid" 2>/dev/null
     wait "$upid" 2>/dev/null
