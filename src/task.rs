@@ -197,11 +197,7 @@ fn check_slot(
     ktop: usize,
 ) {
     require_aligned("ustack guard", uguard);
-    require(
-        "ustack guard size",
-        ubottom.wrapping_sub(uguard),
-        GUARD,
-    );
+    require("ustack guard size", ubottom.wrapping_sub(uguard), GUARD);
     require("ustack size", utop.wrapping_sub(ubottom), STACK);
     require("break size", brk_wall.wrapping_sub(brk_base), BREAK);
     require("kstack guard size", kbottom.wrapping_sub(kguard), GUARD);
@@ -474,11 +470,9 @@ pub fn create(id: usize, entry: usize) {
 /// `sepc = 0`. Userptr selftests keep a single Ready task in slot 0.
 /// `user-fault-selftest` uses the same two-task table; `kmain` `enter`s
 /// task 2 so the load page fault is the first U-mode work.
+/// `net-udp-selftest` runs the compiled app in slot 3 (D-0051).
 pub fn init() {
-    #[cfg(any(
-        feature = "userptr-kernel-selftest",
-        feature = "userptr-span-selftest"
-    ))]
+    #[cfg(any(feature = "userptr-kernel-selftest", feature = "userptr-span-selftest"))]
     {
         create(0, crate::user::entry());
         for id in 1..MAX_TASKS {
@@ -486,9 +480,20 @@ pub fn init() {
             get(id).state = State::Exited;
         }
     }
+    #[cfg(feature = "net-udp-selftest")]
+    {
+        create(0, 0);
+        create(1, 0);
+        create(2, 0);
+        create(3, crate::user::app());
+        get(0).state = State::Exited;
+        get(1).state = State::Exited;
+        get(2).state = State::Exited;
+    }
     #[cfg(not(any(
         feature = "userptr-kernel-selftest",
-        feature = "userptr-span-selftest"
+        feature = "userptr-span-selftest",
+        feature = "net-udp-selftest"
     )))]
     {
         create(0, 0);
@@ -637,9 +642,7 @@ pub fn preempt(frame: &mut TrapFrame) -> &mut TrapFrame {
     if cur.frame as usize != frame as *mut TrapFrame as usize {
         panic!(
             "preempt: frame {:#x} is not task {}'s {:#x}",
-            frame as *mut TrapFrame as usize,
-            cur.id,
-            cur.frame as usize
+            frame as *mut TrapFrame as usize, cur.id, cur.frame as usize
         );
     }
     cur.state = State::Ready;
@@ -663,7 +666,11 @@ fn finish_sched() -> ! {
     {
         finish_user_fault();
     }
-    #[cfg(not(feature = "user-fault-selftest"))]
+    #[cfg(feature = "net-udp-selftest")]
+    {
+        finish_udp_echo();
+    }
+    #[cfg(not(any(feature = "user-fault-selftest", feature = "net-udp-selftest")))]
     {
         let t1 = get(1);
         let t2 = get(2);
@@ -693,14 +700,8 @@ fn finish_sched() -> ! {
                 sw12, sw21
             );
         }
-        println!(
-            "task 1 done writes={} yields={}",
-            t1.writes, t1.yields
-        );
-        println!(
-            "task 2 done writes={} yields={}",
-            t2.writes, t2.yields
-        );
+        println!("task 1 done writes={} yields={}", t1.writes, t1.yields);
+        println!("task 2 done writes={} yields={}", t2.writes, t2.yields);
         println!(
             "sched switches 1->2={} 2->1={} yields={}",
             sw12,
@@ -711,6 +712,13 @@ fn finish_sched() -> ! {
         println!("M2 EXECUTION OK");
         stop_until_scheduler();
     }
+}
+
+#[cfg(feature = "net-udp-selftest")]
+fn finish_udp_echo() -> ! {
+    crate::net::dump();
+    println!("NET UDP OK");
+    stop_until_scheduler();
 }
 
 #[cfg(feature = "user-fault-selftest")]
@@ -727,10 +735,7 @@ fn finish_user_fault() -> ! {
     if t1.writes == 0 {
         panic!("userfault: survivor wrote nothing");
     }
-    println!(
-        "task 1 done writes={} yields={}",
-        t1.writes, t1.yields
-    );
+    println!("task 1 done writes={} yields={}", t1.writes, t1.yields);
     println!("USERFAULT OK");
     stop_until_scheduler();
 }

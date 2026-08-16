@@ -28,14 +28,22 @@ SECTIONS
     .text : {
         /* Entry stub must be the first byte of the image. */
         KEEP(*(.text.entry))
-        *(.text .text.*)
+        /* D-0044 / D-0051: app and usys must not land here.
+         * rustc passes `libapp-HASH.rlib`, whose members are
+         * `app-HASH.*.rcgu.o`. Match both. If this stops working, stop
+         * and inspect `cargo rustc -- --print link-args` rather than
+         * widening the rule. Silent failure: app_main at 0x8020xxxx. */
+        EXCLUDE_FILE(*libapp.rlib *libapp-*.rlib *libusys.rlib *libusys-*.rlib *app-*.rcgu.o *usys-*.rcgu.o)
+            *(.text .text.*)
     }
 
     . = ALIGN(4K);
     __rodata_start = .;
     .rodata : {
-        *(.rodata .rodata.*)
-        *(.srodata .srodata.*)
+        EXCLUDE_FILE(*libapp.rlib *libapp-*.rlib *libusys.rlib *libusys-*.rlib *app-*.rcgu.o *usys-*.rcgu.o)
+            *(.rodata .rodata.*)
+        EXCLUDE_FILE(*libapp.rlib *libapp-*.rlib *libusys.rlib *libusys-*.rlib *app-*.rcgu.o *usys-*.rcgu.o)
+            *(.srodata .srodata.*)
     }
 
     . = ALIGN(4K);
@@ -45,15 +53,19 @@ SECTIONS
          * centering it in the small-data area lets the linker relax
          * absolute loads into cheaper gp-relative ones. */
         __global_pointer$ = . + 0x800;
-        *(.sdata .sdata.*)
-        *(.data .data.*)
+        EXCLUDE_FILE(*libapp.rlib *libapp-*.rlib *libusys.rlib *libusys-*.rlib *app-*.rcgu.o *usys-*.rcgu.o)
+            *(.sdata .sdata.*)
+        EXCLUDE_FILE(*libapp.rlib *libapp-*.rlib *libusys.rlib *libusys-*.rlib *app-*.rcgu.o *usys-*.rcgu.o)
+            *(.data .data.*)
     }
 
     . = ALIGN(4K);
     __bss_start = .;
     .bss : {
-        *(.sbss .sbss.*)
-        *(.bss .bss.*)
+        EXCLUDE_FILE(*libapp.rlib *libapp-*.rlib *libusys.rlib *libusys-*.rlib *app-*.rcgu.o *usys-*.rcgu.o)
+            *(.sbss .sbss.*)
+        EXCLUDE_FILE(*libapp.rlib *libapp-*.rlib *libusys.rlib *libusys-*.rlib *app-*.rcgu.o *usys-*.rcgu.o)
+            *(.bss .bss.*)
     }
     . = ALIGN(4K);
     __bss_end = .;
@@ -78,13 +90,20 @@ SECTIONS
 
     . = ALIGN(4K);
 
-    /* T2.1 / D-0031: user sections. T2.5 puts code in `.utext`; the rest
-     * stay empty. Each is 4 KiB-aligned so it can have its own U-bit
-     * permissions. Content advances `.` before `__tasks_start = .`, so
-     * the 88 KiB slots move up rather than overlapping. */
+    /* T2.1 / D-0031 / D-0044: user sections. Assembly (`.utext`) and the
+     * app/usys archives' ordinary sections land here. Each is 4 KiB-
+     * aligned so it can have its own U-bit permissions. Content advances
+     * `.` before `__tasks_start = .`, so the 88 KiB slots move up rather
+     * than overlapping. */
     __utext_start = .;
     .utext : {
         *(.utext .utext.*)
+        *libapp.rlib:(.text .text.*)
+        *libapp-*.rlib:(.text .text.*)
+        *app-*.rcgu.o:(.text .text.*)
+        *libusys.rlib:(.text .text.*)
+        *libusys-*.rlib:(.text .text.*)
+        *usys-*.rcgu.o:(.text .text.*)
     }
     . = ALIGN(4K);
     __utext_end = .;
@@ -92,6 +111,13 @@ SECTIONS
     __urodata_start = .;
     .urodata : {
         *(.urodata .urodata.*)
+        /* LLVM names string literals `.rodata..Lanon.*`, not `.rodata`. */
+        *libapp.rlib:(.rodata .rodata.* .srodata .srodata.*)
+        *libapp-*.rlib:(.rodata .rodata.* .srodata .srodata.*)
+        *app-*.rcgu.o:(.rodata .rodata.* .srodata .srodata.*)
+        *libusys.rlib:(.rodata .rodata.* .srodata .srodata.*)
+        *libusys-*.rlib:(.rodata .rodata.* .srodata .srodata.*)
+        *usys-*.rcgu.o:(.rodata .rodata.* .srodata .srodata.*)
     }
     . = ALIGN(4K);
     __urodata_end = .;
@@ -99,6 +125,12 @@ SECTIONS
     __udata_start = .;
     .udata : {
         *(.udata .udata.*)
+        *libapp.rlib:(.data .data.* .sdata .sdata.*)
+        *libapp-*.rlib:(.data .data.* .sdata .sdata.*)
+        *app-*.rcgu.o:(.data .data.* .sdata .sdata.*)
+        *libusys.rlib:(.data .data.* .sdata .sdata.*)
+        *libusys-*.rlib:(.data .data.* .sdata .sdata.*)
+        *usys-*.rcgu.o:(.data .data.* .sdata .sdata.*)
     }
     . = ALIGN(4K);
     __udata_end = .;
@@ -106,6 +138,12 @@ SECTIONS
     __ubss_start = .;
     .ubss (NOLOAD) : {
         *(.ubss .ubss.*)
+        *libapp.rlib:(.bss .bss.* .sbss .sbss.*)
+        *libapp-*.rlib:(.bss .bss.* .sbss .sbss.*)
+        *app-*.rcgu.o:(.bss .bss.* .sbss .sbss.*)
+        *libusys.rlib:(.bss .bss.* .sbss .sbss.*)
+        *libusys-*.rlib:(.bss .bss.* .sbss .sbss.*)
+        *usys-*.rcgu.o:(.bss .bss.* .sbss .sbss.*)
     }
     . = ALIGN(4K);
     __ubss_end = .;

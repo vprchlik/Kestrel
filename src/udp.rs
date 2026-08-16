@@ -4,10 +4,12 @@
 //! protocol 17, UDP length) plus the real header and payload. UDP
 //! length is summed twice — once in the pseudo-header, once as the
 //! Length field in the datagram — which is RFC 768, not a double-count
-//! bug. A computed 0 is stored as 0xFFFF (0 means "no checksum"); a
-//! received 0 is dropped. Echo mirrors payload and length, swaps ports,
-//! and recomputes checksums. Without this module hostfwd UDP has
-//! nowhere to land and T3.8's `nc -u` test cannot pass.
+//! bug. A computed 0 is stored as 0xFFFF (RFC 768: 0 means "no
+//! checksum"). A received 0 is dropped — stricter than the RFC, which
+//! permits zero as optional-checksum; that is a deliberate deviation
+//! (D-0050), not an accident of the parser. Echo mirrors payload and
+//! length, swaps ports, and recomputes checksums. Without this module
+//! hostfwd UDP has nowhere to land and T3.8's `nc -u` test cannot pass.
 
 #![cfg_attr(
     any(feature = "panic-selftest", feature = "hang-selftest"),
@@ -61,10 +63,7 @@ fn pseudo_header(src: &[u8; 4], dst: &[u8; 4], udp_len: u16) -> [u8; 12] {
 fn udp_sum(src: &[u8; 4], dst: &[u8; 4], udp: &[u8]) -> u16 {
     let udp_len = udp.len() as u16;
     let pseudo = pseudo_header(src, dst, udp_len);
-    checksum::fold(checksum::accumulate(
-        checksum::accumulate(0, &pseudo),
-        udp,
-    ))
+    checksum::fold(checksum::accumulate(checksum::accumulate(0, &pseudo), udp))
 }
 
 /// Value to store in the UDP checksum field. `0` becomes `0xFFFF`.
@@ -92,11 +91,7 @@ pub struct Echo<'a> {
 
 /// Parse a UDP datagram destined for us. `None` = dropped.
 /// `src`/`dst` are the IPv4 addresses (for the pseudo-header).
-pub fn parse<'a>(
-    payload: &'a [u8],
-    src: &[u8; 4],
-    dst: &[u8; 4],
-) -> Option<Echo<'a>> {
+pub fn parse<'a>(payload: &'a [u8], src: &[u8; 4], dst: &[u8; 4]) -> Option<Echo<'a>> {
     if payload.len() < HDR {
         unsafe { DROP_SHORT = DROP_SHORT.wrapping_add(1) };
         println!("udp: drop short len={}", payload.len());
@@ -111,7 +106,7 @@ pub fn parse<'a>(
     let csum = be16(payload, 6);
     if csum == 0 {
         unsafe { DROP_CSUM = DROP_CSUM.wrapping_add(1) };
-        println!("udp: drop checksum=0 (no-checksum not accepted)");
+        println!("udp: drop checksum=0 (RFC 768 optional-checksum; D-0050 deviation)");
         return None;
     }
     if !checksum_valid(src, dst, payload) {
@@ -129,6 +124,36 @@ pub fn parse<'a>(
         src_port: be16(payload, 0),
         raw: payload,
     })
+}
+
+impl<'a> Echo<'a> {
+    pub fn payload(&self) -> &'a [u8] {
+        &self.raw[HDR..]
+    }
+}
+
+/// Build a datagram: source port, dest port, payload, checksum.
+pub fn write_dgram(
+    dst_udp: &mut [u8],
+    src_port: u16,
+    dst_port: u16,
+    payload: &[u8],
+    src_ip: &[u8; 4],
+    dst_ip: &[u8; 4],
+) -> usize {
+    let n = HDR + payload.len();
+    if dst_udp.len() < n {
+        panic!("udp: dgram buf {} < {n}", dst_udp.len());
+    }
+    dst_udp[0..2].copy_from_slice(&src_port.to_be_bytes());
+    dst_udp[2..4].copy_from_slice(&dst_port.to_be_bytes());
+    dst_udp[4..6].copy_from_slice(&(n as u16).to_be_bytes());
+    dst_udp[6] = 0;
+    dst_udp[7] = 0;
+    dst_udp[HDR..n].copy_from_slice(payload);
+    let c = checksum_tx(src_ip, dst_ip, &dst_udp[..n]);
+    dst_udp[6..8].copy_from_slice(&c.to_be_bytes());
+    n
 }
 
 /// Mirror payload and length; swap ports; recompute checksum. Returns length.

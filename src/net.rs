@@ -1,10 +1,11 @@
 //! virtio-net device: handshake, RX/TX, ARP, IPv4, ICMP, UDP (D-0038, D-0040).
 //!
 //! Owns the feature negotiation, QueueReady, RX posting, TX (gratuitous
-//! ARP, ARP replies, ICMP echo, UDP echo), MAC print, and `dump` / stall /
+//! ARP, ARP replies, ICMP echo, UDP), MAC print, and `dump` / stall /
 //! DEVICE_NEEDS_RESET observability. Parse lives in `arp`/`ipv4`/`icmp`/
-//! `udp`. The rings stay in `virtq`. Without this module the NIC never
-//! leaves reset and hostfwd UDP has nowhere to echo.
+//! `udp`. The rings stay in `virtq`. UDP payloads wait for `recv`; `send`
+//! transmits. Without this module the NIC never leaves reset and the
+//! app has nothing to poll.
 
 #![cfg_attr(
     any(feature = "panic-selftest", feature = "hang-selftest"),
@@ -97,8 +98,16 @@ static mut STALL_DUMPED: bool = false;
 static mut PING_TX: usize = 0;
 static mut PING_RX: usize = 0;
 static mut PING_DONE: bool = false;
-#[cfg_attr(not(feature = "net-udp-selftest"), allow(dead_code))]
-static mut UDP_DONE: bool = false;
+
+/// One unread UDP payload (D-0040). `recv` copies this into the user
+/// buffer; a second datagram before that copy is dropped, not queued.
+const UDP_PAYLOAD_MAX: usize = 1472;
+static mut UDP_PENDING: bool = false;
+static mut UDP_LEN: usize = 0;
+static mut UDP_SRC_IP: [u8; 4] = [0; 4];
+static mut UDP_SRC_PORT: u16 = 0;
+static mut UDP_BUF: [u8; UDP_PAYLOAD_MAX] = [0; UDP_PAYLOAD_MAX];
+static mut UDP_PEER: bool = false;
 
 fn status(base: usize) -> u32 {
     virtio::read32(base, virtio::OFF_STATUS)
@@ -120,9 +129,7 @@ fn require_device(base: usize) {
     let st = status(base);
     if st & NEEDS_RESET != 0 {
         dump();
-        panic!(
-            "virtio-net: DEVICE_NEEDS_RESET status={st:#x}; device has stopped cooperating"
-        );
+        panic!("virtio-net: DEVICE_NEEDS_RESET status={st:#x}; device has stopped cooperating");
     }
     if st & FAILED != 0 {
         dump();
@@ -233,9 +240,7 @@ pub fn poll_stall() {
         return;
     }
     unsafe { STALL_DUMPED = true };
-    println!(
-        "net: stall tx posted={posted} used.idx={used} unmoved for ~100ms"
-    );
+    println!("net: stall tx posted={posted} used.idx={used} unmoved for ~100ms");
     dump();
 }
 
@@ -340,8 +345,6 @@ pub fn init() {
     // D-0047: cache holds 10.0.2.2 from slirp's request. Ping fails
     // loudly if that learn did not happen — no ARP-and-queue.
     ping_gateway(base);
-    #[cfg(feature = "net-udp-selftest")]
-    wait_udp_echo(base);
 }
 
 /// Build a 12-byte zero virtio-net header plus a 60-byte Ethernet frame
@@ -518,9 +521,7 @@ fn tx_arp_reply(base: usize, req: &arp::RequestForUs) {
 fn gateway_mac() -> [u8; 6] {
     match arp::lookup(GW) {
         Some(m) => m,
-        None => panic!(
-            "net: no MAC for gateway 10.0.2.2; TX does not ARP-and-queue (D-0047)"
-        ),
+        None => panic!("net: no MAC for gateway 10.0.2.2; TX does not ARP-and-queue (D-0047)"),
     }
 }
 
@@ -552,24 +553,82 @@ fn classify_ipv4(base: usize, frame: &[u8]) {
     }
 }
 
-fn classify_udp(base: usize, d: &ipv4::Datagram<'_>) {
+fn classify_udp(_base: usize, d: &ipv4::Datagram<'_>) {
     let Some(echo) = udp::parse(d.payload, &d.src, &IP) else {
         return;
     };
+    let payload = echo.payload();
     println!(
         "virtio-net: RX udp echo sport={} dport={} len={}",
         echo.src_port,
         udp::ECHO_PORT,
         echo.raw.len()
     );
-    tx_udp_echo(base, d.src, echo.raw);
-    unsafe { UDP_DONE = true };
+    if payload.len() > UDP_PAYLOAD_MAX {
+        println!(
+            "virtio-net: RX udp payload {} > {UDP_PAYLOAD_MAX}; dropped",
+            payload.len()
+        );
+        return;
+    }
+    if unsafe { UDP_PENDING } {
+        println!("virtio-net: RX udp dropped (unread payload still pending)");
+        return;
+    }
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            payload.as_ptr(),
+            core::ptr::addr_of_mut!(UDP_BUF) as *mut u8,
+            payload.len(),
+        );
+        UDP_LEN = payload.len();
+        UDP_SRC_IP = d.src;
+        UDP_SRC_PORT = echo.src_port;
+        UDP_PENDING = true;
+        UDP_PEER = true;
+    }
 }
 
-fn tx_udp_echo(base: usize, dst_ip: [u8; 4], req: &[u8]) {
+/// Drain the RX used ring. Every `recv` syscall does this — that is
+/// what advances the stack (D-0040). Never called from the trap path.
+pub fn poll() {
+    let _ = poll_rx(virtio::net_base());
+}
+
+/// Pending UDP payload, if `poll` has classified one since the last take.
+pub fn udp_pending() -> Option<&'static [u8]> {
+    if unsafe { UDP_PENDING } {
+        Some(unsafe {
+            core::slice::from_raw_parts(core::ptr::addr_of!(UDP_BUF) as *const u8, UDP_LEN)
+        })
+    } else {
+        None
+    }
+}
+
+pub fn udp_consume() {
+    unsafe {
+        UDP_PENDING = false;
+        UDP_LEN = 0;
+    }
+}
+
+/// Transmit `payload` to the last UDP peer. FIN is ignored on UDP
+/// (D-0051). Returns false if nothing has been received yet.
+pub fn udp_send(payload: &[u8], _flags: usize) -> bool {
+    if !unsafe { UDP_PEER } {
+        return false;
+    }
+    let dst_ip = unsafe { UDP_SRC_IP };
+    let dst_port = unsafe { UDP_SRC_PORT };
+    tx_udp(payload, dst_ip, dst_port);
+    true
+}
+
+fn tx_udp(payload: &[u8], dst_ip: [u8; 4], dst_port: u16) {
     let gw = gateway_mac();
     let mac = unsafe { MAC };
-    let udp_len = req.len();
+    let udp_len = 8 + payload.len();
     let ip_tot = 20 + udp_len;
     let eth_len = core::cmp::max(ETH_HDR + ip_tot, ETH_MIN);
     let post = (VNET_HDR + eth_len) as u32;
@@ -592,7 +651,14 @@ fn tx_udp_echo(base: usize, dst_ip: [u8; 4], req: &[u8]) {
             &IP,
             &dst_ip,
         );
-        udp::write_echo(&mut f[ETH_HDR + 20..], req, &IP, &dst_ip);
+        udp::write_dgram(
+            &mut f[ETH_HDR + 20..],
+            udp::ECHO_PORT,
+            dst_port,
+            payload,
+            &IP,
+            &dst_ip,
+        );
     }
     virtq::post_tx(0, post);
     unsafe { TX_POSTED = TX_POSTED.wrapping_add(1) };
@@ -601,32 +667,8 @@ fn tx_udp_echo(base: usize, dst_ip: [u8; 4], req: &[u8]) {
         "virtio-net: TX UDP echo to {}.{}.{}.{} dport mirrored",
         dst_ip[0], dst_ip[1], dst_ip[2], dst_ip[3]
     );
-    virtq::notify(base, virtq::Q_TX);
-    wait_tx(base, "UDP echo");
-}
-
-/// Poll until one UDP echo is transmitted. Printed `UDP ECHO READY`
-/// first so the harness does not send into a guest that is still in
-/// ARP/ping (D-0050).
-#[cfg(feature = "net-udp-selftest")]
-fn wait_udp_echo(base: usize) {
-    println!("UDP ECHO READY");
-    let t0 = csr::time::read();
-    loop {
-        require_device(base);
-        let _ = poll_rx(base);
-        if unsafe { UDP_DONE } {
-            dump();
-            return;
-        }
-        poll_stall();
-        if csr::time::read().wrapping_sub(t0) >= RX_WAIT_TICKS {
-            println!("virtio-net: RX no UDP echo after ~2s");
-            dump();
-            panic!("virtio-net: no UDP datagram on port 7");
-        }
-        unsafe { asm!("wfi") };
-    }
+    virtq::notify(virtio::net_base(), virtq::Q_TX);
+    wait_tx(virtio::net_base(), "UDP echo");
 }
 
 fn tx_icmp_echo_reply(base: usize, dst_ip: [u8; 4], req: &[u8]) {
@@ -689,13 +731,7 @@ fn ping_gateway(base: usize) {
         f[0..6].copy_from_slice(&gw);
         f[6..12].copy_from_slice(&mac);
         f[12..14].copy_from_slice(&ETH_TYPE_IPV4.to_be_bytes());
-        ipv4::write_header(
-            &mut f[ETH_HDR..],
-            ip_tot as u16,
-            ipv4::PROTO_ICMP,
-            &IP,
-            &GW,
-        );
+        ipv4::write_header(&mut f[ETH_HDR..], ip_tot as u16, ipv4::PROTO_ICMP, &IP, &GW);
         icmp::write_echo_req(&mut f[ETH_HDR + 20..], PING_ID, PING_SEQ, PING_DATA);
     }
     virtq::post_tx(0, post);
@@ -705,9 +741,7 @@ fn ping_gateway(base: usize) {
         PING_TX = csr::time::read();
     }
     arm_tx_stall();
-    println!(
-        "virtio-net: TX ICMP echo id={PING_ID} seq={PING_SEQ} to 10.0.2.2"
-    );
+    println!("virtio-net: TX ICMP echo id={PING_ID} seq={PING_SEQ} to 10.0.2.2");
     virtq::notify(base, virtq::Q_TX);
     wait_tx(base, "ICMP echo");
     wait_ping_reply(base);
@@ -767,9 +801,9 @@ fn write_garp(buf: &mut [u8], mac: &[u8; 6]) {
     f[20..22].copy_from_slice(&1u16.to_be_bytes()); // ARP request
     f[22..28].copy_from_slice(mac); // sha
     f[28..32].copy_from_slice(&IP); // spa 10.0.2.15
-    // tha [32, 38) stays zero
+                                    // tha [32, 38) stays zero
     f[38..42].copy_from_slice(&IP); // tpa 10.0.2.15
-    // [42, 60) already zero: pad to Ethernet minimum.
+                                    // [42, 60) already zero: pad to Ethernet minimum.
     println!("virtio-net: GARP 42 bytes (padded to 60):");
     print_hex(&f[0..GARP]);
 }

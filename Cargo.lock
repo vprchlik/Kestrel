@@ -3,5 +3,19 @@
 version = 4
 
 [[package]]
+name = "app"
+version = "0.1.0"
+dependencies = [
+ "usys",
+]
+
+[[package]]
+name = "usys"
+version = "0.1.0"
+
+[[package]]
 name = "whimbrel"
 version = "0.1.0"
+dependencies = [
+ "app",
+]

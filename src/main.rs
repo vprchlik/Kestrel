@@ -15,10 +15,15 @@
 
 extern crate alloc;
 
+mod arp;
+mod checksum;
 mod console;
 mod csr;
 mod frame;
 mod heap;
+mod icmp;
+mod ipv4;
+mod net;
 mod page;
 mod sbi;
 #[cfg(feature = "stress")]
@@ -28,15 +33,10 @@ mod task;
 mod timer;
 mod trap;
 mod uaccess;
+mod udp;
 mod user;
 mod virtio;
 mod virtq;
-mod arp;
-mod checksum;
-mod ipv4;
-mod icmp;
-mod udp;
-mod net;
 
 use core::arch::{asm, global_asm};
 
@@ -173,37 +173,26 @@ extern "C" fn kmain(hartid: usize, dtb_pa: usize) -> ! {
             feature = "stress",
             feature = "freeze-selftest",
             feature = "net-init-selftest",
-            feature = "net-udp-selftest"
         )))]
         {
             // D-0035: kmain does not return after the first sret to U.
-            #[cfg(any(
-                feature = "userptr-kernel-selftest",
-                feature = "userptr-span-selftest"
-            ))]
+            #[cfg(any(feature = "userptr-kernel-selftest", feature = "userptr-span-selftest"))]
             task::enter(0);
             #[cfg(feature = "user-fault-selftest")]
             task::enter(2);
+            #[cfg(feature = "net-udp-selftest")]
+            task::enter(3);
             #[cfg(not(any(
                 feature = "userptr-kernel-selftest",
                 feature = "userptr-span-selftest",
-                feature = "user-fault-selftest"
+                feature = "user-fault-selftest",
+                feature = "net-udp-selftest"
             )))]
             task::enter(1);
         }
         #[cfg(feature = "net-init-selftest")]
         {
             println!("NET INIT OK");
-            let ret = sbi::shutdown();
-            println!(
-                "shutdown failed: SRST error={} value={}",
-                ret.error, ret.value
-            );
-            park()
-        }
-        #[cfg(feature = "net-udp-selftest")]
-        {
-            println!("NET UDP OK");
             let ret = sbi::shutdown();
             println!(
                 "shutdown failed: SRST error={} value={}",

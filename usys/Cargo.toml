@@ -1,0 +1,9 @@
+[package]
+name = "usys"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+# rlib so the kernel linker script can match this archive into the user
+# sections (D-0044 / D-0051). Not a staticlib: that would bundle core.
+crate-type = ["rlib"]

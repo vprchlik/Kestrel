@@ -128,10 +128,7 @@ pub fn process(eth: &[u8], our_ip: &[u8; 4]) -> Option<RequestForUs> {
     tpa.copy_from_slice(&a[24..28]);
     if &tpa != our_ip {
         unsafe { DROP_TPA = DROP_TPA.wrapping_add(1) };
-        println!(
-            "arp: drop tpa {}.{}.{}.{}",
-            tpa[0], tpa[1], tpa[2], tpa[3]
-        );
+        println!("arp: drop tpa {}.{}.{}.{}", tpa[0], tpa[1], tpa[2], tpa[3]);
         return None;
     }
     learn(spa, sha);

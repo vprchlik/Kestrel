@@ -29,10 +29,18 @@ user-fault-selftest = []
 freeze-selftest = ["no-sret"]
 # T3.3: handshake to DRIVER_OK, then stop before U-mode.
 net-init-selftest = ["no-sret"]
-# T3.8: UDP echo on port 7, then stop before U-mode.
-net-udp-selftest = ["no-sret"]
+# T3.9: UDP echo in the app over recv/send. Enters U-mode (D-0051).
+net-udp-selftest = []
+# Build-only: plant a `c.fld` in `.utext` so check-utext can fail by name
+# (D-0044). Not a boot image.
+utext-c-fld-selftest = []
+
+[workspace]
+members = [".", "usys", "app"]
+resolver = "2"
 
 [dependencies]
+app = { path = "app" }
 
 # Bare metal has no unwinder; abort turns panics into a plain call to our
 # #[panic_handler] and drops the eh_personality requirement.
@@ -43,3 +51,18 @@ panic = "abort"
 panic = "abort"
 lto = true
 codegen-units = 1
+
+# D-0051: the app/usys packages must not emit bounds-check / overflow
+# panics (those `jal` into kernel `core::panicking`) or `memcpy` calls
+# (those resolve to `compiler_builtins` in kernel `.text`). opt-level 1
+# inlines small copies; overflow/debug assertions off removes the
+# panicking inserts. panic=abort is inherited from profile.dev.
+[profile.dev.package.app]
+opt-level = 1
+overflow-checks = false
+debug-assertions = false
+
+[profile.dev.package.usys]
+opt-level = 1
+overflow-checks = false
+debug-assertions = false

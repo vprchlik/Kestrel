@@ -16,9 +16,9 @@
 use crate::csr;
 use crate::println;
 use crate::timer;
-use core::arch::global_asm;
 #[cfg(not(feature = "no-sret"))]
 use core::arch::asm;
+use core::arch::global_asm;
 
 /// `TrapFrame` size in bytes. 32 GPRs + `sepc` + `sstatus`.
 pub const FRAME_SIZE: usize = 272;
@@ -47,6 +47,10 @@ impl TrapFrame {
     #[inline]
     pub fn a1(&self) -> usize {
         self.x[11]
+    }
+    #[inline]
+    pub fn a2(&self) -> usize {
+        self.x[12]
     }
     #[inline]
     pub fn a7(&self) -> usize {
@@ -190,11 +194,7 @@ extern "C" fn trap_handler(frame: &mut TrapFrame) -> &mut TrapFrame {
                 // returns a *different* task's frame. `__trap_return` then
                 // `mv sp, a0` onto the survivor. Returning `frame` here
                 // would `sret` into a dead task.
-                return crate::task::kill_and_reschedule(
-                    user_fault_cause(code),
-                    frame.sepc,
-                    stval,
-                );
+                return crate::task::kill_and_reschedule(user_fault_cause(code), frame.sepc, stval);
             }
             panic!(
                 "trap scause={} ({}) sepc={:#x} stval={:#x} sp={:#x}",
@@ -207,11 +207,7 @@ extern "C" fn trap_handler(frame: &mut TrapFrame) -> &mut TrapFrame {
         }
         _ => {
             if from_user(frame) {
-                return crate::task::kill_and_reschedule(
-                    user_fault_cause(code),
-                    frame.sepc,
-                    stval,
-                );
+                return crate::task::kill_and_reschedule(user_fault_cause(code), frame.sepc, stval);
             }
             unknown_trap(scause, code, false, frame, stval);
         }

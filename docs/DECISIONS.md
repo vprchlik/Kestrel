@@ -1546,16 +1546,22 @@ D-0011 onward are working decisions made under those constraints.
   as the Length field in the real header — that is RFC 768, not a
   double-count bug. A computed checksum of 0 is transmitted as
   `0xFFFF` (0 means "no checksum"). On RX, checksum 0 is **dropped**
-  (`drop_csum`); we do not treat optional-checksum as valid. Echo
-  **mirrors** payload and UDP length, **swaps** source/dest ports and
-  IPv4 addresses, **recomputes** IP checksum, UDP checksum, TTL, and
-  Ethernet dest (gateway MAC). The harness waits for serial
-  `UDP ECHO READY` before sending; the client is a datagram socket
-  with a 2 s recv timeout (the `nc -u` shape) so a silent guest is
-  TEST FAIL, not a hang.
+  (`drop_csum`) — a **deliberate deviation from RFC 768**, which
+  permits zero to mean "no checksum was computed." We do not treat
+  optional-checksum as valid. slirp always fills in a real checksum,
+  so the QEMU user-net peer never exercises the RFC's zero; a
+  real-world peer that legitimately sends 0 is dropped by this
+  policy, not by accident. Echo **mirrors** payload and UDP length,
+  **swaps** source/dest ports and IPv4 addresses, **recomputes** IP
+  checksum, UDP checksum, TTL, and Ethernet dest (gateway MAC). The
+  harness waits for serial `UDP ECHO READY` before sending; the
+  client is a datagram socket with a 2 s recv timeout (the `nc -u`
+  shape) so a silent guest is TEST FAIL, not a hang.
 - **Alternatives considered:** accept RX checksum 0 per RFC 768
   (rejected: that is skipping verification, the T3.7 dishonest skip
-  applied to UDP). Rebuild the datagram from parsed fields (rejected:
+  applied to UDP; recorded here as a named deviation rather than
+  left implicit, because a non-slirp peer may send zero in good
+  faith). Rebuild the datagram from parsed fields (rejected:
   echo is a swap; rebuilding is how payload bytes get lost). Fire
   `nc -u` on `DRIVER_OK` (rejected: the guest is still in ARP/ping;
   UDP would sit in the used ring or be dropped as proto-not-yet).
@@ -1564,11 +1570,79 @@ D-0011 onward are working decisions made under those constraints.
   fail-closed).
 - **Rationale:** the pseudo-header and the 0/`0xFFFF` wrinkle are the
   interview questions; they live in `udp.rs` with a self-test that
-  forces a zero computed sum. The harness race is the same lesson as
-  T3.5: provoke only after the guest has printed that it is polling
-  for this packet.
+  forces a zero computed sum. Dropping RX 0 is stricter than the RFC
+  and is defensible against slirp (it always computes one) but is
+  still a protocol choice, not "the RFC says so." The harness race
+  is the same lesson as T3.5: provoke only after the guest has
+  printed that it is polling for this packet.
 - **Consequences:** every QEMU invocation gains
   `hostfwd=udp::7777-:7`. `just test-net-udp` is a sibling feature
   (`net-udp-selftest`) so the default boot does not spin 2 s waiting
-  for a datagram `just test` never sends. T3.9 will move the echo
-  into the app over `recv`/`send`; this entry's wire behavior stays.
+  for a datagram `just test` never sends. T3.9 moved the echo into the
+  app over `recv`/`send`; this entry's wire behavior stays.
+  Revisit RX-0 if a non-slirp peer (tap, M4) needs optional-checksum.
+
+## D-0051: Compiled Rust in `.utext` stays inside the app/usys archives
+- Date: 2026-08-16 — Status: accepted
+- **Decision:** T3.9 links a real `app` crate (and a `usys` wrapper) into
+  the existing user sections via linker `EXCLUDE_FILE` on those
+  archives' `.text/.rodata/.data/.bss` (D-0044). The image has **one**
+  `#[panic_handler]` lang item, and it stays in the kernel: S-mode
+  cannot fetch `U=1` pages (SUM does not affect instruction fetch),
+  and U-mode cannot fetch `U=0` pages, so a single handler cannot
+  serve both. The app crate therefore does not carry a lang-item
+  panic handler. Its abort path is `usys::exit` / `unimp` in `.utext`.
+  The app is written so rustc does not emit calls into `core`'s
+  panicking/fmt/builtins: no `panic!`/`unwrap`/`expect`, no indexing
+  that can fail, no `format!`/`println!`, no `f32`/`f64`, overflow
+  checks and debug assertions off on the `app` and `usys` packages,
+  `opt-level = 1` so small copies inline instead of calling
+  `memcpy`/`memset`. `-C no-redzone` is an x86 concern; RISC-V has
+  no red zone, so the flag is a no-op here and is not set. `panic =
+  "abort"` is already the workspace profile (no unwinder /
+  `eh_personality` in either half). `check-utext` requires `app_main`
+  to sit in `[__utext_start, __utext_end)` so a failed section match
+  cannot hide in kernel `.text`. Unknown mnemonics stay a hard
+  error; FP including `c.fld`/`c.fsd`/`c.fldsp`/`c.fsdsp` is
+  rejected by name (D-0044). `recv` (6) / `send` (7) join the ABI;
+  0 stays reserved; numbers `>= 8` still kill. UDP `send` ignores
+  the FIN bit (T3.10's TCP close); a task waiting on a packet stays
+  `Running` and spins on `recv` (D-0035, D-0040).
+- **Alternatives considered:** `#[panic_handler]` in the app crate as
+  well as the kernel (rejected: rustc allows one `panic_impl` per
+  image; a second compilation + `objcopy --redefine-sym` is how
+  you fake two, and that is exactly the archive-boundary iteration
+  this task is forbidden to wander into). Putting the one lang item
+  in `.utext` (rejected: a kernel `panic!` would instruction-fault
+  fetching U=1 text). `panic = "immediate-abort"` (rejected: needs
+  nightly `-Zunstable-options` on 1.97). Sharing `core` helpers
+  that are not inlined (rejected: those objects already live in
+  kernel `.text`; an `auipc+jalr` from `.utext` into them is the
+  silent-wrong outcome `check-utext` exists to catch). Building the
+  app for a soft-float target (rejected: D-0044, ABI mismatch).
+  Growing `check-utext` with a permissive default for unknown ops
+  (rejected: the checker's contract is fail-closed). A `Blocked`
+  state for `recv` (rejected: D-0035). Kernel auto-echo remaining
+  in `classify_udp` "for the harness" (rejected: T3.9's acceptance
+  is the echo moving into the app).
+- **Rationale:** the structural risk is not the echo logic; it is
+  LLVM emitting a symbol that resolves outside the user sections.
+  The mitigations are "don't generate that call" plus a checker
+  that fails if we did. The panic-handler split is hardware: two
+  privilege levels, one identity map, one lang item.
+- **Consequences:** rustc passes `libapp-HASH.rlib` whose members are
+  `app-HASH.*.rcgu.o`, and LLVM names string literals
+  `.rodata..Lanon.*`. Matching only `*libapp-*.rlib:(.rodata)` left
+  those strings in kernel `.rodata` (`auipc` from `.utext` into
+  `0x8022xxxx`). The working placement is `#[link_section]` on user
+  functions and data, plus matching both the rlib and the `*.rcgu.o`
+  member names. If that pairing breaks, **stop** and inspect
+  `cargo rustc -- --print link-args` — do not iterate wildcards.
+  Symptom of the silent case: `app_main` at `0x8020xxxx`, every test
+  green until the first `sret`. The planted `c.fld` image is a
+  build-only feature (`utext-c-fld-selftest`); it must not ship in
+  the default kernel. `net-udp-selftest` drops `no-sret` so the app
+  actually runs. Revisit if a future app needs `core::fmt` or a real
+  `memcpy` in `.utext` (that is a local `#[no_mangle]` in `usys`,
+  not a link to `compiler_builtins`).
+

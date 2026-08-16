@@ -42,6 +42,28 @@ gdb:
 check-utext: build
     bash scripts/check-utext.sh {{kernel}}
 
+# D-0044: the planted `c.fld` must fail by name. Inverts the checker's
+# non-zero so a regression (planted insn accepted) is a recipe failure.
+check-utext-planted:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build --features utext-c-fld-selftest
+    set +e
+    out=$(bash scripts/check-utext.sh {{kernel}} 2>&1)
+    st=$?
+    set -e
+    echo "$out"
+    if [ "$st" -eq 0 ]; then
+        echo 'TEST FAIL: planted c.fld was accepted by check-utext'
+        exit 1
+    fi
+    if ! echo "$out" | grep -q 'c.fld'; then
+        echo 'TEST FAIL: check-utext failed but not by naming c.fld'
+        exit 1
+    fi
+    echo 'TEST PASS: planted c.fld rejected by name'
+    cargo build
+
 # Headless boot. Verdict from serial + QEMU status together (D-0017):
 #   PANIC in serial          → TEST FAIL (exit 1), panic line echoed
 #   timeout (status 124)     → TEST HANG (exit 2)
@@ -424,9 +446,10 @@ test-net-init:
     fi
     echo 'TEST PASS: DRIVER_OK, MAC, dump, GARP, RX ARP, ARP reply, PING RTT'
 
-# T3.8: UDP echo on hostfwd 7777→7. Feature image waits for one datagram
-# after UDP ECHO READY, then shuts down. The client is SOCK_DGRAM with a
-# 2s recv timeout (nc -u shape); silence is FAIL, not a hang (D-0050).
+# T3.9: UDP echo in the app over recv/send. Feature image srets into the
+# app; READY is printed from U-mode after ARP/ping. The client is
+# SOCK_DGRAM with a 2s recv timeout (nc -u shape); silence is FAIL,
+# not a hang (D-0050).
 test-net-udp:
     #!/usr/bin/env bash
     set -euo pipefail

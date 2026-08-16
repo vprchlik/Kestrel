@@ -34,7 +34,7 @@ import re, subprocess, sys
 
 objdump, nm, kernel = sys.argv[1], sys.argv[2], sys.argv[3]
 
-dump = subprocess.check_output([objdump, "-d", "--section=.utext", kernel], text=True)
+dump = subprocess.check_output([objdump, "-d", "-M", "no-aliases", "--section=.utext", kernel], text=True)
 syms_txt = subprocess.check_output([nm, kernel], text=True)
 
 def parse_syms(text):
@@ -51,6 +51,7 @@ need = [
     "__urodata_start", "__urodata_end",
     "__udata_start", "__udata_end",
     "__ubss_start", "__ubss_end",
+    "app_main",
 ]
 for n in range(4):
     need += [
@@ -82,6 +83,16 @@ def where(addr):
 # is the bug this check exists to catch.
 kernel_lo = 0x80200000
 kernel_hi = syms["__utext_start"]
+
+app_main = syms["app_main"]
+if not (syms["__utext_start"] <= app_main < syms["__utext_end"]):
+    print(
+        f"check-utext FAIL: app_main at {app_main:#x} is not in .utext "
+        f"[{syms['__utext_start']:#x}, {syms['__utext_end']:#x}); "
+        f"compiled Rust landed in kernel .text (D-0044 / D-0051)",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 def fail(pc, insn, reason):
     print(f"check-utext FAIL at {pc:#x}: {insn}", file=sys.stderr)
@@ -121,7 +132,8 @@ GP_TP = re.compile(r"(?:^|[^a-z0-9])(gp|tp)(?:[^a-z0-9]|$)")
 LOAD_STORE = {
     "lb", "lh", "lw", "ld", "lbu", "lhu", "lwu",
     "sb", "sh", "sw", "sd",
-    "flw", "fld", "fsw", "fsd",
+    "c.ldsp", "c.sdsp", "c.lwsp", "c.swsp",
+    "c.ld", "c.sd", "c.lw", "c.sw",
 }
 # Arithmetic / branches / values: not link-time symbol references.
 SKIP = {
@@ -129,15 +141,29 @@ SKIP = {
     "unimp", "nop", "mv", "neg", "not", "seqz", "snez", "sltz",
     "sgtz", "beq", "bne", "blt", "bge", "bltu", "bgeu",
     "beqz", "bnez", "blez", "bgez", "bltz", "bgtz",
+    "bgt", "ble", "bgtu", "bleu",
     "slli", "srli", "srai", "slliw", "srliw", "sraiw",
     "and", "or", "xor", "andi", "ori", "xori",
     "sll", "srl", "sra", "sllw", "srlw", "sraw",
     "addw", "subw",
+    "mul", "mulh", "mulhu", "mulhsu", "mulw",
+    "div", "divu", "rem", "remu", "divw", "divuw", "remw", "remuw",
+    "sext.w", "zext.b", "zext.w", "zext.h",
+    "c.addi", "c.addiw", "c.addi16sp", "c.addi4spn",
+    "c.add", "c.addw", "c.sub", "c.subw",
+    "c.mv", "c.li", "c.lui", "c.nop",
+    "c.slli", "c.srli", "c.srai", "c.andi",
+    "c.and", "c.or", "c.xor",
+    "c.beqz", "c.bnez",
+    "c.unimp", "c.ebreak",
+    "fence", "fence.i",
+    "ret",
 }
 BRANCH = {
     "beq", "bne", "blt", "bge", "bltu", "bgeu",
     "beqz", "bnez", "blez", "bgez", "bltz", "bgtz",
     "bgt", "ble", "bgtu", "bleu",
+    "c.beqz", "c.bnez",
 }
 
 
@@ -153,13 +179,27 @@ def parse_reg_imm(args):
 
 
 def parse_mem(args):
+    args = re.sub(r"\s*<[^>]*>$", "", args.strip())
     m = re.match(r"([^,]+),\s*(-?(?:0x)?[0-9a-fA-F]+)\(([a-z0-9]+)\)", args)
     if not m:
         return None
     return m.group(1).strip(), int(m.group(2), 0), m.group(3)
 
 
+def parse_off_reg(s):
+    s = re.sub(r"\s*<[^>]*>$", "", s.strip())
+    m = re.match(r"(-?(?:0x)?[0-9a-fA-F]+)\(([a-z0-9]+)\)$", s)
+    if not m:
+        return None
+    return m.group(2), int(m.group(1), 0)
+
+
 def parse_jalr(args):
+    args = re.sub(r"\s*<[^>]*>$", "", args.strip())
+    off = parse_off_reg(args)
+    if off:
+        rs, imm = off
+        return "zero", rs, imm
     parts = [p.strip() for p in args.split(",") if p.strip()]
     if len(parts) == 1:
         return "ra", parts[0], 0
@@ -169,14 +209,19 @@ def parse_jalr(args):
         except ValueError:
             return None
     if len(parts) == 2:
+        off = parse_off_reg(parts[1])
+        if off:
+            return parts[0], off[0], off[1]
         try:
             return "ra", parts[0], int(parts[1], 0)
         except ValueError:
-            return None
+            return parts[0], parts[1], 0
     return None
 
 
 def hex_targets(args):
+    # `<.Lpcrel_hi0+0x14>` is objdump decoration, not a target.
+    args = re.sub(r"<[^>]*>", "", args)
     return [int(x, 16) for x in re.findall(r"0x[0-9a-fA-F]+", args)]
 
 
@@ -207,12 +252,27 @@ if not insns:
     print("check-utext FAIL: .utext is empty or missing", file=sys.stderr)
     sys.exit(1)
 
+def is_fp(op):
+    if op in ("fence", "fence.i"):
+        return False
+    if op.startswith("c.f") or op.startswith("f"):
+        return True
+    return False
+
+
 paired = set()
 for i, (pc, op, args, raw) in enumerate(insns):
     if i in paired:
         continue
     if GP_TP.search(args) or GP_TP.search(op):
         fail(pc, raw, "gp/tp used from .utext (kernel-owned; D-0032)")
+
+    if is_fp(op):
+        fail(
+            pc,
+            raw,
+            f"floating-point {op} in .utext (D-0044; FS=Off)",
+        )
 
     if op in SKIP:
         if op in BRANCH:
@@ -225,6 +285,9 @@ for i, (pc, op, args, raw) in enumerate(insns):
     if op in LOAD_STORE:
         parsed = parse_mem(args)
         if parsed is None:
+            # c.ldsp a0, 16  (implicit sp)
+            if op.endswith("sp") and parse_reg_imm(args) is not None:
+                continue
             fail(pc, raw, f"could not parse {op} operands")
         # Runtime bases (sp, aN, …) are not link-time symbol references.
         continue
@@ -269,21 +332,23 @@ for i, (pc, op, args, raw) in enumerate(insns):
                     target = (auipc_val + mem[1]) & 0xFFFFFFFFFFFFFFFF
                     how = f"auipc+{op2}"
                     used = True
-            elif op2 == "jalr":
+            elif op2 in ("jalr", "jr", "c.jr", "c.jalr"):
                 j = parse_jalr(args2)
                 if j and j[1] == rd:
                     target = (auipc_val + j[2]) & 0xFFFFFFFFFFFFFFFF
-                    how = "auipc+jalr"
+                    how = f"auipc+{op2}"
                     used = True
             if used:
                 paired.add(i + 1)
         check_addr(pc, raw, target, how)
         continue
 
-    if op in ("jalr", "c.jr", "c.jalr"):
-        # Bare register jump: cannot resolve statically. Fail closed unless
-        # it was the auipc pair already consumed above (we only look ahead
-        # from auipc, so a lone jalr still lands here).
+    if op in ("jalr", "jr", "c.jr", "c.jalr"):
+        j = parse_jalr(args)
+        # Return via ra is not a link-time symbol reference: the address
+        # was pushed by a call we already resolved.
+        if j and j[1] == "ra":
+            continue
         fail(pc, raw, "unresolved jalr in .utext")
 
     fail(pc, raw, f"unhandled {op} in .utext")

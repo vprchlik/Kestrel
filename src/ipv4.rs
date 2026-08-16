@@ -106,7 +106,10 @@ pub fn parse<'a>(eth: &'a [u8], our_ip: &[u8; 4]) -> Option<Datagram<'a>> {
     let tot = be16(ip, 2) as usize;
     if tot < hlen || ETH_HDR + tot > eth.len() {
         unsafe { DROP_SHORT = DROP_SHORT.wrapping_add(1) };
-        println!("ipv4: drop tot_len={tot} hlen={hlen} frame.len={}", eth.len());
+        println!(
+            "ipv4: drop tot_len={tot} hlen={hlen} frame.len={}",
+            eth.len()
+        );
         return None;
     }
     if !checksum::valid(&ip[..hlen]) {
@@ -126,10 +129,7 @@ pub fn parse<'a>(eth: &'a [u8], our_ip: &[u8; 4]) -> Option<Datagram<'a>> {
     dst.copy_from_slice(&ip[16..20]);
     if &dst != our_ip {
         unsafe { DROP_DST = DROP_DST.wrapping_add(1) };
-        println!(
-            "ipv4: drop dst {}.{}.{}.{}",
-            dst[0], dst[1], dst[2], dst[3]
-        );
+        println!("ipv4: drop dst {}.{}.{}.{}", dst[0], dst[1], dst[2], dst[3]);
         return None;
     }
     let proto = ip[9];

@@ -97,6 +97,15 @@ fn classify(task: &Task, ptr: usize, len: usize, access: Access) -> Result<(), U
     }
 }
 
+pub fn check_range(
+    task: &Task,
+    ptr: usize,
+    len: usize,
+    access: Access,
+) -> Result<(), UserPtrError> {
+    classify(task, ptr, len, access)
+}
+
 /// Raise SUM, copy `n` bytes, clear SUM. `n` and the user side of the
 /// copy are already validated; this function must not decide anything.
 ///
@@ -145,9 +154,7 @@ pub fn copy_from_user(task: &Task, src: usize, len: usize) -> Result<&'static [u
 }
 
 /// Copy up to [`COPY_MAX`] bytes from a kernel slice into a user
-/// destination. No T2.8 caller (`write` is copy-from); `.urodata` is
-/// rejected because this is a write.
-#[allow(dead_code)]
+/// destination. `.urodata` is rejected because this is a write.
 pub fn copy_to_user(task: &Task, dst: usize, src: &[u8]) -> Result<usize, UserPtrError> {
     let n = core::cmp::min(src.len(), COPY_MAX);
     classify(task, dst, n, Access::Write)?;

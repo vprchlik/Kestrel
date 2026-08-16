@@ -2,8 +2,10 @@
 //!
 //! Owns every instruction that runs with `sstatus.SPP = U`. Every symbol
 //! referenced from `.utext` must resolve inside the user sections or the
-//! task's own stack/break window (`just check-utext`). Written in assembly
-//! so the objdump of `.utext` is the acceptance check, not a hope about LLVM.
+//! task's own stack/break window (`just check-utext`). The T2 demo tasks
+//! stay hand-written assembly (`.option norvc`). The M3 app is compiled
+//! Rust in the `app` / `usys` crates; the linker maps those archives here
+//! (D-0044 / D-0051).
 
 #![cfg_attr(
     any(feature = "panic-selftest", feature = "hang-selftest"),
@@ -12,55 +14,59 @@
 
 use core::arch::global_asm;
 
+/// Pull the app archive into every image, including boots that never
+/// `sret` into it. Without this, `--gc-sections` drops `app_main` and
+/// `check-utext` would pass on assembly-only `.utext` while the UDP
+/// image was the only one that actually linked compiled Rust.
+#[used]
+static KEEP_APP: extern "C" fn() -> ! = app::app_main;
+
+/// Entry of the compiled app crate (D-0044).
+#[allow(dead_code)]
+pub fn app() -> usize {
+    app::app_main as *const () as usize
+}
+
+#[cfg(feature = "utext-c-fld-selftest")]
+extern "C" {
+    fn plant_c_fld();
+}
+
+#[cfg(feature = "utext-c-fld-selftest")]
+#[used]
+static KEEP_PLANT_C_FLD: unsafe extern "C" fn() = plant_c_fld;
+
 #[cfg(all(feature = "userptr-kernel-selftest", feature = "userptr-span-selftest"))]
 compile_error!("pick one of userptr-kernel-selftest, userptr-span-selftest");
 
 #[cfg(all(
     feature = "user-fault-selftest",
-    any(
-        feature = "userptr-kernel-selftest",
-        feature = "userptr-span-selftest"
-    )
+    any(feature = "userptr-kernel-selftest", feature = "userptr-span-selftest")
 ))]
 compile_error!("user-fault-selftest is exclusive of the userptr selftests");
 
-#[cfg(any(
-    feature = "userptr-kernel-selftest",
-    feature = "userptr-span-selftest"
-))]
+#[cfg(any(feature = "userptr-kernel-selftest", feature = "userptr-span-selftest"))]
 extern "C" {
     fn user_entry();
 }
 
-#[cfg(not(any(
-    feature = "userptr-kernel-selftest",
-    feature = "userptr-span-selftest"
-)))]
+#[cfg(not(any(feature = "userptr-kernel-selftest", feature = "userptr-span-selftest")))]
 extern "C" {
     fn task1_entry();
     fn task2_entry();
 }
 
-#[cfg(any(
-    feature = "userptr-kernel-selftest",
-    feature = "userptr-span-selftest"
-))]
+#[cfg(any(feature = "userptr-kernel-selftest", feature = "userptr-span-selftest"))]
 pub fn entry() -> usize {
     user_entry as *const () as usize
 }
 
-#[cfg(not(any(
-    feature = "userptr-kernel-selftest",
-    feature = "userptr-span-selftest"
-)))]
+#[cfg(not(any(feature = "userptr-kernel-selftest", feature = "userptr-span-selftest")))]
 pub fn task1() -> usize {
     task1_entry as *const () as usize
 }
 
-#[cfg(not(any(
-    feature = "userptr-kernel-selftest",
-    feature = "userptr-span-selftest"
-)))]
+#[cfg(not(any(feature = "userptr-kernel-selftest", feature = "userptr-span-selftest")))]
 pub fn task2() -> usize {
     task2_entry as *const () as usize
 }
@@ -252,5 +258,19 @@ user_entry:
     addi    a7, zero, 1
     ecall
     unimp
+"#
+);
+
+// D-0044: compressed FP in `.utext` must fail `check-utext` by name.
+// `.option rvc` so this is actually `c.fld`, not a 32-bit `fld`.
+#[cfg(feature = "utext-c-fld-selftest")]
+global_asm!(
+    r#"
+    .section .utext, "ax"
+    .option rvc
+    .balign 2
+    .globl plant_c_fld
+plant_c_fld:
+    c.fld   fs0, 0(a0)
 "#
 );

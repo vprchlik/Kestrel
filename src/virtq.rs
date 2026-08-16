@@ -311,7 +311,11 @@ fn check_queue(name: &str, q: &Queue, filled: usize) {
         pa(&q.avail) + core::mem::size_of::<Avail>(),
         name,
     );
-    page::require_identity_rw_range(pa(&q.used), pa(&q.used) + core::mem::size_of::<Used>(), name);
+    page::require_identity_rw_range(
+        pa(&q.used),
+        pa(&q.used) + core::mem::size_of::<Used>(),
+        name,
+    );
     if q.avail.idx != 0 || q.used.idx != 0 {
         panic!(
             "virtq: {name} avail.idx={} used.idx={} want 0,0",
@@ -544,9 +548,7 @@ pub fn init() {
     let stack_bottom = pa(addr_of!(__boot_stack_bottom));
     let heap_start = pa(addr_of!(__heap_start));
     if bss_end + PAGE_SIZE != stack_bottom {
-        panic!(
-            "virtq: guard hole moved: bss_end={bss_end:#x} stack_bottom={stack_bottom:#x}"
-        );
+        panic!("virtq: guard hole moved: bss_end={bss_end:#x} stack_bottom={stack_bottom:#x}");
     }
     println!(
         "virtq: pool {lo:#x}..{hi:#x} ({} bytes) bss_end={bss_end:#x} guard={stack_bottom:#x} heap_start={heap_start:#x}",

@@ -384,6 +384,16 @@ no trap; the first channel that can name the bug is the one to read.
     (D-0049): **remove at T3.10**. After TCP exists, `drop_proto != 0`
     is a real drop, not expected noise. Do not "fix" it by grepping it
     away or by stopping the hostfwd watcher.
+12. Compiled Rust in `.utext` with `app_main` at a user address but
+    `UDP ECHO READY` still in kernel `.rodata` (`auipc` from `.utext`
+    into `0x8022xxxx`). rustc puts string literals in unique
+    `.rodata..Lanon.*` sections inside `app-HASH.*.rcgu.o` members of
+    `libapp-HASH.rlib`. A linker rule that only names
+    `*libapp-*.rlib:(.rodata)` misses them; LLD then orphans them into
+    kernel `.rodata`. `check-utext` catches the `auipc`. Fix with
+    `#[link_section = ".urodata"]` on the bytes (same as `.utext` on
+    functions) and match the `*.rcgu.o` member names. Do not iterate
+    `EXCLUDE_FILE` wildcards (D-0051).
 
 ## 5. QEMU monitor — inspect a hung machine *without* GDB
 
