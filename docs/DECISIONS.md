@@ -1510,7 +1510,8 @@ D-0011 onward are working decisions made under those constraints.
   echo-request then echo-reply. It does not send a host ping. Malformed
   IPv4/ICMP counters (`csum`, `frag`, `ihl`, …) must read 0 on that
   path; `ipv4 drop_proto` may be non-zero because hostfwd SYNs are
-  IPv4/TCP, not malformed. **That exception expires at T3.10 (D-0049).**
+  IPv4/TCP, not malformed. **That exception expired at T3.10 (D-0049);
+  `just test` now requires `proto=0`.**
 
 ## D-0049: `drop_proto` hostfwd-SYN exception expires at T3.10
 - Date: 2026-08-16 — Status: accepted
@@ -1521,10 +1522,8 @@ D-0011 onward are working decisions made under those constraints.
   T3.10 (TCP passive open) **removes the exception**: once we parse
   SYNs, a non-zero `drop_proto` means an unknown protocol, not a
   hostfwd SYN, and it must not sit in the "expected noise" category.
-  `just test` will then require `proto=0` (or a TCP-classified counter
-  instead). Until then the dump prints
-  `ipv4: drop proto=6 (TCP; expected until T3.10)` so the exception is
-  visible on serial, not only in this entry.
+  `just test` requires `proto=0`. The `ipv4: drop proto=6 (TCP; expected
+  until T3.10)` print is gone: protocol 6 is delivered to `tcp`.
 - **Alternatives considered:** stop sending hostfwd connects after ARP
   is cached (rejected: T3.6's second connect is the "past ARP" proof).
   Classify TCP as a separate `drop_tcp` that stays non-zero forever
@@ -1533,9 +1532,10 @@ D-0011 onward are working decisions made under those constraints.
 - **Rationale:** a counter that is "allowed to be whatever" is how
   real drops hide. Dating the exception to the task that makes it
   false keeps T3.10 from inheriting T3.7's excuse.
-- **Consequences:** T3.8 does not grep `proto=0`. T3.10's first commit
-  must delete this exception and fail the boot if `drop_proto != 0`
-  on the happy path. Do not "fix" it by stopping the hostfwd watcher.
+- **Consequences:** T3.8 did not grep `proto=0`. T3.10 deleted the
+  exception: `just test` / `just test-net-init` fail the boot if
+  `drop_proto != 0` on the happy path. Do not "fix" it by stopping
+  the hostfwd watcher.
 
 ## D-0050: UDP echo swaps ports and addresses; checksum 0 is 0xFFFF
 - Date: 2026-08-16 — Status: accepted
@@ -1645,4 +1645,34 @@ D-0011 onward are working decisions made under those constraints.
   actually runs. Revisit if a future app needs `core::fmt` or a real
   `memcpy` in `.utext` (that is a local `#[no_mangle]` in `usys`,
   not a link to `compiler_builtins`).
+
+## D-0052: T3.10 handshake only; no RST on FIN or a second 4-tuple
+- Date: 2026-08-16 — Status: accepted
+- **Decision:** T3.10 implements LISTEN → SYN_RCVD → ESTABLISHED and
+  nothing past that. One listener (guest port 80), one TCB. Duplicate
+  SYN in SYN_RCVD re-sends the same SYN/ACK (same ISN). Payload, FIN,
+  RST, and a SYN from a second 4-tuple are **dropped with a counter,
+  not RST**. Empty ARP cache on a SYN is the same drop (no panic,
+  no ARP-and-queue). D-0041's RST-on-unexpected and the close
+  sequence land at T3.11.
+- **Alternatives considered:** RST every unexpected segment as D-0041
+  already says (rejected at this checkpoint: the hostfwd watcher
+  `close()`s after `connect()`, slirp sends FIN, and a second
+  hostfwd connect is a second 4-tuple; an honest RST would fail the
+  T3.10 "no RST" pcap gate without testing close). Queue a second
+  SYN until the first TCB is free (rejected: one connection, no
+  timer, and T3.11 is when close exists). Panic on a SYN before the
+  gateway MAC is cached (rejected: D-0040, remote bytes never panic).
+- **Rationale:** the acceptance is a standalone handshake: SYN →
+  SYN/ACK → ACK, ESTABLISHED set, no RST. The harness that makes
+  slirp ARP (D-0046) is also the harness that completes the
+  handshake; it must not be rewritten to hide FINs. Dropping
+  unexpected segments keeps the capture honest for this checkpoint
+  without pretending close is implemented.
+- **Consequences:** `just test` still fires both hostfwd connects.
+  `busy` / `unexpected` in `tcp_drop` may be non-zero on a happy
+  boot (second SYN, peer FIN after ESTABLISHED). Malformed counters
+  (`short`, `doff`, `csum`, `opt`) must read 0. `drop_proto` must
+  read 0 (D-0049). T3.11 replaces the drop with RST-on-unexpected
+  and implements FIN consumption.
 

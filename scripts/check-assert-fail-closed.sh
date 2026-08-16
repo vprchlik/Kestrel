@@ -31,6 +31,7 @@ expect_fail scripts/assert-pcap-slirp-arp.sh "$tmp/no-such.pcap" missing
 expect_fail scripts/assert-pcap-arp-reply.sh "$tmp/no-such.pcap" missing
 expect_fail scripts/assert-pcap-icmp.sh "$tmp/no-such.pcap" missing
 expect_fail scripts/assert-pcap-udp-echo.sh "$tmp/no-such.pcap" missing
+expect_fail scripts/assert-pcap-tcp-handshake.sh "$tmp/no-such.pcap" missing
 
 : >"$tmp/empty.pcap"
 expect_fail scripts/assert-pcap-garp.sh "$tmp/empty.pcap" empty
@@ -38,6 +39,7 @@ expect_fail scripts/assert-pcap-slirp-arp.sh "$tmp/empty.pcap" empty
 expect_fail scripts/assert-pcap-arp-reply.sh "$tmp/empty.pcap" empty
 expect_fail scripts/assert-pcap-icmp.sh "$tmp/empty.pcap" empty
 expect_fail scripts/assert-pcap-udp-echo.sh "$tmp/empty.pcap" empty
+expect_fail scripts/assert-pcap-tcp-handshake.sh "$tmp/empty.pcap" empty
 
 python3 - "$tmp" <<'PY'
 import struct, sys
@@ -150,6 +152,83 @@ udp_rep = pad60(
 write_pcap(d + "/udp-req-only.pcap", [udp_req])
 write_pcap(d + "/udp-happy.pcap", [udp_req, udp_rep])
 write_pcap(d + "/udp-reply-then-req.pcap", [udp_rep, udp_req])
+
+def inet_checksum(data):
+    if len(data) % 2:
+        data = data + b"\x00"
+    s = 0
+    for i in range(0, len(data), 2):
+        s += (data[i] << 8) | data[i + 1]
+    while s >> 16:
+        s = (s & 0xFFFF) + (s >> 16)
+    return ~s & 0xFFFF
+
+def ipv4_hdr(total, proto, src, dst):
+    h = bytearray(20)
+    h[0] = 0x45
+    h[2:4] = total.to_bytes(2, "big")
+    h[6:8] = (0x4000).to_bytes(2, "big")
+    h[8] = 64
+    h[9] = proto
+    h[12:16] = src
+    h[16:20] = dst
+    c = inet_checksum(bytes(h))
+    h[10:12] = c.to_bytes(2, "big")
+    return bytes(h)
+
+def tcp_hdr(sport, dport, seq, ack, flags, src, dst):
+    h = bytearray(20)
+    h[0:2] = sport.to_bytes(2, "big")
+    h[2:4] = dport.to_bytes(2, "big")
+    h[4:8] = seq.to_bytes(4, "big")
+    h[8:12] = ack.to_bytes(4, "big")
+    h[12] = 5 << 4
+    h[13] = flags
+    h[14:16] = (8192).to_bytes(2, "big")
+    pseudo = src + dst + bytes([0, 6]) + (20).to_bytes(2, "big")
+    c = inet_checksum(pseudo + bytes(h))
+    h[16:18] = c.to_bytes(2, "big")
+    return bytes(h)
+
+def tcp_frame(eth_dst, eth_src, ip_src, ip_dst, tcp):
+    ip = ipv4_hdr(20 + len(tcp), 6, ip_src, ip_dst)
+    return pad60(eth_dst + eth_src + bytes.fromhex("0800") + ip + tcp)
+
+ip_guest = bytes.fromhex("0a00020f")
+ip_gw = bytes.fromhex("0a000202")
+SYN, ACK, RST = 0x02, 0x10, 0x04
+tcp_syn = tcp_frame(
+    guest_mac, slirp_mac, ip_gw, ip_guest,
+    tcp_hdr(12345, 80, 1000, 0, SYN, ip_gw, ip_guest),
+)
+tcp_synack = tcp_frame(
+    slirp_mac, guest_mac, ip_guest, ip_gw,
+    tcp_hdr(80, 12345, 2000, 1001, SYN | ACK, ip_guest, ip_gw),
+)
+tcp_ack = tcp_frame(
+    guest_mac, slirp_mac, ip_gw, ip_guest,
+    tcp_hdr(12345, 80, 1001, 2001, ACK, ip_gw, ip_guest),
+)
+bad = bytearray(tcp_synack)
+# Flip a TCP checksum byte (offset 14+20+16).
+bad[14 + 20 + 16] ^= 0xFF
+tcp_synack_bad = bytes(bad)
+tcp_synack_wrong_ack = tcp_frame(
+    slirp_mac, guest_mac, ip_guest, ip_gw,
+    tcp_hdr(80, 12345, 2000, 1000, SYN | ACK, ip_guest, ip_gw),
+)
+tcp_rst = tcp_frame(
+    slirp_mac, guest_mac, ip_guest, ip_gw,
+    tcp_hdr(80, 12345, 2000, 1001, RST, ip_guest, ip_gw),
+)
+
+write_pcap(d + "/tcp-syn-only.pcap", [tcp_syn])
+write_pcap(d + "/tcp-syn-synack.pcap", [tcp_syn, tcp_synack])
+write_pcap(d + "/tcp-happy.pcap", [tcp_syn, tcp_synack, tcp_ack])
+write_pcap(d + "/tcp-ack-then-synack.pcap", [tcp_syn, tcp_ack, tcp_synack])
+write_pcap(d + "/tcp-bad-csum.pcap", [tcp_syn, tcp_synack_bad, tcp_ack])
+write_pcap(d + "/tcp-wrong-ack.pcap", [tcp_syn, tcp_synack_wrong_ack, tcp_ack])
+write_pcap(d + "/tcp-rst.pcap", [tcp_syn, tcp_synack, tcp_ack, tcp_rst])
 PY
 
 expect_fail scripts/assert-pcap-garp.sh "$tmp/hdr-only.pcap" "no gratuitous ARP"
@@ -157,6 +236,7 @@ expect_fail scripts/assert-pcap-slirp-arp.sh "$tmp/hdr-only.pcap" "no slirp ARP"
 expect_fail scripts/assert-pcap-arp-reply.sh "$tmp/hdr-only.pcap" "no slirp ARP request"
 expect_fail scripts/assert-pcap-icmp.sh "$tmp/hdr-only.pcap" "no ICMP echo request"
 expect_fail scripts/assert-pcap-udp-echo.sh "$tmp/hdr-only.pcap" "no UDP echo request"
+expect_fail scripts/assert-pcap-tcp-handshake.sh "$tmp/hdr-only.pcap" "no TCP SYN"
 
 # Our GARP must not satisfy the slirp filter (spa == tpa == 10.0.2.15).
 expect_fail scripts/assert-pcap-slirp-arp.sh "$tmp/garp-only.pcap" "no slirp ARP"
@@ -184,5 +264,14 @@ expect_fail scripts/assert-pcap-udp-echo.sh "$tmp/happy.pcap" "no UDP echo reque
 expect_fail scripts/assert-pcap-udp-echo.sh "$tmp/udp-req-only.pcap" "no UDP echo reply"
 expect_fail scripts/assert-pcap-udp-echo.sh "$tmp/udp-reply-then-req.pcap" "no UDP echo reply"
 bash scripts/assert-pcap-udp-echo.sh "$tmp/udp-happy.pcap"
+
+expect_fail scripts/assert-pcap-tcp-handshake.sh "$tmp/happy.pcap" "no TCP SYN/ACK"
+expect_fail scripts/assert-pcap-tcp-handshake.sh "$tmp/tcp-syn-only.pcap" "no TCP SYN/ACK"
+expect_fail scripts/assert-pcap-tcp-handshake.sh "$tmp/tcp-syn-synack.pcap" "no completing ACK"
+expect_fail scripts/assert-pcap-tcp-handshake.sh "$tmp/tcp-ack-then-synack.pcap" "no completing ACK"
+expect_fail scripts/assert-pcap-tcp-handshake.sh "$tmp/tcp-bad-csum.pcap" "checksum.status"
+expect_fail scripts/assert-pcap-tcp-handshake.sh "$tmp/tcp-wrong-ack.pcap" "their_isn+1"
+expect_fail scripts/assert-pcap-tcp-handshake.sh "$tmp/tcp-rst.pcap" "RST present"
+bash scripts/assert-pcap-tcp-handshake.sh "$tmp/tcp-happy.pcap"
 
 echo "TEST PASS: pcap assert failure modes"

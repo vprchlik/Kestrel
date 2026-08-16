@@ -1,4 +1,4 @@
-//! virtio-net device: handshake, RX/TX, ARP, IPv4, ICMP, UDP (D-0038, D-0040).
+//! virtio-net device: handshake, RX/TX, ARP, IPv4, ICMP, UDP, TCP (D-0038, D-0040, D-0041).
 //!
 //! Owns the feature negotiation, QueueReady, RX posting, TX (gratuitous
 //! ARP, ARP replies, ICMP echo, UDP), MAC print, and `dump` / stall /
@@ -19,6 +19,7 @@ use crate::icmp;
 use crate::ipv4;
 use crate::print;
 use crate::println;
+use crate::tcp;
 use crate::timer;
 use crate::udp;
 use crate::virtio;
@@ -182,7 +183,7 @@ pub fn dump() {
         ""
     };
     println!(
-        "net: dump{tag} status={st:#x} isr={isr:#x} rx avail={rx_a} used={rx_u} posted={rx_p} completed={rx_c} tx avail={tx_a} used={tx_u} posted={tx_p} completed={tx_c} drop_short={d_short} drop_other={d_other} arp_drop short={} htype={} ptype={} hlen={} plen={} op={} tpa={} ip_drop short={} ver={} ihl={} csum={} frag={} dst={} proto={} icmp_drop short={} csum={} type={} udp_drop short={} len={} csum={} port={}",
+        "net: dump{tag} status={st:#x} isr={isr:#x} rx avail={rx_a} used={rx_u} posted={rx_p} completed={rx_c} tx avail={tx_a} used={tx_u} posted={tx_p} completed={tx_c} drop_short={d_short} drop_other={d_other} arp_drop short={} htype={} ptype={} hlen={} plen={} op={} tpa={} ip_drop short={} ver={} ihl={} csum={} frag={} dst={} proto={} icmp_drop short={} csum={} type={} udp_drop short={} len={} csum={} port={} tcp_drop short={} doff={} csum={} opt={} port={} noarp={} busy={} unexpected={} established={}",
         arp::drop_short(),
         arp::drop_htype(),
         arp::drop_ptype(),
@@ -204,6 +205,15 @@ pub fn dump() {
         udp::drop_len(),
         udp::drop_csum(),
         udp::drop_port(),
+        tcp::drop_short(),
+        tcp::drop_doff(),
+        tcp::drop_csum(),
+        tcp::drop_opt(),
+        tcp::drop_port(),
+        tcp::drop_noarp(),
+        tcp::drop_busy(),
+        tcp::drop_unexpected(),
+        tcp::established(),
     );
 }
 
@@ -335,6 +345,7 @@ pub fn init() {
     checksum::selftest();
     icmp::reply_selftest();
     udp::selftest();
+    tcp::selftest();
     dump();
     poll_stall();
     // RX before GARP: slirp learns our MAC from the GARP and will not
@@ -533,6 +544,10 @@ fn classify_ipv4(base: usize, frame: &[u8]) {
         classify_udp(base, &d);
         return;
     }
+    if d.proto == ipv4::PROTO_TCP {
+        classify_tcp(base, &d);
+        return;
+    }
     match icmp::parse(d.payload) {
         Some(icmp::Msg::EchoReq { id, seq, raw }) => {
             println!("virtio-net: RX icmp echo-req id={id} seq={seq}");
@@ -551,6 +566,72 @@ fn classify_ipv4(base: usize, frame: &[u8]) {
         }
         None => {}
     }
+}
+
+fn classify_tcp(base: usize, d: &ipv4::Datagram<'_>) {
+    // D-0047: TX does not ARP-and-queue. A SYN before the cache holds
+    // 10.0.2.2 is a drop, not a panic (D-0040 / D-0052).
+    if arp::lookup(GW).is_none() {
+        tcp::note_noarp();
+        return;
+    }
+    let Some(synack) = tcp::handle(d.payload, &d.src, &IP) else {
+        return;
+    };
+    tx_tcp_synack(base, &synack);
+}
+
+fn tx_tcp_synack(base: usize, sa: &tcp::SynAck) {
+    let gw = match arp::lookup(GW) {
+        Some(m) => m,
+        None => {
+            tcp::note_noarp();
+            return;
+        }
+    };
+    let mac = unsafe { MAC };
+    let tcp_len = 24;
+    let ip_tot = 20 + tcp_len;
+    let eth_len = core::cmp::max(ETH_HDR + ip_tot, ETH_MIN);
+    let post = (VNET_HDR + eth_len) as u32;
+    {
+        let buf = virtq::tx_buf(0);
+        if buf.len() < post as usize {
+            panic!("virtio-net: TX buf {} < {post}", buf.len());
+        }
+        for b in buf.iter_mut().take(post as usize) {
+            *b = 0;
+        }
+        let f = &mut buf[VNET_HDR..];
+        f[0..6].copy_from_slice(&gw);
+        f[6..12].copy_from_slice(&mac);
+        f[12..14].copy_from_slice(&ETH_TYPE_IPV4.to_be_bytes());
+        ipv4::write_header(
+            &mut f[ETH_HDR..],
+            ip_tot as u16,
+            ipv4::PROTO_TCP,
+            &IP,
+            &sa.dst_ip,
+        );
+        tcp::write_synack(
+            &mut f[ETH_HDR + 20..],
+            tcp::LISTEN_PORT,
+            sa.dst_port,
+            sa.seq,
+            sa.ack,
+            &IP,
+            &sa.dst_ip,
+        );
+    }
+    virtq::post_tx(0, post);
+    unsafe { TX_POSTED = TX_POSTED.wrapping_add(1) };
+    arm_tx_stall();
+    println!(
+        "virtio-net: TX TCP SYN/ACK seq={} ack={} dport={}",
+        sa.seq, sa.ack, sa.dst_port
+    );
+    virtq::notify(base, virtq::Q_TX);
+    wait_tx(base, "TCP SYN/ACK");
 }
 
 fn classify_udp(_base: usize, d: &ipv4::Datagram<'_>) {
@@ -752,13 +833,20 @@ fn wait_ping_reply(base: usize) {
     loop {
         require_device(base);
         let _ = poll_rx(base);
-        if unsafe { PING_DONE } {
+        // Ping can complete before slirp's completing ACK is in the
+        // ring. Keep polling until ESTABLISHED or the ~2 s budget.
+        if unsafe { PING_DONE } && tcp::established() != 0 {
             print_ping_rtt();
             dump();
             return;
         }
         poll_stall();
         if csr::time::read().wrapping_sub(t0) >= RX_WAIT_TICKS {
+            if unsafe { PING_DONE } {
+                print_ping_rtt();
+                dump();
+                return;
+            }
             println!("virtio-net: RX no ICMP echo reply after ~2s");
             dump();
             panic!("virtio-net: no echo reply from 10.0.2.2");

@@ -379,20 +379,24 @@ no trap; the first channel that can name the bug is the one to read.
     `TX ARP reply` and connects again; pcap asserts IPv4 after that
     reply. The first connect's SYN may also appear after the reply —
     surplus, not the trigger.
-11. `ipv4 drop_proto` non-zero on a happy boot is the hostfwd TCP SYN
-    (protocol 6) hitting a stack that does not yet parse TCP. Temporary
-    (D-0049): **remove at T3.10**. After TCP exists, `drop_proto != 0`
-    is a real drop, not expected noise. Do not "fix" it by grepping it
-    away or by stopping the hostfwd watcher.
-12. Compiled Rust in `.utext` with `app_main` at a user address but
-    `UDP ECHO READY` still in kernel `.rodata` (`auipc` from `.utext`
-    into `0x8022xxxx`). rustc puts string literals in unique
-    `.rodata..Lanon.*` sections inside `app-HASH.*.rcgu.o` members of
-    `libapp-HASH.rlib`. A linker rule that only names
-    `*libapp-*.rlib:(.rodata)` misses them; LLD then orphans them into
-    kernel `.rodata`. `check-utext` catches the `auipc`. Fix with
-    `#[link_section = ".urodata"]` on the bytes (same as `.utext` on
-    functions) and match the `*.rcgu.o` member names. Do not iterate
+11. `ipv4 drop_proto` non-zero on a happy boot used to be the hostfwd
+    TCP SYN (protocol 6) hitting a stack that did not yet parse TCP.
+    That exception **expired at T3.10** (D-0049). TCP exists, so
+    `drop_proto != 0` is a real drop. Do not "fix" a non-zero by
+    grepping it away or by stopping the hostfwd watcher.
+12. Archive section matching does **not** catch LLVM-generated anonymous
+    rodata symbols. rustc emits string literals (and similar constants)
+    as unique `.rodata..Lanon.*` sections inside `app-HASH.*.rcgu.o`
+    members of `libapp-HASH.rlib`. A linker rule that only names
+    `*libapp-*.rlib:(.rodata)` misses them; LLD orphans them into kernel
+    `.rodata`. The symptom is the silent-wrong case: `app_main` sits in
+    `.utext` at a user address, an `auipc` from that function into
+    kernel `.rodata` (`0x8022xxxx`) **passes the link**, and the first
+    use (the load of `UDP ECHO READY`) faults. `check-utext` catches
+    the `auipc` after the fact; it does not place the bytes.
+    `#[link_section = ".urodata"]` on the constant is the mechanism
+    that works (same as `#[link_section = ".utext"]` on the function),
+    plus matching the `*.rcgu.o` member names. Do not iterate
     `EXCLUDE_FILE` wildcards (D-0051).
 
 ## 5. QEMU monitor — inspect a hung machine *without* GDB

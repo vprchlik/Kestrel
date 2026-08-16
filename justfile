@@ -143,16 +143,24 @@ test expect="M2 EXECUTION OK" timeout_s="5":
             echo 'TEST FAIL: missing UDP ECHO BUILD OK'
             exit 1
         fi
+        if ! grep -a -q 'TCP SYN/ACK BUILD OK' "$log"; then
+            echo 'TEST FAIL: missing TCP SYN/ACK BUILD OK'
+            exit 1
+        fi
         if ! grep -a -q 'tx avail=2 used=2 posted=2 completed=2' "$log"; then
             echo 'TEST FAIL: TX posted/completed is not 2/2 (ARP reply + GARP)'
             exit 1
         fi
-        if ! grep -a -q 'tx avail=3 used=3 posted=3 completed=3' "$log"; then
-            echo 'TEST FAIL: TX posted/completed is not 3/3 (ARP reply + GARP + ping)'
-            exit 1
-        fi
         if ! grep -a -q 'TX ARP reply' "$log"; then
             echo 'TEST FAIL: missing TX ARP reply'
+            exit 1
+        fi
+        if ! grep -a -q 'TX TCP SYN/ACK' "$log"; then
+            echo 'TEST FAIL: missing TX TCP SYN/ACK'
+            exit 1
+        fi
+        if ! grep -a -q 'TCP ESTABLISHED' "$log"; then
+            echo 'TEST FAIL: missing TCP ESTABLISHED'
             exit 1
         fi
         # This recipe is `set -u` not `set -e`. A failing assert must
@@ -190,11 +198,14 @@ test expect="M2 EXECUTION OK" timeout_s="5":
             echo 'TEST FAIL: PING RTT line is not tx/rx/ticks/ns'
             exit 1
         fi
-        if ! grep -a -q 'ip_drop short=0 ver=0 ihl=0 csum=0 frag=0' "$log"; then
-            echo 'TEST FAIL: IPv4 malformed counters are not 0'
+        if ! grep -a -q 'ip_drop short=0 ver=0 ihl=0 csum=0 frag=0 dst=0 proto=0' "$log"; then
+            echo 'TEST FAIL: IPv4 malformed/proto counters are not 0'
             exit 1
         fi
-        # D-0049: do not require proto=0 until T3.10 (hostfwd SYN).
+        if ! grep -a -q 'tcp_drop short=0 doff=0 csum=0 opt=0' "$log"; then
+            echo 'TEST FAIL: TCP malformed counters are not 0'
+            exit 1
+        fi
         if ! grep -a -q 'udp_drop short=0 len=0 csum=0 port=0' "$log"; then
             echo 'TEST FAIL: UDP malformed counters are not 0'
             exit 1
@@ -205,6 +216,10 @@ test expect="M2 EXECUTION OK" timeout_s="5":
         fi
         if ! bash scripts/assert-pcap-icmp.sh whimbrel.pcap; then
             echo 'TEST FAIL: pcap ICMP echo assertion'
+            exit 1
+        fi
+        if ! bash scripts/assert-pcap-tcp-handshake.sh whimbrel.pcap; then
+            echo 'TEST FAIL: pcap TCP handshake assertion'
             exit 1
         fi
         if ! grep -a -q 'task 2 exit 0' "$log"; then
@@ -387,16 +402,24 @@ test-net-init:
         echo 'TEST FAIL: missing UDP ECHO BUILD OK'
         exit 1
     fi
+    if ! grep -a -q 'TCP SYN/ACK BUILD OK' serial.log; then
+        echo 'TEST FAIL: missing TCP SYN/ACK BUILD OK'
+        exit 1
+    fi
     if ! grep -a -q 'tx avail=2 used=2 posted=2 completed=2' serial.log; then
         echo 'TEST FAIL: TX posted/completed is not 2/2 (ARP reply + GARP)'
         exit 1
     fi
-    if ! grep -a -q 'tx avail=3 used=3 posted=3 completed=3' serial.log; then
-        echo 'TEST FAIL: TX posted/completed is not 3/3 (ARP reply + GARP + ping)'
-        exit 1
-    fi
     if ! grep -a -q 'TX ARP reply' serial.log; then
         echo 'TEST FAIL: missing TX ARP reply'
+        exit 1
+    fi
+    if ! grep -a -q 'TX TCP SYN/ACK' serial.log; then
+        echo 'TEST FAIL: missing TX TCP SYN/ACK'
+        exit 1
+    fi
+    if ! grep -a -q 'TCP ESTABLISHED' serial.log; then
+        echo 'TEST FAIL: missing TCP ESTABLISHED'
         exit 1
     fi
     if ! bash scripts/assert-pcap-garp.sh whimbrel.pcap; then
@@ -427,11 +450,14 @@ test-net-init:
         echo 'TEST FAIL: PING RTT line is not tx/rx/ticks/ns'
         exit 1
     fi
-    if ! grep -a -q 'ip_drop short=0 ver=0 ihl=0 csum=0 frag=0' serial.log; then
-        echo 'TEST FAIL: IPv4 malformed counters are not 0'
+    if ! grep -a -q 'ip_drop short=0 ver=0 ihl=0 csum=0 frag=0 dst=0 proto=0' serial.log; then
+        echo 'TEST FAIL: IPv4 malformed/proto counters are not 0'
         exit 1
     fi
-    # D-0049: do not require proto=0 until T3.10 (hostfwd SYN).
+    if ! grep -a -q 'tcp_drop short=0 doff=0 csum=0 opt=0' serial.log; then
+        echo 'TEST FAIL: TCP malformed counters are not 0'
+        exit 1
+    fi
     if ! grep -a -q 'udp_drop short=0 len=0 csum=0 port=0' serial.log; then
         echo 'TEST FAIL: UDP malformed counters are not 0'
         exit 1
@@ -444,7 +470,49 @@ test-net-init:
         echo 'TEST FAIL: pcap ICMP echo assertion'
         exit 1
     fi
-    echo 'TEST PASS: DRIVER_OK, MAC, dump, GARP, RX ARP, ARP reply, PING RTT'
+    if ! bash scripts/assert-pcap-tcp-handshake.sh whimbrel.pcap; then
+        echo 'TEST FAIL: pcap TCP handshake assertion'
+        exit 1
+    fi
+    echo 'TEST PASS: DRIVER_OK, MAC, dump, GARP, RX ARP, ARP reply, PING RTT, TCP handshake'
+
+# T3.10: TCP passive open. Sibling of test-net-init so the handshake
+# checkpoint stands alone. Timeout 12s: slirp SYN backoff is ~0s / 6s /
+# 18s, so 12s covers one retry and fails before the third try. `just test`
+# stays at 5s (first SYN only).
+test-net-tcp:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    EXPECT="NET INIT OK" TIMEOUT_S=12 bash scripts/boot-test.sh net-init-selftest
+    if ! grep -a -q 'TCP SYN/ACK BUILD OK' serial.log; then
+        echo 'TEST FAIL: missing TCP SYN/ACK BUILD OK'
+        exit 1
+    fi
+    if ! grep -a -q 'TCP LISTEN' serial.log; then
+        echo 'TEST FAIL: missing TCP LISTEN'
+        exit 1
+    fi
+    if ! grep -a -q 'TX TCP SYN/ACK' serial.log; then
+        echo 'TEST FAIL: missing TX TCP SYN/ACK'
+        exit 1
+    fi
+    if ! grep -a -q 'TCP ESTABLISHED' serial.log; then
+        echo 'TEST FAIL: missing TCP ESTABLISHED'
+        exit 1
+    fi
+    if ! grep -a -q 'ip_drop short=0 ver=0 ihl=0 csum=0 frag=0 dst=0 proto=0' serial.log; then
+        echo 'TEST FAIL: IPv4 malformed/proto counters are not 0'
+        exit 1
+    fi
+    if ! grep -a -q 'tcp_drop short=0 doff=0 csum=0 opt=0' serial.log; then
+        echo 'TEST FAIL: TCP malformed counters are not 0'
+        exit 1
+    fi
+    if ! bash scripts/assert-pcap-tcp-handshake.sh whimbrel.pcap; then
+        echo 'TEST FAIL: pcap TCP handshake assertion'
+        exit 1
+    fi
+    echo 'TEST PASS: TCP LISTEN → SYN_RCVD → ESTABLISHED, pcap SYN→SYN/ACK→ACK, checksum good, no RST'
 
 # T3.9: UDP echo in the app over recv/send. Feature image srets into the
 # app; READY is printed from U-mode after ARP/ping. The client is
@@ -478,6 +546,10 @@ test-net-udp:
     fi
     if ! grep -a -q 'udp_drop short=0 len=0 csum=0 port=0' serial.log; then
         echo 'TEST FAIL: UDP malformed counters are not 0'
+        exit 1
+    fi
+    if ! grep -a -q 'ip_drop short=0 ver=0 ihl=0 csum=0 frag=0 dst=0 proto=0' serial.log; then
+        echo 'TEST FAIL: IPv4 malformed/proto counters are not 0'
         exit 1
     fi
     if ! bash scripts/assert-pcap-udp-echo.sh whimbrel.pcap; then

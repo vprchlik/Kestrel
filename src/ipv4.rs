@@ -2,11 +2,10 @@
 //!
 //! Owns version/IHL, the header checksum, fragment drop, and honoring
 //! IHL for the payload start instead of assuming 20 bytes. Remote bytes
-//! never panic: each rejected shape increments a counter. ICMP (1) and
-//! UDP (17) are delivered; anything else increments `drop_proto`.
-//! Protocol 6 (TCP) from hostfwd SYNs is expected until T3.10 (D-0049)
-//! — after TCP exists, a non-zero `drop_proto` is a real drop. TX has
-//! no routing — callers put the gateway MAC on Ethernet (D-0047).
+//! never panic: each rejected shape increments a counter. ICMP (1),
+//! TCP (6), and UDP (17) are delivered; anything else increments
+//! `drop_proto`. A non-zero `drop_proto` is a real drop (D-0049). TX
+//! has no routing — callers put the gateway MAC on Ethernet (D-0047).
 
 #![cfg_attr(
     any(feature = "panic-selftest", feature = "hang-selftest"),
@@ -26,8 +25,8 @@ const VERSION: u8 = 4;
 pub const PROTO_ICMP: u8 = 1;
 /// UDP protocol number. RFC 768.
 pub const PROTO_UDP: u8 = 17;
-/// TCP protocol number. RFC 793. Dropped until T3.10 (D-0049).
-const PROTO_TCP: u8 = 6;
+/// TCP protocol number. RFC 793.
+pub const PROTO_TCP: u8 = 6;
 /// More-Fragments bit in the 16-bit flags+offset word. RFC 791.
 const MF: u16 = 0x2000;
 /// 13-bit fragment offset mask.
@@ -133,13 +132,9 @@ pub fn parse<'a>(eth: &'a [u8], our_ip: &[u8; 4]) -> Option<Datagram<'a>> {
         return None;
     }
     let proto = ip[9];
-    if proto != PROTO_ICMP && proto != PROTO_UDP {
+    if proto != PROTO_ICMP && proto != PROTO_UDP && proto != PROTO_TCP {
         unsafe { DROP_PROTO = DROP_PROTO.wrapping_add(1) };
-        if proto == PROTO_TCP {
-            println!("ipv4: drop proto=6 (TCP; expected until T3.10)");
-        } else {
-            println!("ipv4: drop proto={proto}");
-        }
+        println!("ipv4: drop proto={proto}");
         return None;
     }
     Some(Datagram {

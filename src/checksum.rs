@@ -1,6 +1,7 @@
 //! Internet checksum (RFC 1071).
 //!
-//! Owns the one's-complement sum used by IPv4 and ICMP. Words are
+//! Owns the one's-complement sum used by IPv4, ICMP, and the TCP/UDP
+//! pseudo-header. Words are
 //! assembled with `from_be_bytes` because the hart is little-endian;
 //! overlaying `u16` on packet memory would swap every field. Carries
 //! fold **until the high half is zero**, not once: `0x1ffff` becomes

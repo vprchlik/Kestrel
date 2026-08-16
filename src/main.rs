@@ -30,6 +30,7 @@ mod sbi;
 mod stress;
 mod syscall;
 mod task;
+mod tcp;
 mod timer;
 mod trap;
 mod uaccess;
