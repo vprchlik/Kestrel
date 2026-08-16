@@ -398,6 +398,18 @@ no trap; the first channel that can name the bug is the one to read.
     that works (same as `#[link_section = ".utext"]` on the function),
     plus matching the `*.rcgu.o` member names. Do not iterate
     `EXCLUDE_FILE` wildcards (D-0051).
+13. A drop-first-TX retransmit selftest that **posts** the first data
+    segment (so the pcap has two copies) but **ignores ACKs** until
+    one RTO must also defer the peer FIN. If you ACK their FIN while
+    still pretending you have not seen the ACK of yours, slirp goes
+    CLOSED and the 200 ms copy meets RST — `rexmit=1` can still pass
+    via RST clearing the TCB, and the capture will not show an ACK of
+    the second segment. Symptom: `HTTP RETRANSMIT OK` on serial,
+    pcap has two copies ~200 ms apart, then RST, assert "no ACK of
+    nxtseq after second copy". Cause: simultaneous-close FIN-ACK
+    while `hold_acks` is true (D-0053). Truncated TIME_WAIT also must
+    not clear the app's EOF, and `recv` 0 must wait until inflight is
+    gone, or the app exits before the timer can fire.
 
 ## 5. QEMU monitor — inspect a hung machine *without* GDB
 

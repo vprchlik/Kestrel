@@ -1695,7 +1695,10 @@ D-0011 onward are working decisions made under those constraints.
   dropped (`busy`), not queued and not RST. The `tcp-drop-first-tx`
   selftest **posts the first data segment** (so the capture has it)
   and **ignores ACKs until one RTO retransmit**; lossless slirp
-  would otherwise ACK immediately and hide the timer. The tripwire
+  would otherwise ACK immediately and hide the timer. While those
+  ACKs are held, a peer FIN is also deferred: ACKing the close first
+  lets slirp CLOSED and the RTO copy meets RST instead of an ACK.
+  The tripwire
   (D-0037) applies the moment curl has its 200: no second `send`,
   no second TCB, no header-driven keep-alive.
 - **Alternatives considered:** reassemble a request line across
