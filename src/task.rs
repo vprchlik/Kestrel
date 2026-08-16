@@ -391,6 +391,7 @@ static mut TASKS: [Option<Task>; MAX_TASKS] = [None; MAX_TASKS];
 /// Running task id, or `None` in S-mode with no user task (boot, after kill).
 static mut CURRENT: Option<usize> = None;
 
+#[cfg(any(not(feature = "fast-boot"), feature = "user-fault-selftest"))]
 fn state_name(s: State) -> &'static str {
     match s {
         State::Ready => "Ready",
@@ -522,13 +523,21 @@ pub fn init() {
                 trap::FRAME_SIZE
             );
         }
-        let sepc = unsafe { (*t.frame).sepc };
+        if t.ustack_top != slot(id).ustack_top {
+            panic!(
+                "task {} ustack_top {:#x} != slot {:#x}",
+                t.id,
+                t.ustack_top,
+                slot(id).ustack_top
+            );
+        }
+        let _sepc = unsafe { (*t.frame).sepc };
         println!(
             "task {} {} frame={:#x} sepc={:#x} kstack_top={:#x} ustack_top={:#x} brk={:#x}..{:#x} (at {:#x}) exit={}",
             t.id,
             state_name(t.state),
             frame,
-            sepc,
+            _sepc,
             t.kstack_top,
             t.ustack_top,
             t.brk_base,
@@ -585,10 +594,10 @@ pub fn enter(id: usize) -> ! {
     crate::frame::freeze();
     crate::phase::stamp(crate::phase::FREEZE);
     let t = get(id);
-    let sepc = unsafe { (*t.frame).sepc };
+    let _sepc = unsafe { (*t.frame).sepc };
     println!(
         "enter task {} sepc={:#x} frame={:#x} kstack_top={:#x}",
-        t.id, sepc, t.frame as usize, t.kstack_top
+        t.id, _sepc, t.frame as usize, t.kstack_top
     );
     t.state = State::Running;
     unsafe { CURRENT = Some(id) };
@@ -750,11 +759,11 @@ fn mark_exited() -> usize {
 /// slot is `Exited` and `next_ready_after` will never pick it. `__trap_return`
 /// then `mv sp, a0` onto the survivor before any restore/`sret`. Returning
 /// the dying task's own frame would `sret` into a dead task.
-pub fn kill_and_reschedule(cause: &str, sepc: usize, stval: usize) -> &'static mut TrapFrame {
-    let t = current();
+pub fn kill_and_reschedule(_cause: &str, _sepc: usize, _stval: usize) -> &'static mut TrapFrame {
+    let _t = current();
     println!(
         "task {} killed: {} sepc={:#x} stval={:#x}",
-        t.id, cause, sepc, stval
+        _t.id, _cause, _sepc, _stval
     );
     let id = mark_exited();
     after_exit(id)
@@ -772,11 +781,11 @@ pub fn kill_and_reschedule(cause: &str, sepc: usize, stval: usize) -> &'static m
     ),
     allow(dead_code)
 )]
-pub fn kill_unknown_syscall(num: usize, sepc: usize, stval: usize) -> usize {
-    let t = current();
+pub fn kill_unknown_syscall(_num: usize, _sepc: usize, _stval: usize) -> usize {
+    let _t = current();
     println!(
         "task {} killed: unknown syscall {} sepc={:#x} stval={:#x}",
-        t.id, num, sepc, stval
+        _t.id, _num, _sepc, _stval
     );
     mark_exited()
 }
@@ -793,11 +802,11 @@ pub fn kill_unknown_syscall(num: usize, sepc: usize, stval: usize) -> usize {
     ),
     allow(dead_code)
 )]
-pub fn kill_invalid_user_ptr(sepc: usize, ptr: usize) {
-    let t = current();
+pub fn kill_invalid_user_ptr(_sepc: usize, _ptr: usize) {
+    let _t = current();
     println!(
         "task {} killed: invalid user pointer sepc={:#x} stval={:#x}",
-        t.id, sepc, ptr
+        _t.id, _sepc, _ptr
     );
     let _ = mark_exited();
 }

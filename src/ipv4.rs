@@ -34,35 +34,13 @@ const OFF_MASK: u16 = 0x1fff;
 /// DF; we set it on TX, we do not drop it on RX.
 const DF: u16 = 0x4000;
 
-static mut DROP_SHORT: u32 = 0;
-static mut DROP_VER: u32 = 0;
-static mut DROP_IHL: u32 = 0;
-static mut DROP_CSUM: u32 = 0;
-static mut DROP_FRAG: u32 = 0;
-static mut DROP_DST: u32 = 0;
-static mut DROP_PROTO: u32 = 0;
-
-pub fn drop_short() -> u32 {
-    unsafe { DROP_SHORT }
-}
-pub fn drop_ver() -> u32 {
-    unsafe { DROP_VER }
-}
-pub fn drop_ihl() -> u32 {
-    unsafe { DROP_IHL }
-}
-pub fn drop_csum() -> u32 {
-    unsafe { DROP_CSUM }
-}
-pub fn drop_frag() -> u32 {
-    unsafe { DROP_FRAG }
-}
-pub fn drop_dst() -> u32 {
-    unsafe { DROP_DST }
-}
-pub fn drop_proto() -> u32 {
-    unsafe { DROP_PROTO }
-}
+pub static mut DROP_SHORT: u32 = 0;
+pub static mut DROP_VER: u32 = 0;
+pub static mut DROP_IHL: u32 = 0;
+pub static mut DROP_CSUM: u32 = 0;
+pub static mut DROP_FRAG: u32 = 0;
+pub static mut DROP_DST: u32 = 0;
+pub static mut DROP_PROTO: u32 = 0;
 
 fn be16(b: &[u8], off: usize) -> u16 {
     u16::from_be_bytes([b[off], b[off + 1]])

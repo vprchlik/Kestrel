@@ -193,12 +193,12 @@ fn fill_descriptors(p: &mut Pool) {
 /// never written independently, so swapped high/low is unrepresentable
 /// at the call site. Wrong `off_low` is the remaining silent killer —
 /// `verify` reads both halves back.
-fn write_addr(base: usize, off_low: usize, gpa: usize, name: &str, q: u32) {
+fn write_addr(base: usize, off_low: usize, gpa: usize, _name: &str, _q: u32) {
     let lo = gpa as u32;
     let hi = (gpa >> 32) as u32;
     virtio::write32(base, off_low, lo);
     virtio::write32(base, off_low + 4, hi);
-    println!("virtq: q{q} {name} write {gpa:#x} lo={lo:#x} hi={hi:#x} @{off_low:#x}");
+    println!("virtq: q{_q} {_name} write {gpa:#x} lo={lo:#x} hi={hi:#x} @{off_low:#x}");
 }
 
 /// Read the two halves back. Virtio 1.2 §4.2.2 marks these write-only;
@@ -420,10 +420,12 @@ pub(crate) fn notify(base: usize, q: u32) {
     virtio::write32(base, virtio::OFF_QUEUE_NOTIFY, q);
 }
 
+#[cfg(not(feature = "fast-boot"))]
 pub(crate) fn rx_avail_idx() -> u16 {
     unsafe { core::ptr::read_volatile(&pool().rx.avail.idx) }
 }
 
+#[cfg(not(feature = "fast-boot"))]
 pub(crate) fn tx_avail_idx() -> u16 {
     unsafe { core::ptr::read_volatile(&pool().tx.avail.idx) }
 }
@@ -544,16 +546,16 @@ fn load_used_idx(used: &Used) -> u16 {
 /// with QueueReady left at 0, then `verify()`. Does not set DRIVER_OK.
 pub fn init() {
     let p = pool();
-    let (lo, hi) = pool_range();
+    let (_lo, _hi) = pool_range();
     let bss_end = pa(addr_of!(__bss_end));
     let stack_bottom = pa(addr_of!(__boot_stack_bottom));
-    let heap_start = pa(addr_of!(__heap_start));
+    let _heap_start = pa(addr_of!(__heap_start));
     if bss_end + PAGE_SIZE != stack_bottom {
         panic!("virtq: guard hole moved: bss_end={bss_end:#x} stack_bottom={stack_bottom:#x}");
     }
     println!(
-        "virtq: pool {lo:#x}..{hi:#x} ({} bytes) bss_end={bss_end:#x} guard={stack_bottom:#x} heap_start={heap_start:#x}",
-        hi - lo
+        "virtq: pool {_lo:#x}..{_hi:#x} ({} bytes) bss_end={bss_end:#x} guard={stack_bottom:#x} heap_start={_heap_start:#x}",
+        _hi - _lo
     );
 
     fill_descriptors(p);

@@ -43,13 +43,13 @@ struct Ent {
 static mut ENTRIES: [Option<Ent>; CACHE_N] = [None; CACHE_N];
 static mut NEXT: usize = 0;
 
-static mut DROP_SHORT: u32 = 0;
-static mut DROP_HTYPE: u32 = 0;
-static mut DROP_PTYPE: u32 = 0;
-static mut DROP_HLEN: u32 = 0;
-static mut DROP_PLEN: u32 = 0;
-static mut DROP_OP: u32 = 0;
-static mut DROP_TPA: u32 = 0;
+pub static mut DROP_SHORT: u32 = 0;
+pub static mut DROP_HTYPE: u32 = 0;
+pub static mut DROP_PTYPE: u32 = 0;
+pub static mut DROP_HLEN: u32 = 0;
+pub static mut DROP_PLEN: u32 = 0;
+pub static mut DROP_OP: u32 = 0;
+pub static mut DROP_TPA: u32 = 0;
 
 /// A request for our IP: cache updated; caller transmits a reply.
 pub struct RequestForUs {
@@ -62,28 +62,6 @@ pub struct RequestForUs {
 pub enum Event {
     Request(RequestForUs),
     Reply,
-}
-
-pub fn drop_short() -> u32 {
-    unsafe { DROP_SHORT }
-}
-pub fn drop_htype() -> u32 {
-    unsafe { DROP_HTYPE }
-}
-pub fn drop_ptype() -> u32 {
-    unsafe { DROP_PTYPE }
-}
-pub fn drop_hlen() -> u32 {
-    unsafe { DROP_HLEN }
-}
-pub fn drop_plen() -> u32 {
-    unsafe { DROP_PLEN }
-}
-pub fn drop_op() -> u32 {
-    unsafe { DROP_OP }
-}
-pub fn drop_tpa() -> u32 {
-    unsafe { DROP_TPA }
 }
 
 fn be16(b: &[u8], off: usize) -> u16 {
@@ -222,6 +200,7 @@ pub fn lookup(ip: [u8; 4]) -> Option<[u8; 6]> {
     None
 }
 
+#[cfg(not(feature = "fast-boot"))]
 fn clear() {
     for i in 0..CACHE_N {
         unsafe { core::ptr::write(addr_of_mut!(ENTRIES[i]), None) };
@@ -230,6 +209,7 @@ fn clear() {
 }
 
 /// Five distinct inserts into four slots; oldest gone; then clear (D-0045).
+#[cfg(not(feature = "fast-boot"))]
 pub fn wrap_selftest() {
     for i in 1u8..=5 {
         learn([10, 0, 0, i], [0, 0, 0, 0, 0, i]);

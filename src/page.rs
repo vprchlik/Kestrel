@@ -404,6 +404,7 @@ fn flags_match(raw: u64, r: bool, w: bool, x: bool, u: bool) -> bool {
         && pte_bit(raw, D_BIT)
 }
 
+#[cfg(not(feature = "fast-boot"))]
 fn fmt_flags(raw: u64) -> &'static str {
     // Fixed strings so the probe table stays column-aligned without alloc.
     match (
@@ -446,12 +447,16 @@ fn probe(root: usize, name: &str, va: usize, expect: Expect) {
                 level,
                 "ok"
             );
+            #[cfg(feature = "fast-boot")]
+            let _ = level;
         }
         (Walk::Unmapped { level, raw }, Expect::Unmapped) => {
             println!(
                 "{:<16} {:#012x}    unmapped            V=0 at L{} pte={:#x}  ok",
                 name, va, level, raw
             );
+            #[cfg(feature = "fast-boot")]
+            let _ = (level, raw);
         }
         (Walk::Mapped { pa, raw, level }, Expect::Unmapped) => {
             panic!(
@@ -560,12 +565,15 @@ fn probe_span(root: usize, name_lo: &str, name_hi: &str, start: usize, end: usiz
 }
 
 fn note_empty(name: &str, start: usize, end: usize) {
+    #[cfg(not(feature = "fast-boot"))]
     if start == end {
         println!(
             "{:<16} empty               {:#012x}..{:#012x}  0 pages  ok",
             name, start, end
         );
     }
+    #[cfg(feature = "fast-boot")]
+    let _ = (name, start, end);
 }
 
 fn verify(root: usize) {
@@ -689,7 +697,7 @@ pub fn init() {
         panic!("page::init called twice");
     }
     let root = build();
-    let satp = satp_value(root);
+    let _satp = satp_value(root);
     let satp_now = csr::satp::read();
     if satp_now != 0 {
         panic!("satp changed to {:#x} during table build", satp_now);
@@ -698,7 +706,7 @@ pub fn init() {
         "root_pa={:#x} tables={} satp_would_write={:#x} (MODE=8 << 60 | PPN={:#x}, not written)",
         root_pa(),
         tables_used(),
-        satp,
+        _satp,
         root >> OFF_BITS
     );
     verify(root);

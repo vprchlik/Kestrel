@@ -152,6 +152,7 @@ pub fn alloc_frame() -> usize {
 /// list, so it misses free-A / free-B / free-A and free-A / alloc / free-A
 /// (the latter is a live frame being freed, not a double-free of a listed
 /// one). O(n) would catch those; we are not doing O(n).
+#[cfg(any(not(feature = "fast-boot"), feature = "stress"))]
 pub fn free_frame(pa: usize) {
     if unsafe { FROZEN } {
         panic!("free_frame after freeze {:#x}", pa);
@@ -171,6 +172,7 @@ pub fn free_frame(pa: usize) {
 /// Allocate two, free the first, get it back (LIFO). Prints the total and
 /// `FRAME OK`. Deliberately leaves `b` and `c` allocated: those two are
 /// still outstanding at `freeze()` (D-0036) and are not a leak to plug.
+#[cfg(not(feature = "fast-boot"))]
 pub fn self_test() {
     let a = alloc_frame();
     let b = alloc_frame();

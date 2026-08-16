@@ -19,19 +19,9 @@ pub const TYPE_ECHO_REPLY: u8 = 0;
 pub const TYPE_ECHO_REQ: u8 = 8;
 const HDR: usize = 8;
 
-static mut DROP_SHORT: u32 = 0;
-static mut DROP_CSUM: u32 = 0;
-static mut DROP_TYPE: u32 = 0;
-
-pub fn drop_short() -> u32 {
-    unsafe { DROP_SHORT }
-}
-pub fn drop_csum() -> u32 {
-    unsafe { DROP_CSUM }
-}
-pub fn drop_type() -> u32 {
-    unsafe { DROP_TYPE }
-}
+pub static mut DROP_SHORT: u32 = 0;
+pub static mut DROP_CSUM: u32 = 0;
+pub static mut DROP_TYPE: u32 = 0;
 
 fn be16(b: &[u8], off: usize) -> u16 {
     u16::from_be_bytes([b[off], b[off + 1]])
@@ -114,6 +104,7 @@ pub fn write_echo_reply(dst: &mut [u8], req: &[u8]) -> usize {
 }
 
 /// Prove the server writer without a wire (D-0048).
+#[cfg(not(feature = "fast-boot"))]
 pub fn reply_selftest() {
     let data = b"whimbrel";
     let mut req = [0u8; 16];

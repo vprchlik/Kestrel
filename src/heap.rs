@@ -11,6 +11,7 @@
     allow(dead_code)
 )]
 
+#[cfg(not(feature = "fast-boot"))]
 use crate::println;
 use core::alloc::{GlobalAlloc, Layout};
 use core::ptr;
@@ -251,7 +252,7 @@ unsafe fn dealloc_raw(ptr: *mut u8, _layout: Layout) {
 }
 
 /// `(free_blocks, free_bytes)`. Read-only walk of the coalesced list.
-#[cfg_attr(not(feature = "stress"), allow(dead_code))]
+#[cfg(feature = "stress")]
 pub fn free_stats() -> (usize, usize) {
     let mut n = 0usize;
     let mut bytes = 0usize;
@@ -267,11 +268,12 @@ pub fn free_stats() -> (usize, usize) {
     (n, bytes)
 }
 
-#[cfg_attr(not(feature = "stress"), allow(dead_code))]
+#[cfg(feature = "stress")]
 pub fn region_size() -> usize {
     unsafe { HEAP_END - HEAP_START }
 }
 
+#[cfg(not(feature = "fast-boot"))]
 fn dump(tag: &str) {
     let mut n = 0usize;
     let mut bytes = 0usize;
@@ -352,12 +354,14 @@ unsafe impl GlobalAlloc for Heap {
     }
 }
 
+#[cfg(not(feature = "fast-boot"))]
 #[repr(align(64))]
 struct Align64(u64);
 
 /// `Box::new(42)`, a `Vec` grown to 10_000, a `String`, drop, allocate again.
 /// Prints the free list after the Vec churn (the interesting snapshot) and
 /// `HEAP OK`.
+#[cfg(not(feature = "fast-boot"))]
 pub fn self_test() {
     use alloc::boxed::Box;
     use alloc::string::String;
