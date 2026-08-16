@@ -1,11 +1,11 @@
-//! virtio-net device: handshake, RX/TX, ARP classify and reply (D-0038, D-0040).
+//! virtio-net device: handshake, RX/TX, ARP, IPv4, ICMP (D-0038, D-0040).
 //!
 //! Owns the feature negotiation, QueueReady, RX posting, TX (gratuitous
-//! ARP and ARP replies), MAC print, and `dump` / stall / DEVICE_NEEDS_RESET
-//! observability. ARP parse and the 4-entry cache live in `arp`. The rings
-//! stay in `virtq`. `FEATURES_OK` readback is the one place the handshake
-//! can tell us the device rejected our feature set. Without this module
-//! the NIC never leaves reset and nothing hits the wire.
+//! ARP, ARP replies, ICMP echo), MAC print, and `dump` / stall /
+//! DEVICE_NEEDS_RESET observability. ARP parse and the cache live in
+//! `arp`; IPv4/ICMP parse live in `ipv4`/`icmp`. The rings stay in
+//! `virtq`. Without this module the NIC never leaves reset and the
+//! guest-initiated ping has nowhere to go.
 
 #![cfg_attr(
     any(feature = "panic-selftest", feature = "hang-selftest"),
@@ -13,9 +13,13 @@
 )]
 
 use crate::arp;
+use crate::checksum;
 use crate::csr;
+use crate::icmp;
+use crate::ipv4;
 use crate::print;
 use crate::println;
+use crate::timer;
 use crate::virtio;
 use crate::virtq;
 use core::arch::asm;
@@ -59,6 +63,8 @@ const VNET_HDR: usize = 12;
 const ETH_HDR: usize = 14;
 /// EtherType ARP.
 const ETH_TYPE_ARP: u16 = 0x0806;
+/// EtherType IPv4.
+const ETH_TYPE_IPV4: u16 = 0x0800;
 /// Ethernet header (14) + ARP (28). Padded to 60 before FCS.
 const GARP: usize = 42;
 /// Minimum Ethernet payload without FCS.
@@ -67,7 +73,13 @@ const TX_LEN: u32 = (VNET_HDR + ETH_MIN) as u32;
 
 /// Guest address. D-0042.
 const IP: [u8; 4] = [10, 0, 2, 15];
+/// slirp gateway. D-0042 / D-0047.
+const GW: [u8; 4] = [10, 0, 2, 2];
 const ETH_BCAST: [u8; 6] = [0xff; 6];
+/// ICMP echo identifier/sequence for the guest-initiated ping.
+const PING_ID: u16 = 1;
+const PING_SEQ: u16 = 1;
+const PING_DATA: &[u8] = b"whimbrel";
 
 static mut MAC: [u8; 6] = [0; 6];
 
@@ -82,6 +94,9 @@ static mut TX_SEEN: u16 = 0;
 static mut STALL_ARMED_TIME: usize = 0;
 static mut STALL_USED_AT_ARM: u16 = 0;
 static mut STALL_DUMPED: bool = false;
+static mut PING_TX: usize = 0;
+static mut PING_RX: usize = 0;
+static mut PING_DONE: bool = false;
 
 fn status(base: usize) -> u32 {
     virtio::read32(base, virtio::OFF_STATUS)
@@ -158,7 +173,7 @@ pub fn dump() {
         ""
     };
     println!(
-        "net: dump{tag} status={st:#x} isr={isr:#x} rx avail={rx_a} used={rx_u} posted={rx_p} completed={rx_c} tx avail={tx_a} used={tx_u} posted={tx_p} completed={tx_c} drop_short={d_short} drop_other={d_other} arp_drop short={} htype={} ptype={} hlen={} plen={} op={} tpa={}",
+        "net: dump{tag} status={st:#x} isr={isr:#x} rx avail={rx_a} used={rx_u} posted={rx_p} completed={rx_c} tx avail={tx_a} used={tx_u} posted={tx_p} completed={tx_c} drop_short={d_short} drop_other={d_other} arp_drop short={} htype={} ptype={} hlen={} plen={} op={} tpa={} ip_drop short={} ver={} ihl={} csum={} frag={} dst={} proto={} icmp_drop short={} csum={} type={}",
         arp::drop_short(),
         arp::drop_htype(),
         arp::drop_ptype(),
@@ -166,6 +181,16 @@ pub fn dump() {
         arp::drop_plen(),
         arp::drop_op(),
         arp::drop_tpa(),
+        ipv4::drop_short(),
+        ipv4::drop_ver(),
+        ipv4::drop_ihl(),
+        ipv4::drop_csum(),
+        ipv4::drop_frag(),
+        ipv4::drop_dst(),
+        ipv4::drop_proto(),
+        icmp::drop_short(),
+        icmp::drop_csum(),
+        icmp::drop_type(),
     );
 }
 
@@ -296,6 +321,8 @@ pub fn init() {
     unsafe { MAC = mac };
 
     arp::wrap_selftest();
+    checksum::selftest();
+    icmp::reply_selftest();
     dump();
     poll_stall();
     // RX before GARP: slirp learns our MAC from the GARP and will not
@@ -303,6 +330,9 @@ pub fn init() {
     // replies; a second hostfwd connect then proceeds past ARP.
     wait_rx_arp(base);
     tx_gratuitous_arp(base);
+    // D-0047: cache holds 10.0.2.2 from slirp's request. Ping fails
+    // loudly if that learn did not happen — no ARP-and-queue.
+    ping_gateway(base);
 }
 
 /// Build a 12-byte zero virtio-net header plus a 60-byte Ethernet frame
@@ -432,6 +462,10 @@ fn classify_rx(base: usize, desc_i: usize, used_len: u32) -> bool {
     }
     let frame = &buf[VNET_HDR..n];
     let etype = u16::from_be_bytes([frame[12], frame[13]]);
+    if etype == ETH_TYPE_IPV4 {
+        classify_ipv4(base, frame);
+        return false;
+    }
     if etype != ETH_TYPE_ARP {
         unsafe { RX_DROP_OTHER = RX_DROP_OTHER.wrapping_add(1) };
         println!(
@@ -470,6 +504,154 @@ fn tx_arp_reply(base: usize, req: &arp::RequestForUs) {
     );
     virtq::notify(base, virtq::Q_TX);
     wait_tx(base, "ARP reply");
+}
+
+fn gateway_mac() -> [u8; 6] {
+    match arp::lookup(GW) {
+        Some(m) => m,
+        None => panic!(
+            "net: no MAC for gateway 10.0.2.2; TX does not ARP-and-queue (D-0047)"
+        ),
+    }
+}
+
+fn classify_ipv4(base: usize, frame: &[u8]) {
+    let Some(d) = ipv4::parse(frame, &IP) else {
+        return;
+    };
+    match icmp::parse(d.payload) {
+        Some(icmp::Msg::EchoReq { id, seq, raw }) => {
+            println!("virtio-net: RX icmp echo-req id={id} seq={seq}");
+            tx_icmp_echo_reply(base, d.src, raw);
+        }
+        Some(icmp::Msg::EchoReply { id, seq }) => {
+            if id == PING_ID && seq == PING_SEQ && !unsafe { PING_DONE } {
+                unsafe {
+                    PING_RX = csr::time::read();
+                    PING_DONE = true;
+                }
+                println!("virtio-net: RX icmp echo-reply id={id} seq={seq}");
+            } else {
+                println!("virtio-net: RX icmp echo-reply unmatched id={id} seq={seq}");
+            }
+        }
+        None => {}
+    }
+}
+
+fn tx_icmp_echo_reply(base: usize, dst_ip: [u8; 4], req: &[u8]) {
+    let gw = gateway_mac();
+    let mac = unsafe { MAC };
+    let icmp_len = req.len();
+    let ip_tot = 20 + icmp_len;
+    let eth_len = core::cmp::max(ETH_HDR + ip_tot, ETH_MIN);
+    let post = (VNET_HDR + eth_len) as u32;
+    {
+        let buf = virtq::tx_buf(0);
+        if buf.len() < post as usize {
+            panic!("virtio-net: TX buf {} < {post}", buf.len());
+        }
+        for b in buf.iter_mut().take(post as usize) {
+            *b = 0;
+        }
+        let f = &mut buf[VNET_HDR..];
+        f[0..6].copy_from_slice(&gw);
+        f[6..12].copy_from_slice(&mac);
+        f[12..14].copy_from_slice(&ETH_TYPE_IPV4.to_be_bytes());
+        ipv4::write_header(
+            &mut f[ETH_HDR..],
+            ip_tot as u16,
+            ipv4::PROTO_ICMP,
+            &IP,
+            &dst_ip,
+        );
+        icmp::write_echo_reply(&mut f[ETH_HDR + 20..], req);
+    }
+    virtq::post_tx(0, post);
+    unsafe { TX_POSTED = TX_POSTED.wrapping_add(1) };
+    arm_tx_stall();
+    println!(
+        "virtio-net: TX ICMP echo reply to {}.{}.{}.{}",
+        dst_ip[0], dst_ip[1], dst_ip[2], dst_ip[3]
+    );
+    virtq::notify(base, virtq::Q_TX);
+    wait_tx(base, "ICMP echo reply");
+}
+
+/// Guest-initiated ping of 10.0.2.2 (D-0048). Ethernet dest is the
+/// gateway MAC from the ARP cache (D-0047).
+fn ping_gateway(base: usize) {
+    let gw = gateway_mac();
+    let mac = unsafe { MAC };
+    let icmp_len = 8 + PING_DATA.len();
+    let ip_tot = 20 + icmp_len;
+    let eth_len = core::cmp::max(ETH_HDR + ip_tot, ETH_MIN);
+    let post = (VNET_HDR + eth_len) as u32;
+    {
+        let buf = virtq::tx_buf(0);
+        if buf.len() < post as usize {
+            panic!("virtio-net: TX buf {} < {post}", buf.len());
+        }
+        for b in buf.iter_mut().take(post as usize) {
+            *b = 0;
+        }
+        let f = &mut buf[VNET_HDR..];
+        f[0..6].copy_from_slice(&gw);
+        f[6..12].copy_from_slice(&mac);
+        f[12..14].copy_from_slice(&ETH_TYPE_IPV4.to_be_bytes());
+        ipv4::write_header(
+            &mut f[ETH_HDR..],
+            ip_tot as u16,
+            ipv4::PROTO_ICMP,
+            &IP,
+            &GW,
+        );
+        icmp::write_echo_req(&mut f[ETH_HDR + 20..], PING_ID, PING_SEQ, PING_DATA);
+    }
+    virtq::post_tx(0, post);
+    unsafe {
+        TX_POSTED = TX_POSTED.wrapping_add(1);
+        PING_DONE = false;
+        PING_TX = csr::time::read();
+    }
+    arm_tx_stall();
+    println!(
+        "virtio-net: TX ICMP echo id={PING_ID} seq={PING_SEQ} to 10.0.2.2"
+    );
+    virtq::notify(base, virtq::Q_TX);
+    wait_tx(base, "ICMP echo");
+    wait_ping_reply(base);
+}
+
+fn wait_ping_reply(base: usize) {
+    let t0 = csr::time::read();
+    loop {
+        require_device(base);
+        let _ = poll_rx(base);
+        if unsafe { PING_DONE } {
+            print_ping_rtt();
+            dump();
+            return;
+        }
+        poll_stall();
+        if csr::time::read().wrapping_sub(t0) >= RX_WAIT_TICKS {
+            println!("virtio-net: RX no ICMP echo reply after ~2s");
+            dump();
+            panic!("virtio-net: no echo reply from 10.0.2.2");
+        }
+        unsafe { asm!("wfi") };
+    }
+}
+
+/// Stable keys for M4: tx/rx are `rdtime`, ns = ticks * `timer::TICK_NS`.
+fn print_ping_rtt() {
+    let tx = unsafe { PING_TX };
+    let rx = unsafe { PING_RX };
+    let ticks = rx.wrapping_sub(tx);
+    let ns = ticks.wrapping_mul(timer::TICK_NS);
+    println!(
+        "PING RTT dst=10.0.2.2 id={PING_ID} seq={PING_SEQ} tx={tx} rx={rx} ticks={ticks} ns={ns}"
+    );
 }
 
 /// Zero the virtio-net header, then Ethernet+ARP (42 bytes) padded to 60.

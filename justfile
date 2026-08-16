@@ -109,8 +109,20 @@ test expect="M2 EXECUTION OK" timeout_s="5":
             echo 'TEST FAIL: missing ARP CACHE WRAP OK'
             exit 1
         fi
+        if ! grep -a -q 'CHECKSUM OK' "$log"; then
+            echo 'TEST FAIL: missing CHECKSUM OK'
+            exit 1
+        fi
+        if ! grep -a -q 'ICMP REPLY BUILD OK' "$log"; then
+            echo 'TEST FAIL: missing ICMP REPLY BUILD OK'
+            exit 1
+        fi
         if ! grep -a -q 'tx avail=2 used=2 posted=2 completed=2' "$log"; then
             echo 'TEST FAIL: TX posted/completed is not 2/2 (ARP reply + GARP)'
+            exit 1
+        fi
+        if ! grep -a -q 'tx avail=3 used=3 posted=3 completed=3' "$log"; then
+            echo 'TEST FAIL: TX posted/completed is not 3/3 (ARP reply + GARP + ping)'
             exit 1
         fi
         if ! grep -a -q 'TX ARP reply' "$log"; then
@@ -142,6 +154,26 @@ test expect="M2 EXECUTION OK" timeout_s="5":
         fi
         if ! bash scripts/assert-pcap-arp-reply.sh whimbrel.pcap; then
             echo 'TEST FAIL: pcap ARP reply / post-ARP IPv4 assertion'
+            exit 1
+        fi
+        if ! grep -a -q 'PING RTT dst=10.0.2.2' "$log"; then
+            echo 'TEST FAIL: missing PING RTT'
+            exit 1
+        fi
+        if ! grep -aE -q 'PING RTT dst=10.0.2.2 id=1 seq=1 tx=[0-9]+ rx=[0-9]+ ticks=[0-9]+ ns=[0-9]+' "$log"; then
+            echo 'TEST FAIL: PING RTT line is not tx/rx/ticks/ns'
+            exit 1
+        fi
+        if ! grep -a -q 'ip_drop short=0 ver=0 ihl=0 csum=0 frag=0' "$log"; then
+            echo 'TEST FAIL: IPv4 malformed counters are not 0'
+            exit 1
+        fi
+        if ! grep -a -q 'icmp_drop short=0 csum=0' "$log"; then
+            echo 'TEST FAIL: ICMP malformed counters are not 0'
+            exit 1
+        fi
+        if ! bash scripts/assert-pcap-icmp.sh whimbrel.pcap; then
+            echo 'TEST FAIL: pcap ICMP echo assertion'
             exit 1
         fi
         if ! grep -a -q 'task 2 exit 0' "$log"; then
@@ -312,8 +344,20 @@ test-net-init:
         echo 'TEST FAIL: missing ARP CACHE WRAP OK'
         exit 1
     fi
+    if ! grep -a -q 'CHECKSUM OK' serial.log; then
+        echo 'TEST FAIL: missing CHECKSUM OK'
+        exit 1
+    fi
+    if ! grep -a -q 'ICMP REPLY BUILD OK' serial.log; then
+        echo 'TEST FAIL: missing ICMP REPLY BUILD OK'
+        exit 1
+    fi
     if ! grep -a -q 'tx avail=2 used=2 posted=2 completed=2' serial.log; then
         echo 'TEST FAIL: TX posted/completed is not 2/2 (ARP reply + GARP)'
+        exit 1
+    fi
+    if ! grep -a -q 'tx avail=3 used=3 posted=3 completed=3' serial.log; then
+        echo 'TEST FAIL: TX posted/completed is not 3/3 (ARP reply + GARP + ping)'
         exit 1
     fi
     if ! grep -a -q 'TX ARP reply' serial.log; then
@@ -340,7 +384,27 @@ test-net-init:
         echo 'TEST FAIL: pcap ARP reply / post-ARP IPv4 assertion'
         exit 1
     fi
-    echo 'TEST PASS: DRIVER_OK, MAC, dump, GARP, RX ARP, ARP reply'
+    if ! grep -a -q 'PING RTT dst=10.0.2.2' serial.log; then
+        echo 'TEST FAIL: missing PING RTT'
+        exit 1
+    fi
+    if ! grep -aE -q 'PING RTT dst=10.0.2.2 id=1 seq=1 tx=[0-9]+ rx=[0-9]+ ticks=[0-9]+ ns=[0-9]+' serial.log; then
+        echo 'TEST FAIL: PING RTT line is not tx/rx/ticks/ns'
+        exit 1
+    fi
+    if ! grep -a -q 'ip_drop short=0 ver=0 ihl=0 csum=0 frag=0' serial.log; then
+        echo 'TEST FAIL: IPv4 malformed counters are not 0'
+        exit 1
+    fi
+    if ! grep -a -q 'icmp_drop short=0 csum=0' serial.log; then
+        echo 'TEST FAIL: ICMP malformed counters are not 0'
+        exit 1
+    fi
+    if ! bash scripts/assert-pcap-icmp.sh whimbrel.pcap; then
+        echo 'TEST FAIL: pcap ICMP echo assertion'
+        exit 1
+    fi
+    echo 'TEST PASS: DRIVER_OK, MAC, dump, GARP, RX ARP, ARP reply, PING RTT'
 
 # Disassemble the kernel. Extra flags as one quoted arg, e.g. just objdump '-d --source'
 objdump flags="-d": build

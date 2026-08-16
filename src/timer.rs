@@ -9,9 +9,15 @@ use crate::csr;
 use crate::println;
 use crate::sbi;
 
-/// QEMU `virt` timebase is 10 MHz (`aclint-mtimer @ 10000000Hz`). 100_000
-/// ticks = 10 ms. PLAN T1.3 / D-0018.
+/// QEMU `virt` timebase is 10 MHz (`aclint-mtimer @ 10000000Hz`). PLAN T1.3 /
+/// D-0018. One `rdtime` tick is 100 ns; M4 reuses these constants.
+pub const TIMEBASE_HZ: usize = 10_000_000;
+/// Nanoseconds per `rdtime` tick at `TIMEBASE_HZ`.
+pub const TICK_NS: usize = 100;
+/// 100_000 ticks = 10 ms.
 pub const PERIOD: usize = 100_000;
+const _: () = assert!(TICK_NS == 1_000_000_000 / TIMEBASE_HZ);
+const _: () = assert!(PERIOD == TIMEBASE_HZ / 100);
 /// 1 ms at the same timebase. Stress widens the interrupt-during-alloc window.
 #[cfg_attr(not(feature = "stress"), allow(dead_code))]
 pub const PERIOD_1MS: usize = 10_000;

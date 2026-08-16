@@ -32,6 +32,9 @@ mod user;
 mod virtio;
 mod virtq;
 mod arp;
+mod checksum;
+mod ipv4;
+mod icmp;
 mod net;
 
 use core::arch::{asm, global_asm};

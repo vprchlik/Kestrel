@@ -1450,3 +1450,64 @@ D-0011 onward are working decisions made under those constraints.
   fail-closes on request-only, reply-before-request, and reply-without
   a later IPv4 frame. Panic/hang images never print `DRIVER_OK` and
   are not provoked.
+
+## D-0047: TX uses the ARP cache; empty gateway is a panic, not a queue
+- Date: 2026-08-16 — Status: accepted
+- **Decision:** every IPv4 TX is Ethernet-unicast to the **gateway**
+  MAC (`10.0.2.2`) looked up in the ARP cache. There is no routing
+  table. If that lookup misses, the driver **panics** by name. It does
+  not emit an ARP request, and it does not queue the datagram. T3.7's
+  ping runs after `wait_rx_arp`, which learns 10.0.2.2 from slirp's
+  request; an empty cache at that point is a bug in the T3.6 path, not
+  a reason to grow an ARP state machine.
+- **Alternatives considered:** ARP-then-queue (rejected: there is no TX
+  queue, and a pending ICMP datagram plus a wait-for-ARP loop is a
+  second protocol on the same descriptor we reuse after `wait_tx`).
+  Broadcast the IP datagram (rejected: slirp would still ARP, and we
+  would be sending IPv4 to ff:ff:ff:ff:ff:ff). Hard-code QEMU's slirp
+  MAC (rejected: the cache would be ornamental; T3.6 already proved
+  learn-from-request).
+- **Rationale:** fail loudly. A silent drop looks like slirp never
+  answered the ping; a panic saying `no MAC for gateway 10.0.2.2`
+  names the missing precondition. The guest-initiated ping is sequenced
+  after the cache is populated, so the panic is a regression alarm, not
+  a startup race.
+- **Consequences:** `arp::lookup([10,0,2,2])` is the only L2 resolution
+  IPv4 has. The echo-reply path uses the same lookup even though the
+  IPv4 destination is the requester — Ethernet dest is still the
+  gateway (no routing). If T3.6's learn step is skipped, T3.7 cannot
+  boot.
+
+## D-0048: ICMP echo server exists; slirp only lets us test the client
+- Date: 2026-08-16 — Status: accepted
+- **Decision:** type 8 → type 0 (echo reply) is implemented: copy
+  identifier/sequence/data, recompute the ICMP checksum, swap IPv4
+  addresses, TX to the gateway MAC. **The harness cannot exercise that
+  half.** Under `-netdev user`, inbound ICMP echo is unroutable
+  (PLAN concept 4, D-0042); a host `ping 10.0.2.15` never arrives as
+  an RX used-ring entry. The tested direction is guest→out: we ping
+  10.0.2.2, slirp answers. A build self-test (`ICMP REPLY BUILD OK`)
+  proves the reply writer produces a checksum-valid type-0 copy; it is
+  not a wire test. RTT is `rdtime` at the 10 MHz virt timebase
+  (`timer::TICK_NS` = 100): one line
+  `PING RTT dst=10.0.2.2 id= seq= tx= rx= ticks= ns=` so M4 can parse
+  the same keys rather than a one-off debug print. `tx` is `rdtime` at
+  QueueNotify of our echo request; `rx` is `rdtime` when the matching
+  echo reply is classified. `ns = ticks * 100`.
+- **Alternatives considered:** skip the server path because slirp cannot
+  deliver inbound echo (rejected: "untested" and "unimplemented" must
+  stay distinct; the limitation is recorded, the code is not omitted).
+  Test inbound via tap (rejected for M3: D-0042; tap is the M4
+  escape hatch). Print only microseconds (rejected: the native unit is
+  `rdtime` ticks; ns is a scaled copy of the same integer, not a
+  different clock).
+- **Rationale:** an echo server that exists only in a comment is how
+  the dishonest skip happens. Shipping the type-8 path and saying
+  plainly that user-net cannot feed it keeps the interview answer
+  honest: the client RTT is the acceptance; the server is correct by
+  construction and untested on the wire.
+- **Consequences:** `just test` greps `PING RTT` and asserts pcap
+  echo-request then echo-reply. It does not send a host ping. Malformed
+  IPv4/ICMP counters (`csum`, `frag`, `ihl`, …) must read 0 on that
+  path; `ipv4 drop_proto` may be non-zero because hostfwd SYNs are
+  IPv4/TCP, not malformed.
