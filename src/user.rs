@@ -12,6 +12,7 @@
     allow(dead_code)
 )]
 
+#[allow(unused_imports)]
 use core::arch::global_asm;
 
 /// Pull the app archive into every image, including boots that never
@@ -50,7 +51,11 @@ extern "C" {
     fn user_entry();
 }
 
-#[cfg(not(any(feature = "userptr-kernel-selftest", feature = "userptr-span-selftest")))]
+#[cfg(not(any(
+    feature = "userptr-kernel-selftest",
+    feature = "userptr-span-selftest",
+    feature = "net-udp-selftest"
+)))]
 extern "C" {
     fn task1_entry();
     fn task2_entry();
@@ -61,12 +66,20 @@ pub fn entry() -> usize {
     user_entry as *const () as usize
 }
 
-#[cfg(not(any(feature = "userptr-kernel-selftest", feature = "userptr-span-selftest")))]
+#[cfg(not(any(
+    feature = "userptr-kernel-selftest",
+    feature = "userptr-span-selftest",
+    feature = "net-udp-selftest"
+)))]
 pub fn task1() -> usize {
     task1_entry as *const () as usize
 }
 
-#[cfg(not(any(feature = "userptr-kernel-selftest", feature = "userptr-span-selftest")))]
+#[cfg(not(any(
+    feature = "userptr-kernel-selftest",
+    feature = "userptr-span-selftest",
+    feature = "net-udp-selftest"
+)))]
 pub fn task2() -> usize {
     task2_entry as *const () as usize
 }
@@ -79,7 +92,8 @@ pub fn task2() -> usize {
 #[cfg(not(any(
     feature = "userptr-kernel-selftest",
     feature = "userptr-span-selftest",
-    feature = "user-fault-selftest"
+    feature = "user-fault-selftest",
+    feature = "net-udp-selftest"
 )))]
 global_asm!(
     r#"
