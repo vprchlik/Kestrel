@@ -123,9 +123,9 @@ if [ -z "$close_hit" ]; then
 fi
 
 fin_line=$(run_fields 'tcp && ip.src == 10.0.2.15 && tcp.srcport == 80 && tcp.flags.fin == 1' \
-    -e frame.number -e tcp.seq -e tcp.checksum.status | awk '{print $1, $2, $3}' | first_after "$synack_fn" || true)
+    -e frame.number -e tcp.seq -e tcp.checksum.status | awk '{print $1, $2, $3}' | first_after "$((data_fn - 1))" || true)
 if [ -z "$fin_line" ]; then
-    echo "TEST FAIL: no FIN from 10.0.2.15:80 in ${PCAP}"
+    echo "TEST FAIL: no FIN from 10.0.2.15:80 on or after HTTP data frame ${data_fn}"
     exit 1
 fi
 fin_fn=$(field "$fin_line" 1)
