@@ -2,14 +2,15 @@
 //!
 //! Owns the static `rdtime` array stamped at `_start`, `stvec`, paging,
 //! freeze, first `sret`, `DRIVER_OK`, first RX, listen-ready, and
-//! response-TX (E3g). Printed once, after the response is on the wire —
+//! response-TX publish (E3g) plus doorbell return (E3g_doorbell). Printed
+//! once, after the response is on the wire —
 //! DBCN is one `ecall` per byte, so printing on the measured path would
 //! move E3g by milliseconds. Without this module M4 has no floor number.
 
 use crate::csr;
 use crate::println_always;
 
-pub const N: usize = 9;
+pub const N: usize = 10;
 pub const START: usize = 0;
 pub const STVEC: usize = 1;
 pub const PAGING: usize = 2;
@@ -21,6 +22,7 @@ pub const DRIVER_OK: usize = 5;
 pub const FIRST_RX: usize = 6;
 pub const LISTEN: usize = 7;
 pub const E3G: usize = 8;
+pub const E3G_DOORBELL: usize = 9;
 
 const NAMES: [&str; N] = [
     "_start",
@@ -32,6 +34,7 @@ const NAMES: [&str; N] = [
     "first_rx",
     "listen",
     "E3g",
+    "E3g_doorbell",
 ];
 
 /// Filled from `_start` (index 0) after `.bss` is zeroed, from the

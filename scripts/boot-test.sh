@@ -1,9 +1,16 @@
 #!/usr/bin/env bash
+set -euo pipefail
 # Headless boot gate (D-0017). Verdict from serial + QEMU status together.
 # Usage: scripts/boot-test.sh [cargo-feature]
 #   no arg              → default image, expect PASS
 #   panic-selftest      → FAIL (panic line echoed)
 #   hang-selftest       → HANG
+#
+# Fail-closed from line 1 (D-0056 / finding 31): a failed cargo build
+# must not reach QEMU. The leftover ELF is a previous successful
+# image; check-utext and boot would PASS it. `set +e` only around the
+# timeout/QEMU island, where 124 is a hang verdict rather than a
+# script error.
 #
 # net-init-selftest still fires one hostfwd connect, but only after the
 # gateway MAC is learned (D-0054). Waiting for TX ARP reply was the
@@ -11,7 +18,6 @@
 # Default / HTTP / UDP / fast-boot have no watcher. Panic/hang never
 # print DRIVER_OK. CLIENT_EARLY=1 starts the HTTP retry loop before E0
 # (D-0043); otherwise curl waits for HTTP READY (correctness gate).
-set -u
 
 EXPECT="${EXPECT:-M3 UNIKERNEL OK}"
 TIMEOUT_S="${TIMEOUT_S:-5}"
@@ -36,7 +42,10 @@ elif [ "$PROFILE" != debug ]; then
     exit 1
 fi
 
-cargo build "${feat[@]}" "${profile_flag[@]}"
+if ! cargo build "${feat[@]}" "${profile_flag[@]}"; then
+    echo 'TEST FAIL: cargo build failed (refusing to boot a stale kernel)'
+    exit 1
+fi
 # Feature builds that never enter U-mode can GC .utext. Userptr selftests
 # do enter U, so they still need the check.
 case "${FEATURE}" in

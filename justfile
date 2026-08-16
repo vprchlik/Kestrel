@@ -68,7 +68,7 @@ check-utext-planted:
 # Headless default boot: M3 UNIKERNEL OK, curl 200, phases, gateway ARP.
 test expect="M3 UNIKERNEL OK" timeout_s="12":
     #!/usr/bin/env bash
-    set -u
+    set -euo pipefail
     e='{{expect}}'
     t='{{timeout_s}}'
     case "$e" in expect=*) e="${e#expect=}" ;; esac
@@ -184,7 +184,7 @@ test expect="M3 UNIKERNEL OK" timeout_s="12":
             echo 'TEST FAIL: unexpected retransmit on the happy path'
             exit 1
         fi
-        for ph in _start stvec paging DRIVER_OK first_rx listen freeze sret E3g; do
+        for ph in _start stvec paging DRIVER_OK first_rx listen freeze sret E3g E3g_doorbell; do
             if ! grep -a -q "PHASE ${ph} " "$log"; then
                 echo "TEST FAIL: missing PHASE ${ph}"
                 exit 1
@@ -647,7 +647,7 @@ test-fast:
     set -euo pipefail
     EXPECT="M3 UNIKERNEL OK" TIMEOUT_S=12 bash scripts/boot-test.sh fast-boot
     log=serial.log
-    for ph in _start stvec paging DRIVER_OK first_rx listen freeze sret E3g; do
+    for ph in _start stvec paging DRIVER_OK first_rx listen freeze sret E3g E3g_doorbell; do
         if ! grep -a -q "PHASE ${ph} " "$log"; then
             echo "TEST FAIL: missing PHASE ${ph}"
             exit 1
@@ -683,7 +683,7 @@ test-fast-release:
     PROFILE=release CLIENT_EARLY=1 EXPECT="M3 UNIKERNEL OK" TIMEOUT_S=12 \
         bash scripts/boot-test.sh fast-boot
     log=serial.log
-    for ph in _start stvec paging DRIVER_OK first_rx listen freeze sret E3g; do
+    for ph in _start stvec paging DRIVER_OK first_rx listen freeze sret E3g E3g_doorbell; do
         if ! grep -a -q "PHASE ${ph} " "$log"; then
             echo "TEST FAIL: missing PHASE ${ph}"
             exit 1

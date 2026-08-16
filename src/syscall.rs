@@ -50,6 +50,13 @@ const _: () = assert!(SYS_WRITE + 4 == SYS_YIELD);
 const _: () = assert!(SYS_WRITE + 6 == SYS_SEND);
 const _: () = assert!(SYS_RECV + 1 == SYS_SEND);
 
+/// App recv buffer vs kernel caps (D-0056 / finding 36). One line each;
+/// silent truncation is then unrepresentable.
+#[cfg(not(feature = "net-udp-selftest"))]
+const _: () = assert!(app::RECV_BUF >= crate::tcp::PAYLOAD_MAX);
+#[cfg(feature = "net-udp-selftest")]
+const _: () = assert!(app::RECV_BUF >= crate::net::UDP_PAYLOAD_MAX);
+
 static mut USER_OK: bool = false;
 static mut SYSCALL_OK: bool = false;
 static mut SBRK_OK: bool = false;

@@ -21,7 +21,9 @@ mod inner {
     pub static READY: [u8; 15] = *b"UDP ECHO READY\n";
     #[link_section = ".urodata"]
     pub static DONE: [u8; 11] = *b"NET UDP OK\n";
-    pub const BUF: usize = 32;
+    /// Matches `net::UDP_PAYLOAD_MAX`; kernel `const`-assert ties them
+    /// (D-0056 / finding 36).
+    pub const BUF: usize = 1472;
 }
 
 #[cfg(not(feature = "udp-echo"))]
@@ -34,8 +36,14 @@ mod inner {
     /// `HTTP/1.0 200 OK` + `Connection: close` + body `whimbrel\n` (D-0053).
     #[link_section = ".urodata"]
     pub static RESP: [u8; 92] = *b"HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\nContent-Length: 9\r\n\r\nwhimbrel\n";
+    /// Matches `tcp::PAYLOAD_MAX`; kernel `const`-assert ties them
+    /// (D-0056 / finding 36).
     pub const BUF: usize = 512;
 }
+
+/// Recv buffer length exported so the kernel can `const`-assert it
+/// against `tcp::PAYLOAD_MAX` / `net::UDP_PAYLOAD_MAX` (D-0056).
+pub const RECV_BUF: usize = inner::BUF;
 
 /// U-mode entry. `#[no_mangle]` so `check-utext` can require this
 /// symbol to sit in `.utext`, not kernel `.text`.
