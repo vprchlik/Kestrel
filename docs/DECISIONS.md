@@ -1867,8 +1867,26 @@ D-0011 onward are working decisions made under those constraints.
   **Steal:** each trial records `/proc/stat` aggregate steal delta
   (`steal_ticks`, `steal_ns`). USER_HZ=100 ⇒ 10 ms/tick, coarser than
   the 200 µs floor and coarser than the first miss (E0→E4 Δ 1.64 ms).
-  The first batch-2 CSV had no steal column; correlation is on a fresh
-  interleaved pair. Steal is diagnostic, not a stability metric.
+  Steal is diagnostic, not a stability metric.
+  **Fresh interleaved pair (git `9678270`, shuffle_seed
+  `1786876111394580533`, QEMU 8.2.2, N=30×2 configs×2 batches):** steal
+  was 0 on 119/120 recorded trials and 1 tick on one fast-boot trial
+  (E0→E4 78.6 ms, not the slowest). Spearman(steal, E0→E4) = −0.017;
+  the slow quartile's mean steal was 0. Steal does not explain the slow
+  trials. `/proc/stat` steal is the wrong instrument for sub-tick
+  jitter. release-default now **passes** batch 1 vs 2 (E2→E3g 106.130 vs
+  106.676 ms) — the old 98.5 → 105.6 ms shift was the batch-order
+  confound. release-fast-boot still **fails** on the host-side edge only:
+  E0→E4 75.509 → 77.292 ms (Δ 1.78 ms, tol 1.55 ms); guest E2→E3g
+  30.831 → 30.949 ms stays inside the bar. Spearman(run_order, E0→E4)
+  = 0.55 on fast-boot: wall-clock drift remains, and the 2% bar is
+  tighter on the shorter arm (~1.55 ms vs ~3.0 ms on default). The
+  criterion is not widened. This host is a 4-CPU KVM guest (`hypervisor`,
+  `systemd-detect-virt=kvm`, cgroup `pod-…`) with no cpufreq and a
+  generic `Intel(R) Xeon(R) Processor` CPUID; D-0055's performance
+  governor is `unavailable`. Cumulative steal is nonzero (203 ticks at
+  diagnosis start) but almost never lands inside a 2 s trial. Report-grade
+  numbers are not obtainable here; the bench host has to be dedicated.
 
 ## D-0056: Pre-baseline corrections (T4.0b)
 - Date: 2026-08-16 — Status: accepted

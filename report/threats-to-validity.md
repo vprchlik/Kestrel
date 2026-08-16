@@ -20,8 +20,13 @@ is mitigated-and-measured or stated. This is a seed, not the section.
     This harness host is a shared KVM guest (`hypervisor` in `/proc/cpuinfo`,
     `systemd-detect-virt=kvm`, cgroup `pod-…`) with **no cpufreq**,
     **nonzero `/proc/stat` steal**, and USER_HZ=100 (10 ms steal ticks).
-    D-0055's performance governor is `unavailable`. Report-grade numbers
-    need a dedicated machine; this host is for harness bring-up.
+    D-0055's performance governor is `unavailable`. Fresh interleaved
+    pair (git `9678270`): steal was 0 on 119/120 recorded trials,
+    Spearman(steal, E0→E4) ≈ 0, and the one stolen trial was not in the
+    slow quartile. Sub-tick host jitter remains (fast-boot E0→E4 still
+    misses the two-batch bar; Spearman(run_order, E0→E4) = 0.55).
+    Report-grade numbers need a dedicated machine; this host is for
+    harness bring-up.
 10. **E3w fidelity.** filter-dump pcap timestamps are a QEMU realtime
     clock that does not match Python `time.time_ns()` (offsets of tens to
     hundreds of ms observed). `e0_to_e3w_ns` is therefore first-connect
