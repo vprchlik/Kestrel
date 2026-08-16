@@ -15,3 +15,5 @@ http.status
 *.rej
 *~
 .DS_Store
+__pycache__/
+*.pyc
