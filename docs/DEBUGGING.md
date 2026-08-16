@@ -370,15 +370,14 @@ no trap; the first channel that can name the bug is the one to read.
    table. TX still works — those descriptors are device-readable
    (`flags=0`). Read stderr (item 1) before `-d guest_errors`.
 10. A hostfwd connect after our GARP does not produce an ARP request.
-    slirp caches the GARP and sends IPv4 (TCP SYN) unicast. T3.5's
-    trigger is slirp's ARP, so the guest must poll RX **before**
-    transmitting the GARP, or the slirp-ARP pcap assert fails while the
-    capture still looks "alive". T3.6 does not treat the GARP as the
-    way slirp learns us (D-0046): `DRIVER_OK` (and connect #1) still
-    precede the GARP so slirp must ARP; the harness waits for
-    `TX ARP reply` and connects again; pcap asserts IPv4 after that
-    reply. The first connect's SYN may also appear after the reply —
-    surplus, not the trigger.
+    slirp caches the GARP (or already learned us from our request for
+    `10.0.2.2`) and sends IPv4 (TCP SYN) unicast. After D-0054 we ARP
+    the gateway ourselves; slirp often never ARPs us, so `TX ARP reply`
+    is not a boot event. The net-init watcher fires one connect after
+    `gateway 10.0.2.2 MAC learned` so the SYN is not dropped as noarp
+    (D-0046). The live pcap assert is our request then slirp's reply
+    (`assert-pcap-gateway-arp.sh`), not the T3.5/T3.6 slirp-asked-first
+    chain.
 11. `ipv4 drop_proto` non-zero on a happy boot used to be the hostfwd
     TCP SYN (protocol 6) hitting a stack that did not yet parse TCP.
     That exception **expired at T3.10** (D-0049). TCP exists, so

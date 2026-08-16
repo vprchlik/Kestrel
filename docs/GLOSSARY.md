@@ -77,8 +77,9 @@ project runs on exactly one hart (hart 0), by constraint D-0007.
 **hostfwd.** QEMU user-net option that binds a host socket into slirp and
 re-originates a connection toward the guest. `hostfwd=tcp::8080-:80` is
 how `curl http://127.0.0.1:8080/` becomes a SYN to `10.0.2.15:80`. It is
-not a boot dependency (D-0054); the T3.5 watcher uses it only for the
-`net-init-selftest` handshake sibling (D-0046).
+not a boot dependency (D-0054); the net-init watcher uses it only for the
+`net-init-selftest` handshake sibling, after the gateway MAC is learned
+(D-0046).
 
 **identity map.** A translation where the virtual address equals the physical
 address. The kernel is identity-mapped (D-0006), so the PC, stack pointer,
@@ -109,6 +110,8 @@ from a task (cause 2) therefore dumps in firmware, not in our handler
 E2 = kernel entry (`rdtime` at `_start`); E3g = `rdtime` at response-TX
 publish; E3w = pcap timestamp of that frame; E4 = first byte at the client.
 T3.12(a) measured the E2 offset as 0, so `_start` *is* the OpenSBI phase.
+Headline E2→E3g uses a client retrying before E0; `just test`'s
+curl-after-`HTTP READY` E3g is harness wait (D-0043).
 
 **MMIO (Memory-Mapped I/O).** Device registers exposed at physical addresses,
 accessed with ordinary load/store instructions instead of special I/O

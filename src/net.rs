@@ -356,6 +356,8 @@ pub fn init() {
     wait_gateway_arp(base);
     tx_gratuitous_arp(base);
     ping_gateway(base);
+    #[cfg(feature = "net-init-selftest")]
+    wait_tcp_handshake(base);
     crate::phase::stamp(crate::phase::LISTEN);
 }
 
@@ -984,6 +986,36 @@ fn wait_ping_reply(base: usize) {
             println!("virtio-net: RX no ICMP echo reply after ~2s");
             dump();
             panic!("virtio-net: no echo reply from 10.0.2.2");
+        }
+        unsafe { asm!("wfi") };
+    }
+}
+
+/// Hostfwd connect after the gateway MAC is cached (D-0046, retargeted).
+/// Stay in `poll_rx` until ESTABLISHED and LISTEN restore so this
+/// image does not shut down during ping (D-0054).
+#[cfg(feature = "net-init-selftest")]
+fn wait_tcp_handshake(base: usize) {
+    let t0 = csr::time::read();
+    let mut saw_est = false;
+    loop {
+        require_device(base);
+        let _ = poll_rx(base);
+        pump_tcp(base);
+        if tcp::established() > 0 {
+            saw_est = true;
+        }
+        if saw_est && tcp::listening() {
+            dump();
+            return;
+        }
+        poll_stall();
+        if csr::time::read().wrapping_sub(t0) >= RX_WAIT_TICKS {
+            dump();
+            if !saw_est {
+                panic!("virtio-net: no TCP handshake after ~2s");
+            }
+            panic!("virtio-net: TCP handshake did not return to LISTEN after ~2s");
         }
         unsafe { asm!("wfi") };
     }

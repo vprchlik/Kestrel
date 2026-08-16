@@ -57,6 +57,10 @@ app = { path = "app" }
 [profile.dev]
 panic = "abort"
 
+# M4 measurement profile (`just test-fast-release`): `cargo build --release
+# --features fast-boot`. opt-level=3 is Cargo's release default; LTO and
+# one codegen unit are ours. Debug paging (~150 ms at opt-level=0) is not
+# this profile (D-0043).
 [profile.release]
 panic = "abort"
 lto = true

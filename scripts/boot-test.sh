@@ -5,17 +5,20 @@
 #   panic-selftest      → FAIL (panic line echoed)
 #   hang-selftest       → HANG
 #
-# After DRIVER_OK, the net-init-selftest sibling still fires a hostfwd
-# TCP connect so slirp ARPs 10.0.2.15 (D-0046). Default / HTTP / UDP /
-# fast-boot images ARP for the gateway themselves (D-0054) and must not
-# wait to be asked. Panic/hang images never print DRIVER_OK.
+# net-init-selftest still fires one hostfwd connect, but only after the
+# gateway MAC is learned (D-0054). Waiting for TX ARP reply was the
+# watcher-era trigger; we ARP 10.0.2.2 ourselves, so slirp need not ask.
+# Default / HTTP / UDP / fast-boot have no watcher. Panic/hang never
+# print DRIVER_OK. CLIENT_EARLY=1 starts the HTTP retry loop before E0
+# (D-0043); otherwise curl waits for HTTP READY (correctness gate).
 set -u
 
 EXPECT="${EXPECT:-M3 UNIKERNEL OK}"
 TIMEOUT_S="${TIMEOUT_S:-5}"
 FEATURE="${1:-}"
+PROFILE="${PROFILE:-debug}"
 TARGET="riscv64gc-unknown-none-elf"
-KERNEL="target/${TARGET}/debug/whimbrel"
+KERNEL="target/${TARGET}/${PROFILE}/whimbrel"
 QEMU="qemu-system-riscv64"
 # D-0038 / D-0039 / D-0042 / D-0043: keep in sync with justfile qemu_args
 # and .cargo/config.toml.
@@ -25,8 +28,15 @@ feat=()
 if [ -n "$FEATURE" ]; then
     feat=(--features "$FEATURE")
 fi
+profile_flag=()
+if [ "$PROFILE" = release ]; then
+    profile_flag=(--release)
+elif [ "$PROFILE" != debug ]; then
+    echo "TEST FAIL: PROFILE=${PROFILE} is not debug or release"
+    exit 1
+fi
 
-cargo build "${feat[@]}"
+cargo build "${feat[@]}" "${profile_flag[@]}"
 # Feature builds that never enter U-mode can GC .utext. Userptr selftests
 # do enter U, so they still need the check.
 case "${FEATURE}" in
@@ -35,15 +45,12 @@ case "${FEATURE}" in
 esac
 rm -f serial.log whimbrel.pcap udp-echo.got udp-echo.status http.body http.hdr http.status
 
-# D-0046 watcher: net-init-selftest handshake sibling only (D-0054).
+# D-0046 watcher, retargeted: one connect after the cache is filled so
+# the SYN is not dropped as noarp. Handshake sibling only (D-0054).
 wpid=""
 if [ "$FEATURE" = "net-init-selftest" ]; then
     (
-        while ! grep -a -q 'DRIVER_OK' serial.log 2>/dev/null; do
-            sleep 0.05
-        done
-        bash scripts/provoke-hostfwd.sh 0.3 >/dev/null 2>&1
-        while ! grep -a -q 'TX ARP reply' serial.log 2>/dev/null; do
+        while ! grep -a -q 'gateway 10.0.2.2 MAC learned' serial.log 2>/dev/null; do
             sleep 0.05
         done
         bash scripts/provoke-hostfwd.sh 2 >/dev/null 2>&1
@@ -66,8 +73,28 @@ if [ "$FEATURE" = "net-udp-selftest" ]; then
 fi
 
 hpid=""
+http_images=0
 if [ -z "$FEATURE" ] || [ "$FEATURE" = "net-http-selftest" ] \
     || [ "$FEATURE" = "tcp-drop-first-tx" ] || [ "$FEATURE" = "fast-boot" ]; then
+    http_images=1
+fi
+if [ "$http_images" -eq 1 ] && [ "${CLIENT_EARLY:-}" = 1 ]; then
+    # D-0043: retry loop starts before QEMU exec so sret→E3g is not
+    # "wait for HTTP READY then spawn curl".
+    (
+        st=1
+        for _ in $(seq 1 400); do
+            if curl -sS --connect-timeout 0.05 --max-time 2 \
+                -D http.hdr -o http.body http://127.0.0.1:8080/; then
+                st=0
+                break
+            fi
+            sleep 0.001
+        done
+        echo "$st" >http.status
+    ) &
+    hpid=$!
+elif [ "$http_images" -eq 1 ]; then
     (
         while ! grep -a -q 'HTTP READY' serial.log 2>/dev/null; do
             sleep 0.05

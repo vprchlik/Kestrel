@@ -1370,6 +1370,15 @@ D-0011 onward are working decisions made under those constraints.
   `pc=0x1000` (OpenSBI), GDB `$time` = **0**. `rdtime` at `_start` is
   therefore the OpenSBI phase with nothing to subtract. Re-measure with
   `just measure-e2` if the firmware or QEMU version changes.
+  **T3.12 wrap amendment (2026-08-16):** Headline boot-to-first-byte uses a
+  client retry loop started **before E0** (`CLIENT_EARLY=1`,
+  `just test-fast-release`). `sret→E3g` on `just test` / `just test-fast`
+  is waiting for `HTTP READY` then spawning curl — that is harness time,
+  not kernel work, and is not the M4 number. Kernel boot-to-ready is
+  E2→sret (stack-ready is E2→listen). Debug `opt-level=0` paging (~150 ms
+  walking ~32k pages twice) is not the cost of paging; M4 cites
+  `cargo build --release --features fast-boot`. The default `just test`
+  curl-after-`HTTP READY` path stays a correctness gate.
 
 ## D-0044: App crate in the user sections; check-utext bans FP, including compressed
 - Date: 2026-08-15 — Status: accepted
@@ -1453,6 +1462,16 @@ D-0011 onward are working decisions made under those constraints.
   (D-0054). `assert-pcap-arp-reply.sh` fail-closes on request-only,
   reply-before-request, and reply-without a later IPv4 frame.
   Panic/hang images never print `DRIVER_OK` and are not provoked.
+  **T3.12 wrap amendment:** After D-0054 the guest ARPs `10.0.2.2`
+  itself; slirp often never ARPs us, so `TX ARP reply` is not a boot
+  event. The watcher fires **one** `provoke-hostfwd` after
+  `gateway 10.0.2.2 MAC learned` (cache full, SYN not `noarp`). The
+  slirp-asked-first pcap chain (`assert-pcap-slirp-arp.sh`,
+  `assert-pcap-arp-reply.sh`) is no longer a live gate; the scripts
+  remain for fail-closed coverage of the scripts themselves.
+  `just test-net-init` / `just test-net-tcp` keep the handshake asserts;
+  `net-init-selftest` stays in `poll_rx` until ESTABLISHED and LISTEN
+  restore so the feature image does not exit during ping.
 
 ## D-0047: TX uses the ARP cache; empty gateway is a panic, not a queue
 - Date: 2026-08-16 — Status: accepted
@@ -1672,8 +1691,9 @@ D-0011 onward are working decisions made under those constraints.
   handshake; it must not be rewritten to hide FINs. Dropping
   unexpected segments keeps the capture honest for this checkpoint
   without pretending close is implemented.
-- **Consequences:** `just test-net-init` still fires both hostfwd connects.
-  `just test` no longer does (D-0054). `busy` / `unexpected` in `tcp_drop` may be non-zero on a happy
+- **Consequences:** `just test-net-init` fires one hostfwd connect after
+  the gateway MAC is learned (D-0046 / D-0054).
+  `just test` does not use the watcher. `busy` / `unexpected` in `tcp_drop` may be non-zero on a happy
   boot (second SYN, peer FIN after ESTABLISHED). Malformed counters
   (`short`, `doff`, `csum`, `opt`) must read 0. `drop_proto` must
   read 0 (D-0049). T3.11 (D-0053) implements FIN consumption and
@@ -1746,7 +1766,9 @@ D-0011 onward are working decisions made under those constraints.
   than "nobody poked hostfwd in time".
 - **Consequences:** `just run-http` boots to LISTEN with nothing else
   running. The T3.5/T3.6 "slirp ARPs us first" pcap chain is no longer
-  the default-boot story; the assert becomes our request then slirp's
-  reply. D-0046's watcher remains for the `net-init-selftest` handshake
-  sibling only. D-0047 is amended: the panic is a real miss.
+  the default-boot story; the live assert is our request then slirp's
+  reply (`assert-pcap-gateway-arp.sh`). D-0046's watcher remains for the
+  `net-init-selftest` handshake sibling only, and fires after the cache
+  is filled rather than after `TX ARP reply`. D-0047 is amended: the
+  panic is a real miss.
 

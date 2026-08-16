@@ -345,11 +345,11 @@ test-freeze:
     fi
     echo 'TEST PASS: freeze then alloc_frame panicked'
 
-# Handshake sibling: DRIVER_OK, watcher ARP, ping, TCP handshake.
+# Handshake sibling: DRIVER_OK, gateway ARP, ping, TCP handshake (no U-mode).
 test-net-init:
     #!/usr/bin/env bash
     set -euo pipefail
-    EXPECT="NET INIT OK" TIMEOUT_S=5 bash scripts/boot-test.sh net-init-selftest
+    EXPECT="NET INIT OK" TIMEOUT_S=8 bash scripts/boot-test.sh net-init-selftest
     if ! grep -a -q 'virtio-net: FEATURES_OK status=' serial.log; then
         echo 'TEST FAIL: missing FEATURES_OK readback'
         exit 1
@@ -394,8 +394,8 @@ test-net-init:
         echo 'TEST FAIL: missing TX GARP completed'
         exit 1
     fi
-    if ! grep -a -q 'TX ARP reply' serial.log; then
-        echo 'TEST FAIL: missing TX ARP reply'
+    if ! grep -a -q 'gateway 10.0.2.2 MAC learned' serial.log; then
+        echo 'TEST FAIL: missing gateway MAC learned'
         exit 1
     fi
     if ! grep -a -q 'TX TCP SYN/ACK' serial.log; then
@@ -418,16 +418,8 @@ test-net-init:
         echo 'TEST FAIL: RX completed did not increment'
         exit 1
     fi
-    if ! bash scripts/assert-pcap-slirp-arp.sh whimbrel.pcap; then
-        echo 'TEST FAIL: pcap slirp ARP assertion'
-        exit 1
-    fi
     if ! bash scripts/assert-pcap-gateway-arp.sh whimbrel.pcap; then
         echo 'TEST FAIL: pcap gateway ARP assertion'
-        exit 1
-    fi
-    if ! bash scripts/assert-pcap-arp-reply.sh whimbrel.pcap; then
-        echo 'TEST FAIL: pcap ARP reply / post-ARP IPv4 assertion'
         exit 1
     fi
     if ! grep -a -q 'PING RTT dst=10.0.2.2' serial.log; then
@@ -462,9 +454,9 @@ test-net-init:
         echo 'TEST FAIL: pcap TCP handshake assertion'
         exit 1
     fi
-    echo 'TEST PASS: DRIVER_OK, MAC, dump, gateway ARP, GARP, RX ARP, ARP reply, PING RTT, TCP handshake'
+    echo 'TEST PASS: DRIVER_OK, MAC, dump, gateway ARP, GARP, RX ARP, PING RTT, TCP handshake'
 
-# TCP passive open sibling of test-net-init (12s slirp SYN window).
+# TCP handshake sibling of test-net-init (no HTTP); connect after gateway MAC.
 test-net-tcp:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -475,6 +467,10 @@ test-net-tcp:
     fi
     if ! grep -a -q 'TCP LISTEN' serial.log; then
         echo 'TEST FAIL: missing TCP LISTEN'
+        exit 1
+    fi
+    if ! grep -a -q 'gateway 10.0.2.2 MAC learned' serial.log; then
+        echo 'TEST FAIL: missing gateway MAC learned'
         exit 1
     fi
     if ! grep -a -q 'TX TCP SYN/ACK' serial.log; then
@@ -679,6 +675,42 @@ test-fast:
         exit 1
     fi
     echo 'TEST PASS: fast-boot M3 UNIKERNEL OK, curl 200, phases'
+
+# Release+fast-boot phases with a client retrying before E0 (D-0043).
+test-fast-release:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    PROFILE=release CLIENT_EARLY=1 EXPECT="M3 UNIKERNEL OK" TIMEOUT_S=12 \
+        bash scripts/boot-test.sh fast-boot
+    log=serial.log
+    for ph in _start stvec paging DRIVER_OK first_rx listen freeze sret E3g; do
+        if ! grep -a -q "PHASE ${ph} " "$log"; then
+            echo "TEST FAIL: missing PHASE ${ph}"
+            exit 1
+        fi
+    done
+    if grep -a -q 'PHASE .* unset' "$log"; then
+        echo 'TEST FAIL: a PHASE stamp was unset'
+        grep -a 'PHASE .* unset' "$log" || true
+        exit 1
+    fi
+    if [ ! -f http.status ] || [ "$(cat http.status)" != "0" ]; then
+        echo "TEST FAIL: curl status $(cat http.status 2>/dev/null || echo missing), want 0"
+        exit 1
+    fi
+    if ! python3 -c 'import sys; sys.exit(0 if open("http.body","rb").read()==b"whimbrel\n" else 1)'; then
+        echo 'TEST FAIL: HTTP body is not exactly whimbrel\\n'
+        exit 1
+    fi
+    if ! bash scripts/assert-pcap-gateway-arp.sh whimbrel.pcap; then
+        echo 'TEST FAIL: pcap gateway ARP assertion'
+        exit 1
+    fi
+    if ! bash scripts/assert-pcap-http.sh whimbrel.pcap; then
+        echo 'TEST FAIL: pcap HTTP assertion'
+        exit 1
+    fi
+    echo 'TEST PASS: release fast-boot M3 UNIKERNEL OK, curl 200, phases'
 
 # Disassemble the kernel (extra flags as one quoted arg).
 objdump flags="-d": build

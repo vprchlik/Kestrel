@@ -34,7 +34,7 @@ against a minimal Linux VM.
 | M0 | Boot | OpenSBI → kernel entry → UART "hello" → clean QEMU exit | done |
 | M1 | Fundamentals | Traps, SBI timer interrupts, frame allocator, Sv39 paging, heap | done |
 | M2 | Execution | U-mode, 5 syscalls, context switch, preemptive scheduling of 2+ tasks | detailed; not started |
-| M3 | Unikernel | App-in-image as sole U-mode task, virtio-net, tiny HTTP responder | [TO BE DETAILED at milestone start] |
+| M3 | Unikernel | App-in-image as sole U-mode task, virtio-net, tiny HTTP responder | done |
 | M4 | Evaluation | Scripted reproducible benchmarks vs minimal Linux VM + technical report | [TO BE DETAILED at milestone start] |
 
 ---
@@ -1290,7 +1290,10 @@ precedent.
 - **Acceptance:** `just test` (no arguments) passes on `M3 UNIKERNEL OK`;
   boot prints the phase-timestamp block after the response; `just run-http`
   plus curl works with nothing else running; `just test-fast` reports the
-  fast-boot phase block; every sibling selftest holds.
+  debug fast-boot phase block; `just test-fast-release` reports the
+  release+fast-boot block with a client retrying before E0 (D-0043);
+  `just test-net-init` and `just test-net-tcp` assert gateway ARP then
+  handshake, not slirp-asked-first; every sibling selftest holds.
 
 ## Milestone acceptance test
 
@@ -1304,9 +1307,10 @@ exact expected body; a pcap containing the gratuitous ARP, the handshake,
 the response, and a clean FIN exchange with no RST on the happy path.
 `just test` passes on `M3 UNIKERNEL OK`. `just test-panic`, `test-hang`,
 `test-stress`, `test-userptr`, `test-user-fault`, `test-freeze`,
-`test-net-init`, `test-net-udp`, `test-net-http`, `test-net-rto`, and
-`test-fast` all hold their verdicts. `just run-http` serves curl from a
-cold boot with nothing else running.
+`test-net-init`, `test-net-tcp`, `test-net-udp`, `test-net-http`,
+`test-net-rto`, `test-fast`, and `test-fast-release` all hold their
+verdicts. `just run-http` serves curl from a cold boot with nothing else
+running.
 
 ## M3 summary
 
@@ -1318,6 +1322,10 @@ virtqueue, static DMA pool, freeze intact. The stack is Ethernet, ARP
 200 ms RTO. The app is compiled Rust in `.utext` over `recv`/`send`.
 Phase timestamps from `_start` to E3g print after the response. E2 offset
 is 0. `fast-boot` drops the tick wait and self-tests but keeps map verify.
+M4 cites release+fast-boot with a client retrying before E0; debug paging
+is opt-level=0, not the cost of paging (D-0043). Handshake siblings
+(`test-net-init`, `test-net-tcp`) connect after the gateway MAC is
+learned; slirp-asked-first asserts are retired as live gates.
 
 **Acceptance proves:** `just test` finds `M3 UNIKERNEL OK` and exits 0.
 Curl returns 200 with the exact body. The pcap shows our ARP request for
