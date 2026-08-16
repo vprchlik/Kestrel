@@ -25,10 +25,10 @@ FEATURE="${1:-}"
 PROFILE="${PROFILE:-debug}"
 TARGET="riscv64gc-unknown-none-elf"
 KERNEL="target/${TARGET}/${PROFILE}/whimbrel"
-QEMU="qemu-system-riscv64"
-# D-0038 / D-0039 / D-0042 / D-0043: keep in sync with justfile qemu_args
-# and .cargo/config.toml.
-QEMU_ARGS=(-machine virt -nographic -bios default -global virtio-mmio.force-legacy=false -netdev user,id=net0,hostfwd=tcp::8080-:80,hostfwd=udp::7777-:7 -device virtio-net-device,netdev=net0 -object filter-dump,id=f0,netdev=net0,file=whimbrel.pcap)
+# D-0038 / D-0039 / D-0042 / D-0043 / D-0055: one argv definition.
+# shellcheck disable=SC1091
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/qemu-args.sh"
+qemu_args_fill whimbrel.pcap
 
 feat=()
 if [ -n "$FEATURE" ]; then

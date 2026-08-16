@@ -1828,6 +1828,12 @@ D-0011 onward are working decisions made under those constraints.
   in the measured build) is settled inside T4.1 with one A/B batch:
   strip it if the delta clears the stability floor, else record it as a
   stated condition — either way with the number in hand.
+  **T4.1 implementation:** `scripts/qemu-args.sh` is the shared QEMU argv
+  (boot-test, justfile, bench); `scripts/bench.sh` writes long/tidy
+  `results/runs.csv` and `results/phases.csv`. The summarizer refuses
+  dirty trees and mixed QEMU/git SHA. Finding 14's measured delta is
+  recorded in this entry when the A/B batch completes; strip-vs-record
+  is the operator's call (T4.1 query), not an automatic strip.
 
 ## D-0056: Pre-baseline corrections (T4.0b)
 - Date: 2026-08-16 — Status: accepted

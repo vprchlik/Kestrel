@@ -5,10 +5,10 @@ set shell := ["bash", "-uc"]
 target    := "riscv64gc-unknown-none-elf"
 kernel    := "target/" + target + "/debug/whimbrel"
 qemu      := "qemu-system-riscv64"
-# D-0038 / D-0039 / D-0042 / D-0043: modern virtio-mmio, a net device,
-# hostfwd (slirp ARPs 10.0.2.15 on a host TCP connect), and capture on
-# every invocation.
-qemu_args := "-machine virt -nographic -bios default -global virtio-mmio.force-legacy=false -netdev user,id=net0,hostfwd=tcp::8080-:80,hostfwd=udp::7777-:7 -device virtio-net-device,netdev=net0 -object filter-dump,id=f0,netdev=net0,file=whimbrel.pcap"
+# D-0038 / D-0039 / D-0042 / D-0043 / D-0055: argv lives in
+# scripts/qemu-args.sh so the bench harness is not a fifth copy
+# (audit finding 28).
+qemu_args := `bash scripts/qemu-args.sh`
 
 # Cross-compile the debug kernel for riscv64gc-unknown-none-elf.
 build:
@@ -184,6 +184,10 @@ test expect="M3 UNIKERNEL OK" timeout_s="12":
             echo 'TEST FAIL: unexpected retransmit on the happy path'
             exit 1
         fi
+        # Finding 26: this name list is triplicated (test / test-fast /
+        # test-fast-release). The T4.1 harness parses PHASE lines from
+        # serial and must not become a fourth copy. Collapsing these
+        # three waits for T4.2 (D-0057), when the names change.
         for ph in _start stvec paging DRIVER_OK first_rx listen freeze sret E3g E3g_doorbell; do
             if ! grep -a -q "PHASE ${ph} " "$log"; then
                 echo "TEST FAIL: missing PHASE ${ph}"
@@ -711,6 +715,25 @@ test-fast-release:
         exit 1
     fi
     echo 'TEST PASS: release fast-boot M3 UNIKERNEL OK, curl 200, phases'
+
+# T4.1 / D-0055: N=30 recorded + 3 warmup, two consecutive batches,
+# release-default and release+fast-boot. Writes results/runs.csv,
+# results/phases.csv, results/summary.txt.
+bench-whimbrel:
+    bash scripts/bench.sh whimbrel
+
+# Fail-closed checks for the new asserts (missing tshark, malformed
+# PHASE, zero-trial CSV, QEMU/git mismatch, dirty tree).
+bench-selftest:
+    bash scripts/bench.sh selftest
+
+# Finding 14: release+fast-boot with vs without force-frame-pointers.
+bench-fp-ab:
+    bash scripts/bench.sh fp-ab
+
+# Recompute n/median/IQR/min/max from existing CSVs.
+bench-summary:
+    bash scripts/bench.sh summarize --stability
 
 # Disassemble the kernel (extra flags as one quoted arg).
 objdump flags="-d": build
