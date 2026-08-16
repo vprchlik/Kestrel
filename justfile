@@ -5,50 +5,68 @@ set shell := ["bash", "-uc"]
 target    := "riscv64gc-unknown-none-elf"
 kernel    := "target/" + target + "/debug/whimbrel"
 qemu      := "qemu-system-riscv64"
-qemu_args := "-machine virt -nographic -bios default"
+# D-0038 / D-0039 / D-0042 / D-0043: modern virtio-mmio, a net device,
+# hostfwd (slirp ARPs 10.0.2.15 on a host TCP connect), and capture on
+# every invocation.
+qemu_args := "-machine virt -nographic -bios default -global virtio-mmio.force-legacy=false -netdev user,id=net0,hostfwd=tcp::8080-:80,hostfwd=udp::7777-:7 -device virtio-net-device,netdev=net0 -object filter-dump,id=f0,netdev=net0,file=whimbrel.pcap"
 
-# Build the kernel (debug profile; target + linker script via .cargo/config.toml).
+# Cross-compile the debug kernel for riscv64gc-unknown-none-elf.
 build:
     cargo build
 
-# Boot in QEMU. Extra QEMU flags as one quoted arg,
-# e.g.  just run '-d int,cpu_reset,guest_errors -D qemu.log'
-# After T0.5, QEMU exits 0 on its own (no Ctrl-a x).
+# Boot the default kernel in QEMU (extra flags as one quoted arg).
 run qemu_extra="": build
     {{qemu}} {{qemu_args}} {{qemu_extra}} -kernel {{kernel}}
 
-# Boot a build that panics in kmain. Parks after the PANIC line (no SRST).
-# Prefer `just test-panic` for a FAIL verdict; this recipe
-# is the live serial view. Timeout is a hang-guard; its status is not swallowed.
+# Boot the persist HTTP image and sit on :8080 until QEMU is killed.
+run-http:
+    cargo build --features http-persist
+    {{qemu}} {{qemu_args}} -kernel {{kernel}}
+
+# Boot a kmain panic image (live serial; prefer test-panic for the verdict).
 panic timeout_s="5":
     cargo build --features panic-selftest
     timeout --foreground {{timeout_s}} {{qemu}} {{qemu_args}} -kernel {{kernel}}
 
-# Boot frozen at reset (-S) with the GDB stub on tcp::1234 (-s).
-# Then attach from another terminal with `just gdb`, or press F5 in the editor.
+# Boot frozen at reset with the GDB stub on tcp::1234.
 debug: build
     {{qemu}} {{qemu_args}} -s -S -kernel {{kernel}}
 
-# Attach gdb-multiarch to a running `just debug` QEMU.
+# Attach gdb-multiarch to a running just debug QEMU.
 gdb:
     gdb-multiarch {{kernel}} -ex "target remote :1234"
 
-# Every symbol referenced from .utext must resolve in user sections or a
-# task's stack/break window — not kernel .text/.rodata. `lui`/`li` values
-# are not references; `auipc+addi` to .urodata is legitimate.
+# Read $time at reset via GDB before the first guest instruction (E2).
+measure-e2:
+    bash scripts/measure-e2.sh
+
+# Every .utext reference must resolve in user sections or a task window.
 check-utext: build
     bash scripts/check-utext.sh {{kernel}}
 
-# Headless boot. Verdict from serial + QEMU status together (D-0017):
-#   PANIC in serial          → TEST FAIL (exit 1), panic line echoed
-#   timeout (status 124)     → TEST HANG (exit 2)
-#   marker + QEMU exit 0     → TEST PASS (exit 0)
-#   anything else            → TEST FAIL (exit 1)
-# Check PANIC before timeout: a panicking kernel parks, so timeout also fires.
-# just 1.58 has no kwargs: `just test expect="CSR OK"` passes the literal
-# string `expect=CSR OK` as the first positional. Strip a matching `name=`
-# prefix so that form, `just test "CSR OK"`, and the defaults all work.
-test expect="M2 EXECUTION OK" timeout_s="5":
+# Planted c.fld must fail check-utext by name (D-0044).
+check-utext-planted:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build --features utext-c-fld-selftest
+    set +e
+    out=$(bash scripts/check-utext.sh {{kernel}} 2>&1)
+    st=$?
+    set -e
+    echo "$out"
+    if [ "$st" -eq 0 ]; then
+        echo 'TEST FAIL: planted c.fld was accepted by check-utext'
+        exit 1
+    fi
+    if ! echo "$out" | grep -q 'c.fld'; then
+        echo 'TEST FAIL: check-utext failed but not by naming c.fld'
+        exit 1
+    fi
+    echo 'TEST PASS: planted c.fld rejected by name'
+    cargo build
+
+# Headless default boot: M3 UNIKERNEL OK, curl 200, phases, gateway ARP.
+test expect="M3 UNIKERNEL OK" timeout_s="12":
     #!/usr/bin/env bash
     set -u
     e='{{expect}}'
@@ -56,90 +74,199 @@ test expect="M2 EXECUTION OK" timeout_s="5":
     case "$e" in expect=*) e="${e#expect=}" ;; esac
     case "$t" in timeout_s=*) t="${t#timeout_s=}" ;; esac
     EXPECT="$e" TIMEOUT_S="$t" bash scripts/boot-test.sh
-    if [ "$e" = "SCHED OK" ] || [ "$e" = "M2 EXECUTION OK" ]; then
+    if [ "$e" = "M3 UNIKERNEL OK" ]; then
         log=serial.log
+        if ! grep -a -q 'tick 3' "$log"; then
+            echo 'TEST FAIL: missing tick 3'
+            exit 1
+        fi
         if ! grep -a -q 'frames frozen: free=' "$log"; then
             echo 'TEST FAIL: missing "frames frozen: free=N"'
             exit 1
         fi
-        if ! grep -a -q 'USER OK' "$log"; then
-            echo 'TEST FAIL: missing USER OK'
+        if ! grep -aE -q 'virtio lo[[:space:]]+0x0010001000 -> 0x0010001000  V R W   U=0 A D' "$log"; then
+            echo 'TEST FAIL: virtio-mmio window lo not mapped R+W U=0 non-X'
             exit 1
         fi
-        if ! grep -a -q 'SYSCALL OK' "$log"; then
-            echo 'TEST FAIL: missing SYSCALL OK'
+        if ! grep -aE -q 'virtio hi[[:space:]]+0x0010008fff -> 0x0010008fff  V R W   U=0 A D' "$log"; then
+            echo 'TEST FAIL: virtio-mmio window hi not mapped R+W U=0 non-X'
             exit 1
         fi
-        if ! grep -a -q 'SBRK OK' "$log"; then
-            echo 'TEST FAIL: missing SBRK OK'
+        if ! grep -a -q 'virtio-mmio 0 0x10001000 magic=0x74726976 version=2' "$log"; then
+            echo 'TEST FAIL: virtio-mmio slot 0 missing modern magic/version'
             exit 1
         fi
-        if ! grep -a -q 'task 1 exit 0' "$log"; then
-            echo 'TEST FAIL: missing "task 1 exit 0"'
+        if ! grep -a -q 'device=1 (net)' "$log"; then
+            echo 'TEST FAIL: no virtio-mmio net device in probe table'
             exit 1
         fi
-        if ! grep -a -q 'task 2 exit 0' "$log"; then
-            echo 'TEST FAIL: missing "task 2 exit 0"'
+        if ! grep -a -q 'VIRTQ OK' "$log"; then
+            echo 'TEST FAIL: missing VIRTQ OK'
             exit 1
         fi
-        if ! grep -aE -q 'task 1 done writes=[0-9]* yields=0' "$log"; then
-            echo 'TEST FAIL: missing "task 1 done writes=… yields=0"'
+        if ! grep -a -q 'DRIVER_OK' "$log"; then
+            echo 'TEST FAIL: missing DRIVER_OK'
             exit 1
         fi
-        if ! grep -aE -q 'task 2 done writes=[0-9]* yields=0' "$log"; then
-            echo 'TEST FAIL: missing "task 2 done writes=… yields=0"'
+        if ! grep -a -q 'ARP CACHE WRAP OK' "$log"; then
+            echo 'TEST FAIL: missing ARP CACHE WRAP OK'
             exit 1
         fi
-        if ! grep -aE -q 'sched switches 1->2=[1-9]' "$log"; then
-            echo 'TEST FAIL: missing sched switches 1->2=[1-9]'
+        if ! grep -a -q 'CHECKSUM OK' "$log"; then
+            echo 'TEST FAIL: missing CHECKSUM OK'
             exit 1
         fi
-        if ! grep -aE -q '2->1=[1-9]' "$log"; then
-            echo 'TEST FAIL: missing 2->1=[1-9]'
+        if ! grep -a -q 'ICMP REPLY BUILD OK' "$log"; then
+            echo 'TEST FAIL: missing ICMP REPLY BUILD OK'
             exit 1
         fi
-        if ! grep -aE '^task ' "$log" | awk '
-            /^task 2 / { if (!t2) t2 = NR }
-            /^task 1 done/ { d1 = NR }
-            END { if (!t2 || !d1 || t2 >= d1) exit 1 }
-        '; then
-            echo 'TEST FAIL: first ^task 2  line must precede ^task 1 done'
+        if ! grep -a -q 'UDP ECHO BUILD OK' "$log"; then
+            echo 'TEST FAIL: missing UDP ECHO BUILD OK'
             exit 1
         fi
-        echo 'TEST PASS: sched greps and awk order'
-    fi
-    if [ "$e" = "M2 EXECUTION OK" ]; then
-        log=serial.log
-        if ! awk '
-            /frames frozen: free=/ { f=NR }
-            /USER OK/ { u=NR }
-            /SYSCALL OK/ { s=NR }
-            /SBRK OK/ { b=NR }
-            /SCHED OK/ { c=NR }
-            /M2 EXECUTION OK/ { m=NR }
-            END { if (!(f && u && s && b && c && m) || !(f<u && u<s && s<b && b<c && c<m)) exit 1 }
-        ' "$log"; then
-            echo 'TEST FAIL: marker order (frozen, USER, SYSCALL, SBRK, SCHED, M2)'
+        if ! grep -a -q 'TCP SYN/ACK BUILD OK' "$log"; then
+            echo 'TEST FAIL: missing TCP SYN/ACK BUILD OK'
             exit 1
         fi
-        echo 'TEST PASS: M2 marker order'
+        if ! grep -a -q 'TCP LISTEN' "$log"; then
+            echo 'TEST FAIL: missing TCP LISTEN'
+            exit 1
+        fi
+        if ! grep -a -q 'TX ARP request for 10.0.2.2' "$log"; then
+            echo 'TEST FAIL: missing TX ARP request for 10.0.2.2'
+            exit 1
+        fi
+        if ! grep -a -q 'gateway 10.0.2.2 MAC learned' "$log"; then
+            echo 'TEST FAIL: missing gateway MAC learned'
+            exit 1
+        fi
+        if ! grep -a -q 'TX GARP completed=' "$log"; then
+            echo 'TEST FAIL: missing TX GARP completed'
+            exit 1
+        fi
+        if ! grep -a -q 'PING RTT dst=10.0.2.2' "$log"; then
+            echo 'TEST FAIL: missing PING RTT'
+            exit 1
+        fi
+        if ! grep -aE -q 'PING RTT dst=10.0.2.2 id=1 seq=1 tx=[0-9]+ rx=[0-9]+ ticks=[0-9]+ ns=[0-9]+' "$log"; then
+            echo 'TEST FAIL: PING RTT line is not tx/rx/ticks/ns'
+            exit 1
+        fi
+        if ! grep -a -q 'HTTP READY' "$log"; then
+            echo 'TEST FAIL: missing HTTP READY'
+            exit 1
+        fi
+        if ! grep -a -q 'HTTP DONE' "$log"; then
+            echo 'TEST FAIL: missing HTTP DONE'
+            exit 1
+        fi
+        if ! grep -a -q 'TX TCP SYN/ACK' "$log"; then
+            echo 'TEST FAIL: missing TX TCP SYN/ACK'
+            exit 1
+        fi
+        if ! grep -a -q 'TCP ESTABLISHED' "$log"; then
+            echo 'TEST FAIL: missing TCP ESTABLISHED'
+            exit 1
+        fi
+        if ! grep -a -q 'tcp: TX FIN' "$log"; then
+            echo 'TEST FAIL: missing TX FIN arithmetic'
+            exit 1
+        fi
+        if ! grep -a -q 'tcp: RX FIN' "$log"; then
+            echo 'TEST FAIL: missing RX FIN arithmetic'
+            exit 1
+        fi
+        if ! grep -a -q 'TCP TIME_WAIT (truncated)' "$log"; then
+            echo 'TEST FAIL: missing truncated TIME_WAIT'
+            exit 1
+        fi
+        if grep -a -q 'TCP RETRANSMIT' "$log"; then
+            echo 'TEST FAIL: unexpected retransmit on the happy path'
+            exit 1
+        fi
+        for ph in _start stvec paging DRIVER_OK first_rx listen freeze sret E3g; do
+            if ! grep -a -q "PHASE ${ph} " "$log"; then
+                echo "TEST FAIL: missing PHASE ${ph}"
+                exit 1
+            fi
+        done
+        if grep -a -q 'PHASE .* unset' "$log"; then
+            echo 'TEST FAIL: a PHASE stamp was unset'
+            grep -a 'PHASE .* unset' "$log" || true
+            exit 1
+        fi
+        if [ ! -f http.status ]; then
+            echo 'TEST FAIL: http.status missing (curl never ran or was killed first)'
+            exit 1
+        fi
+        if [ "$(cat http.status)" != "0" ]; then
+            echo "TEST FAIL: curl exited $(cat http.status), want 0"
+            cat http.hdr 2>/dev/null || true
+            exit 1
+        fi
+        if ! python3 -c 'import sys; sys.exit(0 if open("http.body","rb").read()==b"whimbrel\n" else 1)'; then
+            echo 'TEST FAIL: HTTP body is not exactly whimbrel\\n'
+            python3 -c 'print(open("http.body","rb").read())' 2>/dev/null || true
+            exit 1
+        fi
+        if ! grep -q 'HTTP/1.0 200' http.hdr; then
+            echo 'TEST FAIL: missing HTTP/1.0 200 in curl headers'
+            cat http.hdr
+            exit 1
+        fi
+        if ! grep -qi 'Connection: close' http.hdr; then
+            echo 'TEST FAIL: missing Connection: close in curl headers'
+            cat http.hdr
+            exit 1
+        fi
+        if ! grep -a -q 'ip_drop short=0 ver=0 ihl=0 csum=0 frag=0 dst=0 proto=0' "$log"; then
+            echo 'TEST FAIL: IPv4 malformed/proto counters are not 0'
+            exit 1
+        fi
+        if ! grep -a -q 'tcp_drop short=0 doff=0 csum=0 opt=0' "$log"; then
+            echo 'TEST FAIL: TCP malformed counters are not 0'
+            exit 1
+        fi
+        if ! grep -a -q 'udp_drop short=0 len=0 csum=0 port=0' "$log"; then
+            echo 'TEST FAIL: UDP malformed counters are not 0'
+            exit 1
+        fi
+        if ! grep -a -q 'icmp_drop short=0 csum=0' "$log"; then
+            echo 'TEST FAIL: ICMP malformed counters are not 0'
+            exit 1
+        fi
+        if ! bash scripts/assert-pcap-garp.sh whimbrel.pcap; then
+            echo 'TEST FAIL: pcap GARP assertion'
+            exit 1
+        fi
+        if ! bash scripts/assert-pcap-gateway-arp.sh whimbrel.pcap; then
+            echo 'TEST FAIL: pcap gateway ARP assertion'
+            exit 1
+        fi
+        if ! bash scripts/check-assert-fail-closed.sh; then
+            echo 'TEST FAIL: pcap assert failure-mode check'
+            exit 1
+        fi
+        if ! bash scripts/assert-pcap-icmp.sh whimbrel.pcap; then
+            echo 'TEST FAIL: pcap ICMP echo assertion'
+            exit 1
+        fi
+        if ! bash scripts/assert-pcap-http.sh whimbrel.pcap; then
+            echo 'TEST FAIL: pcap HTTP assertion'
+            exit 1
+        fi
+        echo 'TEST PASS: M3 UNIKERNEL OK, curl 200, phases, gateway ARP, pcap HTTP'
     fi
 
-# Invert the script's intentional non-zero so just does not print
-# "recipe failed" for a designed FAIL/HANG. `-` would also hide a
-# regression (panic-selftest shutting down cleanly would look green).
-# `just test` is unchanged: it still fails the recipe on a non-pass.
+# Designed FAIL: panic-selftest parks after PANIC (exit 1).
 test-panic:
     bash scripts/boot-test.sh panic-selftest; [ $? -eq 1 ]
 
+# Designed HANG: hang-selftest prints nothing until timeout (exit 2).
 test-hang:
     bash scripts/boot-test.sh hang-selftest; [ $? -eq 2 ]
 
-# Allocator storm at 10 ms then 1 ms ticks, then frame-exhaust panic.
-# Exhaust is a designed PANIC (same harness shape as test-panic).
-# The `frames N` total is taken from **this exhaust boot's** FRAME OK line,
-# not from `just run`. Feature images shift `__heap_end`, so the default
-# kernel can print 31866 while exhaust prints 31867 — that is not a mismatch.
+# Allocator storm then frame-exhaust panic with matching total.
 test-stress:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -164,8 +291,7 @@ test-stress:
     fi
     echo "TEST PASS: frame exhaust total=${n}"
 
-# Both invalid-pointer shapes, each in its own image so the kill of one
-# cannot hide the other (D-0034).
+# Both invalid-pointer shapes, each in its own image (D-0034).
 test-userptr:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -181,8 +307,7 @@ test-userptr:
     fi
     echo 'TEST PASS: both invalid-pointer shapes killed'
 
-# T2.10: one task takes a U-mode load page fault; the other continues and
-# the kernel shuts down cleanly (exit 0, not the inverted panic recipes).
+# U-mode load page fault kills one task; the other finishes (D-0034).
 test-user-fault:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -197,8 +322,7 @@ test-user-fault:
     fi
     echo 'TEST PASS: user fault contained, survivor finished'
 
-# T2.11: freeze then a deliberate alloc_frame. Designed PANIC (same harness
-# shape as test-panic).
+# Freeze then a deliberate alloc_frame must panic.
 test-freeze:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -221,10 +345,377 @@ test-freeze:
     fi
     echo 'TEST PASS: freeze then alloc_frame panicked'
 
-# Disassemble the kernel. Extra flags as one quoted arg, e.g. just objdump '-d --source'
+# Handshake sibling: DRIVER_OK, gateway ARP, ping, TCP handshake (no U-mode).
+test-net-init:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    EXPECT="NET INIT OK" TIMEOUT_S=8 bash scripts/boot-test.sh net-init-selftest
+    if ! grep -a -q 'virtio-net: FEATURES_OK status=' serial.log; then
+        echo 'TEST FAIL: missing FEATURES_OK readback'
+        exit 1
+    fi
+    if ! grep -a -q 'DRIVER_OK' serial.log; then
+        echo 'TEST FAIL: missing DRIVER_OK'
+        exit 1
+    fi
+    if ! grep -aE -q 'virtio-net: mac [0-9a-f]{2}(:[0-9a-f]{2}){5}' serial.log; then
+        echo 'TEST FAIL: missing MAC'
+        exit 1
+    fi
+    if ! grep -a -q 'net: dump status=' serial.log; then
+        echo 'TEST FAIL: missing net::dump'
+        exit 1
+    fi
+    if ! grep -a -q 'ARP CACHE WRAP OK' serial.log; then
+        echo 'TEST FAIL: missing ARP CACHE WRAP OK'
+        exit 1
+    fi
+    if ! grep -a -q 'CHECKSUM OK' serial.log; then
+        echo 'TEST FAIL: missing CHECKSUM OK'
+        exit 1
+    fi
+    if ! grep -a -q 'ICMP REPLY BUILD OK' serial.log; then
+        echo 'TEST FAIL: missing ICMP REPLY BUILD OK'
+        exit 1
+    fi
+    if ! grep -a -q 'UDP ECHO BUILD OK' serial.log; then
+        echo 'TEST FAIL: missing UDP ECHO BUILD OK'
+        exit 1
+    fi
+    if ! grep -a -q 'TCP SYN/ACK BUILD OK' serial.log; then
+        echo 'TEST FAIL: missing TCP SYN/ACK BUILD OK'
+        exit 1
+    fi
+    if ! grep -a -q 'TX ARP request for 10.0.2.2' serial.log; then
+        echo 'TEST FAIL: missing TX ARP request for 10.0.2.2'
+        exit 1
+    fi
+    if ! grep -a -q 'TX GARP completed=' serial.log; then
+        echo 'TEST FAIL: missing TX GARP completed'
+        exit 1
+    fi
+    if ! grep -a -q 'gateway 10.0.2.2 MAC learned' serial.log; then
+        echo 'TEST FAIL: missing gateway MAC learned'
+        exit 1
+    fi
+    if ! grep -a -q 'TX TCP SYN/ACK' serial.log; then
+        echo 'TEST FAIL: missing TX TCP SYN/ACK'
+        exit 1
+    fi
+    if ! grep -a -q 'TCP ESTABLISHED' serial.log; then
+        echo 'TEST FAIL: missing TCP ESTABLISHED'
+        exit 1
+    fi
+    if ! bash scripts/assert-pcap-garp.sh whimbrel.pcap; then
+        echo 'TEST FAIL: pcap GARP assertion'
+        exit 1
+    fi
+    if ! grep -a -q 'virtio-net: RX arp' serial.log; then
+        echo 'TEST FAIL: missing RX arp classification'
+        exit 1
+    fi
+    if ! grep -aE -q 'rx avail=[0-9]+ used=[1-9][0-9]* posted=[0-9]+ completed=[1-9]' serial.log; then
+        echo 'TEST FAIL: RX completed did not increment'
+        exit 1
+    fi
+    if ! bash scripts/assert-pcap-gateway-arp.sh whimbrel.pcap; then
+        echo 'TEST FAIL: pcap gateway ARP assertion'
+        exit 1
+    fi
+    if ! grep -a -q 'PING RTT dst=10.0.2.2' serial.log; then
+        echo 'TEST FAIL: missing PING RTT'
+        exit 1
+    fi
+    if ! grep -aE -q 'PING RTT dst=10.0.2.2 id=1 seq=1 tx=[0-9]+ rx=[0-9]+ ticks=[0-9]+ ns=[0-9]+' serial.log; then
+        echo 'TEST FAIL: PING RTT line is not tx/rx/ticks/ns'
+        exit 1
+    fi
+    if ! grep -a -q 'ip_drop short=0 ver=0 ihl=0 csum=0 frag=0 dst=0 proto=0' serial.log; then
+        echo 'TEST FAIL: IPv4 malformed/proto counters are not 0'
+        exit 1
+    fi
+    if ! grep -a -q 'tcp_drop short=0 doff=0 csum=0 opt=0' serial.log; then
+        echo 'TEST FAIL: TCP malformed counters are not 0'
+        exit 1
+    fi
+    if ! grep -a -q 'udp_drop short=0 len=0 csum=0 port=0' serial.log; then
+        echo 'TEST FAIL: UDP malformed counters are not 0'
+        exit 1
+    fi
+    if ! grep -a -q 'icmp_drop short=0 csum=0' serial.log; then
+        echo 'TEST FAIL: ICMP malformed counters are not 0'
+        exit 1
+    fi
+    if ! bash scripts/assert-pcap-icmp.sh whimbrel.pcap; then
+        echo 'TEST FAIL: pcap ICMP echo assertion'
+        exit 1
+    fi
+    if ! bash scripts/assert-pcap-tcp-handshake.sh whimbrel.pcap; then
+        echo 'TEST FAIL: pcap TCP handshake assertion'
+        exit 1
+    fi
+    echo 'TEST PASS: DRIVER_OK, MAC, dump, gateway ARP, GARP, RX ARP, PING RTT, TCP handshake'
+
+# TCP handshake sibling of test-net-init (no HTTP); connect after gateway MAC.
+test-net-tcp:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    EXPECT="NET INIT OK" TIMEOUT_S=12 bash scripts/boot-test.sh net-init-selftest
+    if ! grep -a -q 'TCP SYN/ACK BUILD OK' serial.log; then
+        echo 'TEST FAIL: missing TCP SYN/ACK BUILD OK'
+        exit 1
+    fi
+    if ! grep -a -q 'TCP LISTEN' serial.log; then
+        echo 'TEST FAIL: missing TCP LISTEN'
+        exit 1
+    fi
+    if ! grep -a -q 'gateway 10.0.2.2 MAC learned' serial.log; then
+        echo 'TEST FAIL: missing gateway MAC learned'
+        exit 1
+    fi
+    if ! grep -a -q 'TX TCP SYN/ACK' serial.log; then
+        echo 'TEST FAIL: missing TX TCP SYN/ACK'
+        exit 1
+    fi
+    if ! grep -a -q 'TCP ESTABLISHED' serial.log; then
+        echo 'TEST FAIL: missing TCP ESTABLISHED'
+        exit 1
+    fi
+    if ! grep -a -q 'ip_drop short=0 ver=0 ihl=0 csum=0 frag=0 dst=0 proto=0' serial.log; then
+        echo 'TEST FAIL: IPv4 malformed/proto counters are not 0'
+        exit 1
+    fi
+    if ! grep -a -q 'tcp_drop short=0 doff=0 csum=0 opt=0' serial.log; then
+        echo 'TEST FAIL: TCP malformed counters are not 0'
+        exit 1
+    fi
+    if ! bash scripts/assert-pcap-tcp-handshake.sh whimbrel.pcap; then
+        echo 'TEST FAIL: pcap TCP handshake assertion'
+        exit 1
+    fi
+    echo 'TEST PASS: TCP LISTEN → SYN_RCVD → ESTABLISHED, pcap SYN→SYN/ACK→ACK, checksum good, no RST'
+
+# UDP echo in the app over recv/send; SOCK_DGRAM client, silence is FAIL.
+test-net-udp:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    EXPECT="NET UDP OK" TIMEOUT_S=8 bash scripts/boot-test.sh net-udp-selftest
+    if [ ! -f udp-echo.got ]; then
+        echo 'TEST FAIL: udp-echo.got missing (client never ran or timed out)'
+        cat udp-echo.status 2>/dev/null || true
+        exit 1
+    fi
+    if [ "$(cat udp-echo.status 2>/dev/null || echo 1)" != "0" ]; then
+        echo 'TEST FAIL: UDP echo client exited nonzero'
+        cat udp-echo.status || true
+        exit 1
+    fi
+    if [ "$(cat udp-echo.got)" != "whimbrel-udp-echo" ]; then
+        echo "TEST FAIL: UDP payload mismatch: $(cat udp-echo.got | sed 's/[^[:print:]]/?/g')"
+        exit 1
+    fi
+    if ! grep -a -q 'UDP ECHO READY' serial.log; then
+        echo 'TEST FAIL: missing UDP ECHO READY'
+        exit 1
+    fi
+    if ! grep -a -q 'TX UDP echo' serial.log; then
+        echo 'TEST FAIL: missing TX UDP echo'
+        exit 1
+    fi
+    if ! grep -a -q 'udp_drop short=0 len=0 csum=0 port=0' serial.log; then
+        echo 'TEST FAIL: UDP malformed counters are not 0'
+        exit 1
+    fi
+    if ! grep -a -q 'ip_drop short=0 ver=0 ihl=0 csum=0 frag=0 dst=0 proto=0' serial.log; then
+        echo 'TEST FAIL: IPv4 malformed/proto counters are not 0'
+        exit 1
+    fi
+    if ! bash scripts/assert-pcap-udp-echo.sh whimbrel.pcap; then
+        echo 'TEST FAIL: pcap UDP echo assertion'
+        exit 1
+    fi
+    echo 'TEST PASS: UDP echo verbatim, pcap request→reply'
+
+# One GET: HTTP/1.0 200, Connection: close, FIN close, no RST.
+test-net-http:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    EXPECT="HTTP OK" TIMEOUT_S=12 bash scripts/boot-test.sh net-http-selftest
+    if [ ! -f http.status ]; then
+        echo 'TEST FAIL: http.status missing (curl never ran or was killed first)'
+        exit 1
+    fi
+    if [ "$(cat http.status)" != "0" ]; then
+        echo "TEST FAIL: curl exited $(cat http.status), want 0"
+        cat http.hdr 2>/dev/null || true
+        exit 1
+    fi
+    if ! python3 -c 'import sys; sys.exit(0 if open("http.body","rb").read()==b"whimbrel\n" else 1)'; then
+        echo 'TEST FAIL: HTTP body is not exactly whimbrel\\n'
+        python3 -c 'print(open("http.body","rb").read())' 2>/dev/null || true
+        exit 1
+    fi
+    if ! grep -q 'HTTP/1.0 200' http.hdr; then
+        echo 'TEST FAIL: missing HTTP/1.0 200 in curl headers'
+        cat http.hdr
+        exit 1
+    fi
+    if ! grep -qi 'Connection: close' http.hdr; then
+        echo 'TEST FAIL: missing Connection: close in curl headers'
+        cat http.hdr
+        exit 1
+    fi
+    if ! grep -a -q 'HTTP READY' serial.log; then
+        echo 'TEST FAIL: missing HTTP READY'
+        exit 1
+    fi
+    if ! grep -a -q 'HTTP DONE' serial.log; then
+        echo 'TEST FAIL: missing HTTP DONE'
+        exit 1
+    fi
+    if ! grep -a -q 'tcp: TX FIN' serial.log; then
+        echo 'TEST FAIL: missing TX FIN arithmetic'
+        exit 1
+    fi
+    if ! grep -a -q 'tcp: RX FIN' serial.log; then
+        echo 'TEST FAIL: missing RX FIN arithmetic'
+        exit 1
+    fi
+    if ! grep -a -q 'TCP TIME_WAIT (truncated)' serial.log; then
+        echo 'TEST FAIL: missing truncated TIME_WAIT'
+        exit 1
+    fi
+    if grep -a -q 'TCP RETRANSMIT' serial.log; then
+        echo 'TEST FAIL: unexpected retransmit on the happy path'
+        exit 1
+    fi
+    if ! grep -a -q 'ip_drop short=0 ver=0 ihl=0 csum=0 frag=0 dst=0 proto=0' serial.log; then
+        echo 'TEST FAIL: IPv4 malformed/proto counters are not 0'
+        exit 1
+    fi
+    if ! grep -a -q 'tcp_drop short=0 doff=0 csum=0 opt=0' serial.log; then
+        echo 'TEST FAIL: TCP malformed counters are not 0'
+        exit 1
+    fi
+    if ! bash scripts/assert-pcap-http.sh whimbrel.pcap; then
+        echo 'TEST FAIL: pcap HTTP assertion'
+        exit 1
+    fi
+    echo 'TEST PASS: curl 200 whimbrel, Connection: close, FIN close, checksums good, no RST'
+
+# Drop-first-tx: one RTO retransmit ~200ms, two copies, second ACKed.
+test-net-rto:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    EXPECT="HTTP RETRANSMIT OK" TIMEOUT_S=12 bash scripts/boot-test.sh tcp-drop-first-tx
+    if [ ! -f http.status ]; then
+        echo 'TEST FAIL: http.status missing (curl never ran or was killed first)'
+        exit 1
+    fi
+    if [ "$(cat http.status)" != "0" ]; then
+        echo "TEST FAIL: curl exited $(cat http.status), want 0"
+        cat http.hdr 2>/dev/null || true
+        exit 1
+    fi
+    if ! python3 -c 'import sys; sys.exit(0 if open("http.body","rb").read()==b"whimbrel\n" else 1)'; then
+        echo 'TEST FAIL: HTTP body is not exactly whimbrel\\n'
+        python3 -c 'print(open("http.body","rb").read())' 2>/dev/null || true
+        exit 1
+    fi
+    if ! grep -a -q 'TCP RETRANSMIT' serial.log; then
+        echo 'TEST FAIL: missing TCP RETRANSMIT (timer never fired)'
+        exit 1
+    fi
+    if ! grep -aE -q 'rexmit=1($|[^0-9])' serial.log; then
+        echo 'TEST FAIL: dump rexmit is not 1'
+        grep -a 'rexmit=' serial.log || true
+        exit 1
+    fi
+    if ! grep -a -q 'ip_drop short=0 ver=0 ihl=0 csum=0 frag=0 dst=0 proto=0' serial.log; then
+        echo 'TEST FAIL: IPv4 malformed/proto counters are not 0'
+        exit 1
+    fi
+    if ! bash scripts/assert-pcap-tcp-retransmit.sh whimbrel.pcap; then
+        echo 'TEST FAIL: pcap retransmit assertion'
+        exit 1
+    fi
+    echo 'TEST PASS: one RTO retransmit ~200ms, two copies same seq, second ACKed'
+
+# fast-boot profile: no tick wait, no self-tests; curl and PHASE still required.
+test-fast:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    EXPECT="M3 UNIKERNEL OK" TIMEOUT_S=12 bash scripts/boot-test.sh fast-boot
+    log=serial.log
+    for ph in _start stvec paging DRIVER_OK first_rx listen freeze sret E3g; do
+        if ! grep -a -q "PHASE ${ph} " "$log"; then
+            echo "TEST FAIL: missing PHASE ${ph}"
+            exit 1
+        fi
+    done
+    if grep -a -q 'PHASE .* unset' "$log"; then
+        echo 'TEST FAIL: a PHASE stamp was unset'
+        grep -a 'PHASE .* unset' "$log" || true
+        exit 1
+    fi
+    if [ ! -f http.status ] || [ "$(cat http.status)" != "0" ]; then
+        echo "TEST FAIL: curl status $(cat http.status 2>/dev/null || echo missing), want 0"
+        exit 1
+    fi
+    if ! python3 -c 'import sys; sys.exit(0 if open("http.body","rb").read()==b"whimbrel\n" else 1)'; then
+        echo 'TEST FAIL: HTTP body is not exactly whimbrel\\n'
+        exit 1
+    fi
+    if ! bash scripts/assert-pcap-gateway-arp.sh whimbrel.pcap; then
+        echo 'TEST FAIL: pcap gateway ARP assertion'
+        exit 1
+    fi
+    if ! bash scripts/assert-pcap-http.sh whimbrel.pcap; then
+        echo 'TEST FAIL: pcap HTTP assertion'
+        exit 1
+    fi
+    echo 'TEST PASS: fast-boot M3 UNIKERNEL OK, curl 200, phases'
+
+# Release+fast-boot phases with a client retrying before E0 (D-0043).
+test-fast-release:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    PROFILE=release CLIENT_EARLY=1 EXPECT="M3 UNIKERNEL OK" TIMEOUT_S=12 \
+        bash scripts/boot-test.sh fast-boot
+    log=serial.log
+    for ph in _start stvec paging DRIVER_OK first_rx listen freeze sret E3g; do
+        if ! grep -a -q "PHASE ${ph} " "$log"; then
+            echo "TEST FAIL: missing PHASE ${ph}"
+            exit 1
+        fi
+    done
+    if grep -a -q 'PHASE .* unset' "$log"; then
+        echo 'TEST FAIL: a PHASE stamp was unset'
+        grep -a 'PHASE .* unset' "$log" || true
+        exit 1
+    fi
+    if [ ! -f http.status ] || [ "$(cat http.status)" != "0" ]; then
+        echo "TEST FAIL: curl status $(cat http.status 2>/dev/null || echo missing), want 0"
+        exit 1
+    fi
+    if ! python3 -c 'import sys; sys.exit(0 if open("http.body","rb").read()==b"whimbrel\n" else 1)'; then
+        echo 'TEST FAIL: HTTP body is not exactly whimbrel\\n'
+        exit 1
+    fi
+    if ! bash scripts/assert-pcap-gateway-arp.sh whimbrel.pcap; then
+        echo 'TEST FAIL: pcap gateway ARP assertion'
+        exit 1
+    fi
+    if ! bash scripts/assert-pcap-http.sh whimbrel.pcap; then
+        echo 'TEST FAIL: pcap HTTP assertion'
+        exit 1
+    fi
+    echo 'TEST PASS: release fast-boot M3 UNIKERNEL OK, curl 200, phases'
+
+# Disassemble the kernel (extra flags as one quoted arg).
 objdump flags="-d": build
     cargo objdump -- {{flags}}
 
-# Map an address (e.g. a faulting sepc) to a source line:  just addr2line 0x80200048
+# Map a guest address to a source line.
 addr2line addr: build
     gdb-multiarch -batch -ex "info line *{{addr}}" {{kernel}}

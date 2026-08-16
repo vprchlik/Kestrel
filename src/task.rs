@@ -79,7 +79,11 @@ extern "C" {
 }
 
 fn pa(sym: *const u8) -> usize {
-    sym as usize
+    // Distinct `extern static`s are non-aliasing to LLVM, so `==` on
+    // their addresses constant-folds to false under LTO even when the
+    // linker placed them at the same VA (`__kernel_end` == `__heap_start`).
+    // `black_box` keeps the comparison as a runtime load of the symbol.
+    core::hint::black_box(sym as usize)
 }
 
 /// One task slot's linker addresses. All 4 KiB-aligned. D-0030.
@@ -197,11 +201,7 @@ fn check_slot(
     ktop: usize,
 ) {
     require_aligned("ustack guard", uguard);
-    require(
-        "ustack guard size",
-        ubottom.wrapping_sub(uguard),
-        GUARD,
-    );
+    require("ustack guard size", ubottom.wrapping_sub(uguard), GUARD);
     require("ustack size", utop.wrapping_sub(ubottom), STACK);
     require("break size", brk_wall.wrapping_sub(brk_base), BREAK);
     require("kstack guard size", kbottom.wrapping_sub(kguard), GUARD);
@@ -469,16 +469,13 @@ pub fn create(id: usize, entry: usize) {
     }
 }
 
-/// Create the static table. Default boot: tasks 1 and 2 are the T2.9
-/// demo (Ready); 0 and 3 are Exited so round-robin cannot `sret` into
-/// `sepc = 0`. Userptr selftests keep a single Ready task in slot 0.
-/// `user-fault-selftest` uses the same two-task table; `kmain` `enter`s
-/// task 2 so the load page fault is the first U-mode work.
+/// Create the static table. Default (and HTTP/UDP/persist/fast-boot)
+/// images run the compiled app in slot 3 (D-0051). Userptr selftests
+/// keep a single Ready task in slot 0. `user-fault-selftest` keeps the
+/// T2.10 two-task table; `kmain` `enter`s task 2 so the load page fault
+/// is the first U-mode work.
 pub fn init() {
-    #[cfg(any(
-        feature = "userptr-kernel-selftest",
-        feature = "userptr-span-selftest"
-    ))]
+    #[cfg(any(feature = "userptr-kernel-selftest", feature = "userptr-span-selftest"))]
     {
         create(0, crate::user::entry());
         for id in 1..MAX_TASKS {
@@ -486,10 +483,7 @@ pub fn init() {
             get(id).state = State::Exited;
         }
     }
-    #[cfg(not(any(
-        feature = "userptr-kernel-selftest",
-        feature = "userptr-span-selftest"
-    )))]
+    #[cfg(feature = "user-fault-selftest")]
     {
         create(0, 0);
         create(1, crate::user::task1());
@@ -497,6 +491,20 @@ pub fn init() {
         create(3, 0);
         get(0).state = State::Exited;
         get(3).state = State::Exited;
+    }
+    #[cfg(not(any(
+        feature = "userptr-kernel-selftest",
+        feature = "userptr-span-selftest",
+        feature = "user-fault-selftest",
+    )))]
+    {
+        create(0, 0);
+        create(1, 0);
+        create(2, 0);
+        create(3, crate::user::app());
+        get(0).state = State::Exited;
+        get(1).state = State::Exited;
+        get(2).state = State::Exited;
     }
     println!(
         "fabricated sstatus {:#x} (SPIE=1 SPP=U SIE=0 FS=Off UXL=64)",
@@ -534,16 +542,7 @@ pub fn init() {
 /// Mark `id` Running and `sret` into its fabricated frame. Does not return
 /// (D-0035). `sscratch` is still 0 here; `__trap_return`'s U tail parks the
 /// user `sp` and swaps `kstack_top` into `sscratch` immediately before `sret`.
-#[cfg_attr(
-    any(
-        feature = "panic-selftest",
-        feature = "hang-selftest",
-        feature = "stress",
-        feature = "frame-exhaust-selftest",
-        feature = "freeze-selftest"
-    ),
-    allow(dead_code)
-)]
+#[cfg(not(feature = "no-sret"))]
 pub fn enter(id: usize) -> ! {
     // D-0036: freeze before the first `sret`. Two independent reasons the
     // D-0028 hazard is gone (they fail independently, which is why both
@@ -560,26 +559,31 @@ pub fn enter(id: usize) -> ! {
     //    `SIE` from `SPIE` in U only. The handler is the only kernel code
     //    that runs at all.
     //
-    // Consumed frames are 65 tables (root + L1 + 63 L0) plus the two
-    // FRAME OK self-test leftovers (D-0036). Feature images can shift
-    // `total` with `__heap_end`; the split must still hold.
+    // Consumed frames are 67 tables (M2's 65 plus D-0039's L1+L0 for
+    // the virtio-mmio VPN[2]) plus, except under `fast-boot`, the two
+    // FRAME OK self-test leftovers (D-0036). The MMIO pages themselves
+    // are not RAM and do not come from the pool — `total_frames()` is
+    // unchanged. Feature images can shift `total` with `__heap_end`;
+    // the split must still hold.
     {
         let total = crate::frame::total_frames();
         let free = crate::frame::free_count();
         let tables = crate::page::tables_used();
         let held = total - free;
-        if tables != 65 || held != tables + 2 {
+        let leftover = if cfg!(feature = "fast-boot") { 0 } else { 2 };
+        if tables != 67 || held != tables + leftover {
             panic!(
-                "frames held {} tables {} want tables=65 held=67 (root+L1+63 L0 + FRAME OK pair)",
-                held, tables
+                "frames held {} tables {} leftover {} want tables=67 leftover={}",
+                held, tables, leftover, leftover
             );
         }
         println!(
-            "frames consumed: tables={} selftest=2 held={}",
-            tables, held
+            "frames consumed: tables={} selftest={} held={}",
+            tables, leftover, held
         );
     }
     crate::frame::freeze();
+    crate::phase::stamp(crate::phase::FREEZE);
     let t = get(id);
     let sepc = unsafe { (*t.frame).sepc };
     println!(
@@ -588,6 +592,7 @@ pub fn enter(id: usize) -> ! {
     );
     t.state = State::Running;
     unsafe { CURRENT = Some(id) };
+    crate::phase::stamp(crate::phase::SRET);
     trap::resume(t.frame);
 }
 
@@ -603,7 +608,9 @@ pub fn has_current() -> bool {
     unsafe { core::ptr::read_volatile(&raw const CURRENT) }.is_some()
 }
 
+#[allow(dead_code)]
 static mut SWITCH_12: usize = 0;
+#[allow(dead_code)]
 static mut SWITCH_21: usize = 0;
 
 fn next_ready_after(id: usize) -> Option<usize> {
@@ -644,9 +651,7 @@ pub fn preempt(frame: &mut TrapFrame) -> &mut TrapFrame {
     if cur.frame as usize != frame as *mut TrapFrame as usize {
         panic!(
             "preempt: frame {:#x} is not task {}'s {:#x}",
-            frame as *mut TrapFrame as usize,
-            cur.id,
-            cur.frame as usize
+            frame as *mut TrapFrame as usize, cur.id, cur.frame as usize
         );
     }
     cur.state = State::Ready;
@@ -661,10 +666,9 @@ pub fn yield_cpu(frame: &mut TrapFrame) -> &mut TrapFrame {
     preempt(frame)
 }
 
-/// Last `exit` with an empty ready set: assert the T2.9 predicate, print
-/// `SCHED OK`, shut down. No idle loop (D-0035). The user-fault selftest
-/// has a different last-task path: task 2 is killed before it ever writes,
-/// so the 1→2 switch never happens and the T2.9 switch counts would panic.
+/// Last `exit` with an empty ready set: dump the stack and shut down.
+/// HTTP/UDP images print their marker here. The user-fault selftest has
+/// a different last-task path (D-0034). No idle loop (D-0035).
 fn finish_sched() -> ! {
     #[cfg(feature = "user-fault-selftest")]
     {
@@ -672,52 +676,28 @@ fn finish_sched() -> ! {
     }
     #[cfg(not(feature = "user-fault-selftest"))]
     {
-        let t1 = get(1);
-        let t2 = get(2);
-        let sw12 = unsafe { SWITCH_12 };
-        let sw21 = unsafe { SWITCH_21 };
-        if t1.state != State::Exited || t2.state != State::Exited {
-            panic!(
-                "sched: task1 {} task2 {} switches 1->2={} 2->1={}",
-                state_name(t1.state),
-                state_name(t2.state),
-                sw12,
-                sw21
-            );
-        }
-        if t1.yields != 0 || t2.yields != 0 {
-            panic!(
-                "sched: yields task1={} task2={} want 0",
-                t1.yields, t2.yields
-            );
-        }
-        if t2.brk == t2.brk_base {
-            panic!("sched: task 2 never sbrk'd");
-        }
-        if sw12 == 0 || sw21 == 0 {
-            panic!(
-                "sched: switches 1->2={} 2->1={} (need at least one each way)",
-                sw12, sw21
-            );
-        }
-        println!(
-            "task 1 done writes={} yields={}",
-            t1.writes, t1.yields
-        );
-        println!(
-            "task 2 done writes={} yields={}",
-            t2.writes, t2.yields
-        );
-        println!(
-            "sched switches 1->2={} 2->1={} yields={}",
-            sw12,
-            sw21,
-            t1.yields + t2.yields
-        );
-        println!("SCHED OK");
-        println!("M2 EXECUTION OK");
-        stop_until_scheduler();
+        finish_app();
     }
+}
+
+#[cfg(not(feature = "user-fault-selftest"))]
+fn finish_app() -> ! {
+    crate::net::dump();
+    #[cfg(feature = "net-udp-selftest")]
+    println!("NET UDP OK");
+    #[cfg(feature = "tcp-drop-first-tx")]
+    {
+        if crate::tcp::rexmit() != 1 {
+            panic!(
+                "tcp: drop-first-tx expected exactly one retransmit, got {}",
+                crate::tcp::rexmit()
+            );
+        }
+        println!("HTTP RETRANSMIT OK");
+    }
+    #[cfg(all(not(feature = "net-udp-selftest"), not(feature = "tcp-drop-first-tx")))]
+    println!("HTTP OK");
+    stop_until_scheduler();
 }
 
 #[cfg(feature = "user-fault-selftest")]
@@ -734,10 +714,7 @@ fn finish_user_fault() -> ! {
     if t1.writes == 0 {
         panic!("userfault: survivor wrote nothing");
     }
-    println!(
-        "task 1 done writes={} yields={}",
-        t1.writes, t1.yields
-    );
+    println!("task 1 done writes={} yields={}", t1.writes, t1.yields);
     println!("USERFAULT OK");
     stop_until_scheduler();
 }

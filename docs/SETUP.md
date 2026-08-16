@@ -13,12 +13,27 @@ sudo apt-get install -y \
     qemu-system-misc \        # provides qemu-system-riscv64 (the whole "hardware")
     gdb-multiarch \           # GDB built with riscv64 support (Debian/Ubuntu naming)
     build-essential \         # linker/binutils/make for build scripts and C-adjacent tooling
+    tshark \                  # pcap assertions in the M3+ net harness (filter-dump captures)
     curl git
 ```
 
 Version note: any QEMU ≥ 7.x is fine (Ubuntu 22.04+ ships qemu ≥ 6.2 which
 also works). The exact version in use gets recorded in the M4 report for
 reproducibility: `qemu-system-riscv64 --version`.
+
+M3 note: from T3.1 every QEMU invocation (`just run`, `just test`,
+`just panic`, `just debug`, and `scripts/boot-test.sh`) carries
+`-global virtio-mmio.force-legacy=false` (modern virtio-mmio, D-0038)
+and a `virtio-net-device` on `-netdev user,id=net0` (D-0039: a netless
+boot is a misconfigured harness). From T3.4 every invocation also
+carries `-object filter-dump,id=f0,netdev=net0,file=whimbrel.pcap`
+(D-0043: capture is standing infrastructure). From T3.5 every
+invocation also carries `hostfwd=tcp::8080-:80` on that netdev — a host
+TCP connect to 127.0.0.1:8080 is what makes slirp ARP for 10.0.2.15.
+From T3.8 every invocation also carries `hostfwd=udp::7777-:7` (UDP
+echo on guest port 7). `tshark` above is what the harness uses to assert
+on those captures — without it, `just test` fails on a machine that has
+everything else.
 
 ## 2. Rust toolchain
 
@@ -66,7 +81,7 @@ just build   # cross-compiles the scaffold kernel
 just test    # boots it headless, asserts on kernel marker
 ```
 
-Expected: `TEST PASS: found "M2 EXECUTION OK"` and exit 0. `just test-panic`
+Expected: `TEST PASS: found "M3 UNIKERNEL OK"` and exit 0. `just test-panic`
 exits 1; `just test-hang` exits 2.
 
 **3c. Debug loop:** `just debug` in one terminal (QEMU frozen, GDB stub on

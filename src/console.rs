@@ -25,10 +25,25 @@ pub fn print_fmt(args: fmt::Arguments) {
     }
 }
 
+/// Always reaches DBCN. Panic, the phase block, and `M3 UNIKERNEL OK`
+/// use this so `fast-boot` can compile out ordinary `println!`.
+#[macro_export]
+macro_rules! println_always {
+    () => {
+        $crate::console::print_fmt(core::format_args!("\n"))
+    };
+    ($($arg:tt)*) => {
+        $crate::console::print_fmt(core::format_args!("{}\n", format_args!($($arg)*)))
+    };
+}
+
 #[macro_export]
 macro_rules! print {
     ($($arg:tt)*) => {
-        $crate::console::print_fmt(core::format_args!($($arg)*))
+        #[cfg(not(feature = "fast-boot"))]
+        {
+            $crate::console::print_fmt(core::format_args!($($arg)*))
+        }
     };
 }
 

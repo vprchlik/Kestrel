@@ -12,6 +12,7 @@ $SUDO apt-get install -y \
     qemu-system-misc \
     gdb-multiarch \
     build-essential \
+    tshark \
     curl git
 
 if ! command -v rustup >/dev/null 2>&1; then

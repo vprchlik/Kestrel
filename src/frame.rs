@@ -98,6 +98,10 @@ pub fn total_frames() -> usize {
 }
 
 /// Length of the free list. Read-only: does not allocate or free.
+#[cfg_attr(
+    all(feature = "no-sret", not(feature = "freeze-selftest")),
+    allow(dead_code)
+)]
 pub fn free_count() -> usize {
     let mut n = 0usize;
     let mut pa = unsafe { HEAD };
@@ -116,12 +120,7 @@ pub fn free_count() -> usize {
 /// request. Called immediately before the first `sret` to U. Prints
 /// `frames frozen: free=N`.
 #[cfg_attr(
-    any(
-        feature = "panic-selftest",
-        feature = "hang-selftest",
-        feature = "stress",
-        feature = "frame-exhaust-selftest"
-    ),
+    all(feature = "no-sret", not(feature = "freeze-selftest")),
     allow(dead_code)
 )]
 pub fn freeze() {

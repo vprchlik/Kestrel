@@ -1,9 +1,10 @@
 //! Syscall numbers, error codes, and `ecall`-from-U dispatch.
 //!
-//! Owns the ABI (D-0033): number in `a7`, arguments in `a0`–`a5`, return
-//! pair written into the trap frame. Bodies for the five calls live here.
-//! `yield` and `exit` return the next Ready frame (D-0032); an unknown
-//! number or invalid user pointer kills the task (D-0034).
+//! Owns the ABI (D-0033, D-0040): number in `a7`, arguments in `a0`–`a5`,
+//! return pair written into the trap frame. Bodies for the seven calls
+//! live here. `yield` and `exit` return the next Ready frame (D-0032);
+//! an unknown number or invalid user pointer kills the task (D-0034).
+//! `recv` is what polls the NIC (D-0040).
 
 #![cfg_attr(
     any(feature = "panic-selftest", feature = "hang-selftest"),
@@ -11,6 +12,7 @@
 )]
 
 use crate::csr;
+use crate::net;
 use crate::println;
 use crate::sbi;
 use crate::task;
@@ -24,6 +26,8 @@ pub const SYS_EXIT: usize = 2;
 pub const SYS_SBRK: usize = 3;
 pub const SYS_GETTIME: usize = 4;
 pub const SYS_YIELD: usize = 5;
+pub const SYS_RECV: usize = 6;
+pub const SYS_SEND: usize = 7;
 
 /// Success. Same *shape* as SBI (`a0 == 0`), not SBI's numeric list (D-0033).
 pub const OK: isize = 0;
@@ -34,9 +38,17 @@ pub const ERR_INVALID_PARAM: isize = -1;
 pub const ERR_INVALID_ADDRESS: isize = -2;
 /// `sbrk` past the wall or below `brk_base`.
 pub const ERR_NO_MEM: isize = -3;
+/// `recv` polled the NIC and nothing was waiting (D-0040).
+pub const ERR_AGAIN: isize = -4;
+
+/// `send` flags bit 0. UDP ignores it (D-0051).
+#[allow(dead_code)]
+pub const SEND_FIN: usize = 1;
 
 const _: () = assert!(SYS_RESERVED == 0);
 const _: () = assert!(SYS_WRITE + 4 == SYS_YIELD);
+const _: () = assert!(SYS_WRITE + 6 == SYS_SEND);
+const _: () = assert!(SYS_RECV + 1 == SYS_SEND);
 
 static mut USER_OK: bool = false;
 static mut SYSCALL_OK: bool = false;
@@ -65,7 +77,7 @@ pub fn from_ecall(frame: &mut TrapFrame) -> &mut TrapFrame {
 
     let num = frame.a7();
     match num {
-        SYS_WRITE | SYS_EXIT | SYS_SBRK | SYS_GETTIME | SYS_YIELD => {
+        SYS_WRITE | SYS_EXIT | SYS_SBRK | SYS_GETTIME | SYS_YIELD | SYS_RECV | SYS_SEND => {
             if !unsafe { SYSCALL_OK } {
                 println!("SYSCALL OK");
                 unsafe { SYSCALL_OK = true };
@@ -79,6 +91,8 @@ pub fn from_ecall(frame: &mut TrapFrame) -> &mut TrapFrame {
         SYS_SBRK => sys_sbrk(frame),
         SYS_GETTIME => sys_gettime(frame),
         SYS_YIELD => sys_yield(frame),
+        SYS_RECV => sys_recv(frame),
+        SYS_SEND => sys_send(frame),
         _ => {
             let id = task::kill_unknown_syscall(num, frame.sepc, 0);
             task::after_exit(id)
@@ -88,10 +102,10 @@ pub fn from_ecall(frame: &mut TrapFrame) -> &mut TrapFrame {
 
 /// Every invalid pointer kills (D-0034). The two failure shapes are
 /// separate feature boots so the kill of one cannot hide the other.
-fn kill_invalid_ptr(frame: &mut TrapFrame, ptr: usize, len: usize, why: &str) -> ! {
+fn kill_invalid_ptr(frame: &mut TrapFrame, ptr: usize, len: usize, why: &str, who: &str) -> ! {
     frame.set_retval(ERR_INVALID_ADDRESS, 0);
     println!(
-        "write: ptr={:#x} len={} {} err={} val=0",
+        "{who}: ptr={:#x} len={} {} err={} val=0",
         ptr, len, why, ERR_INVALID_ADDRESS
     );
     task::kill_invalid_user_ptr(frame.sepc, ptr);
@@ -117,10 +131,10 @@ fn sys_write(frame: &mut TrapFrame) -> &mut TrapFrame {
             frame
         }
         Err(UserPtrError::SpansPastInterval) => {
-            kill_invalid_ptr(frame, ptr, len, "spans past interval")
+            kill_invalid_ptr(frame, ptr, len, "spans past interval", "write")
         }
         Err(UserPtrError::NotInUserInterval) => {
-            kill_invalid_ptr(frame, ptr, len, "not in a user interval")
+            kill_invalid_ptr(frame, ptr, len, "not in a user interval", "write")
         }
     }
 }
@@ -145,14 +159,20 @@ fn sys_sbrk(frame: &mut TrapFrame) -> &mut TrapFrame {
         None => {
             advance_ecall(frame);
             frame.set_retval(ERR_NO_MEM, old);
-            println!("sbrk delta={} err={} brk={:#x} (unchanged)", delta, ERR_NO_MEM, old);
+            println!(
+                "sbrk delta={} err={} brk={:#x} (unchanged)",
+                delta, ERR_NO_MEM, old
+            );
             return frame;
         }
     };
     if new > task.brk_wall || new < task.brk_base {
         advance_ecall(frame);
         frame.set_retval(ERR_NO_MEM, old);
-        println!("sbrk delta={} err={} brk={:#x} (unchanged)", delta, ERR_NO_MEM, old);
+        println!(
+            "sbrk delta={} err={} brk={:#x} (unchanged)",
+            delta, ERR_NO_MEM, old
+        );
         return frame;
     }
     task.brk = new;
@@ -179,4 +199,99 @@ fn sys_yield(frame: &mut TrapFrame) -> &mut TrapFrame {
     advance_ecall(frame);
     frame.set_retval(OK, 0);
     task::yield_cpu(frame)
+}
+
+/// `recv(buf, len) -> (err, n)`. Polls the NIC, then copies a pending
+/// TCP or UDP payload, or 0 on TCP EOF, or `EAGAIN`. The task stays
+/// Running (D-0035). SUM is raised only inside `copy_to_user` (D-0034).
+fn sys_recv(frame: &mut TrapFrame) -> &mut TrapFrame {
+    let ptr = frame.a0();
+    let len = frame.a1();
+    let task = task::current();
+    let ncap = core::cmp::min(len, uaccess::COPY_MAX);
+    match uaccess::check_range(task, ptr, ncap, uaccess::Access::Write) {
+        Err(UserPtrError::SpansPastInterval) => {
+            kill_invalid_ptr(frame, ptr, len, "spans past interval", "recv")
+        }
+        Err(UserPtrError::NotInUserInterval) => {
+            kill_invalid_ptr(frame, ptr, len, "not in a user interval", "recv")
+        }
+        Ok(()) => {}
+    }
+    net::poll();
+    if let Some(payload) = net::tcp_pending() {
+        return recv_copy(frame, task, ptr, ncap, payload, true);
+    }
+    if net::tcp_eof() {
+        advance_ecall(frame);
+        frame.set_retval(OK, 0);
+        return frame;
+    }
+    let Some(payload) = net::udp_pending() else {
+        advance_ecall(frame);
+        frame.set_retval(ERR_AGAIN, 0);
+        return frame;
+    };
+    recv_copy(frame, task, ptr, ncap, payload, false)
+}
+
+fn recv_copy<'a>(
+    frame: &'a mut TrapFrame,
+    task: &mut crate::task::Task,
+    ptr: usize,
+    ncap: usize,
+    payload: &[u8],
+    tcp: bool,
+) -> &'a mut TrapFrame {
+    let n = core::cmp::min(payload.len(), ncap);
+    match uaccess::copy_to_user(task, ptr, &payload[..n]) {
+        Ok(n) => {
+            if tcp {
+                net::tcp_consume();
+            } else {
+                net::udp_consume();
+            }
+            advance_ecall(frame);
+            frame.set_retval(OK, n);
+            frame
+        }
+        Err(UserPtrError::SpansPastInterval) => {
+            kill_invalid_ptr(frame, ptr, ncap, "spans past interval", "recv")
+        }
+        Err(UserPtrError::NotInUserInterval) => {
+            kill_invalid_ptr(frame, ptr, ncap, "not in a user interval", "recv")
+        }
+    }
+}
+
+/// `send(buf, len, flags)`. TCP if a connection can take data; else UDP.
+/// TCP honors FIN (D-0053); UDP ignores it (D-0051).
+fn sys_send(frame: &mut TrapFrame) -> &mut TrapFrame {
+    let ptr = frame.a0();
+    let len = frame.a1();
+    let flags = frame.a2();
+    let task = task::current();
+    match uaccess::copy_from_user(task, ptr, len) {
+        Ok(bytes) => {
+            let ok = if net::tcp_send(bytes, flags) {
+                true
+            } else {
+                net::udp_send(bytes, flags)
+            };
+            if !ok {
+                advance_ecall(frame);
+                frame.set_retval(ERR_INVALID_PARAM, 0);
+                return frame;
+            }
+            advance_ecall(frame);
+            frame.set_retval(OK, bytes.len());
+            frame
+        }
+        Err(UserPtrError::SpansPastInterval) => {
+            kill_invalid_ptr(frame, ptr, len, "spans past interval", "send")
+        }
+        Err(UserPtrError::NotInUserInterval) => {
+            kill_invalid_ptr(frame, ptr, len, "not in a user interval", "send")
+        }
+    }
 }

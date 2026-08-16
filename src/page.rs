@@ -2,7 +2,8 @@
 //! activate it.
 //!
 //! Owns the root table and every intermediate table allocated for the M1
-//! identity map (D-0019, D-0025, D-0026) and the M2 user map (D-0031).
+//! identity map (D-0019, D-0025, D-0026), the M2 user map (D-0031), and
+//! the M3 virtio-mmio window (D-0039).
 //! `map` creates those tables from the frame allocator; `walk` decodes raw
 //! PTEs by bit position and does not call `map`'s helpers. `activate` is
 //! the only `satp` write: SIE off, `csrw satp`, `sfence.vma`, SIE restored
@@ -19,6 +20,7 @@ use crate::csr;
 use crate::frame::{self, PAGE_SIZE, RAM_END, RAM_START};
 use crate::println;
 use crate::task;
+use crate::virtio;
 use core::arch::asm;
 
 /// Number of PTEs in a 4 KiB Sv39 table. Privileged spec 20211203 §4.3.2.
@@ -73,29 +75,34 @@ const _: () = assert!(PAGE_SIZE / core::mem::size_of::<u64>() == PTES);
 static mut ROOT_PA: usize = 0;
 static mut TABLES: usize = 0;
 
+fn linker_pa(sym: *const u8) -> usize {
+    // See `task::pa`: LTO folds `==` of distinct `extern static`s to false.
+    core::hint::black_box(sym as usize)
+}
+
 fn kernel_start() -> usize {
-    core::ptr::addr_of!(__kernel_start) as usize
+    linker_pa(core::ptr::addr_of!(__kernel_start))
 }
 fn rodata_start() -> usize {
-    core::ptr::addr_of!(__rodata_start) as usize
+    linker_pa(core::ptr::addr_of!(__rodata_start))
 }
 fn data_start() -> usize {
-    core::ptr::addr_of!(__data_start) as usize
+    linker_pa(core::ptr::addr_of!(__data_start))
 }
 fn bss_end() -> usize {
-    core::ptr::addr_of!(__bss_end) as usize
+    linker_pa(core::ptr::addr_of!(__bss_end))
 }
 fn boot_stack_bottom() -> usize {
-    core::ptr::addr_of!(__boot_stack_bottom) as usize
+    linker_pa(core::ptr::addr_of!(__boot_stack_bottom))
 }
 fn boot_stack_top() -> usize {
-    core::ptr::addr_of!(__boot_stack_top) as usize
+    linker_pa(core::ptr::addr_of!(__boot_stack_top))
 }
 fn heap_start() -> usize {
-    core::ptr::addr_of!(__heap_start) as usize
+    linker_pa(core::ptr::addr_of!(__heap_start))
 }
 fn heap_end() -> usize {
-    core::ptr::addr_of!(__heap_end) as usize
+    linker_pa(core::ptr::addr_of!(__heap_end))
 }
 
 /// Physical address of the root table. Zero until `init`.
@@ -104,9 +111,12 @@ pub fn root_pa() -> usize {
 }
 
 /// Table frames consumed by `init` (root + intermediates).
-/// On QEMU `virt` 128 MiB identity-mapped from `0x8020_0000` this is 65:
-/// 1 root + 1 L1 (VPN[2]=2) + 63 L0 (2 MiB slots from L1[1] through L1[63]).
-/// The OpenSBI 2 MiB at `0x8000_0000` is unmapped, so L1[0] has no L0.
+/// On QEMU `virt` 128 MiB identity-mapped from `0x8020_0000` plus the
+/// virtio-mmio window at `0x1000_1000` this is 67:
+/// 1 root + 1 L1 (VPN[2]=2) + 63 L0 (2 MiB slots from L1[1] through L1[63])
+/// + 1 L1 (VPN[2]=0, the gigapage that contains MMIO) + 1 L0 (VPN[1]=0x80,
+/// the 2 MiB that holds UART + virtio). UART's L0[0] stays empty (D-0025).
+/// The window is MMIO, not RAM: `frame::total_frames()` does not change.
 pub fn tables_used() -> usize {
     unsafe { TABLES }
 }
@@ -275,7 +285,10 @@ fn build() -> usize {
     }
     map_range(root, hs, he, LEAF_RW);
     map_range(root, he, RAM_END, LEAF_RW);
-    // OpenSBI [RAM_START, ks) omitted. No MMIO (D-0025).
+    // OpenSBI [RAM_START, ks) omitted. UART at 0x10000000 stays unmapped
+    // (D-0025). Virtio-mmio window: R+W, never X, U=0, before activate
+    // so D-0031's post-activation ban stands (D-0039).
+    map_range(root, virtio::MMIO_BASE, virtio::MMIO_END, LEAF_RW);
 
     root
 }
@@ -570,6 +583,16 @@ fn verify(root: usize) {
     probe(root, "OpenSBI", RAM_START, Expect::Unmapped);
     probe(root, "above RAM", ABOVE_RAM, Expect::Unmapped);
     probe(root, "UART MMIO", UART_MMIO, Expect::Unmapped);
+    // D-0039: window mapped R+W, U=0, non-X. First and last byte, then
+    // assert_range walks every interior page the printed rows skip.
+    probe_span(
+        root,
+        "virtio lo",
+        "virtio hi",
+        virtio::MMIO_BASE,
+        virtio::MMIO_END,
+        KERNEL_RW,
+    );
 
     let (utext_s, utext_e) = task::utext();
     let (urod_s, urod_e) = task::urodata();
@@ -656,6 +679,7 @@ fn verify(root: usize) {
         assert_range(root, s.kstack_bottom, s.kstack_top, KERNEL_RW);
     }
     assert_range(root, heap_start(), RAM_END, KERNEL_RW);
+    assert_range(root, virtio::MMIO_BASE, virtio::MMIO_END, KERNEL_RW);
 }
 
 /// Build the map, print the `satp` we would write, walk the probes, print
@@ -699,6 +723,24 @@ fn require_leaf(va: usize, r: bool, w: bool, x: bool, what: &str) {
             );
         }
     }
+}
+
+/// Panic unless `va` identity-maps at L0 R+W, U=0, X=0 (A=1 D=1).
+pub fn require_identity_rw(va: usize, what: &str) {
+    require_leaf(va, true, true, false, what);
+}
+
+/// Walk every page covering `[start, end)` plus the last byte.
+pub fn require_identity_rw_range(start: usize, end: usize, what: &str) {
+    if start >= end {
+        return;
+    }
+    let mut va = start & !(PAGE_SIZE - 1);
+    while va < end {
+        require_identity_rw(va, what);
+        va += PAGE_SIZE;
+    }
+    require_identity_rw(end - 1, what);
 }
 
 /// Write `satp`, `sfence.vma`, keep executing. D-0022: SIE is clear across
@@ -763,4 +805,5 @@ pub fn activate() {
         panic!("satp wrote {:#x}, read {:#x}", satp, got);
     }
     println!("PAGING OK");
+    crate::phase::stamp(crate::phase::PAGING);
 }

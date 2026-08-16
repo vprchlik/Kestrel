@@ -16,7 +16,9 @@
 use crate::csr;
 use crate::println;
 use crate::timer;
-use core::arch::{asm, global_asm};
+#[cfg(not(feature = "no-sret"))]
+use core::arch::asm;
+use core::arch::global_asm;
 
 /// `TrapFrame` size in bytes. 32 GPRs + `sepc` + `sstatus`.
 pub const FRAME_SIZE: usize = 272;
@@ -33,12 +35,7 @@ pub struct TrapFrame {
 const _: () = assert!(core::mem::size_of::<TrapFrame>() == FRAME_SIZE);
 const _: () = assert!(FRAME_SIZE % 16 == 0);
 
-#[allow(dead_code)]
 impl TrapFrame {
-    #[inline]
-    pub fn ra(&self) -> usize {
-        self.x[1]
-    }
     #[inline]
     pub fn sp(&self) -> usize {
         self.x[2]
@@ -54,22 +51,6 @@ impl TrapFrame {
     #[inline]
     pub fn a2(&self) -> usize {
         self.x[12]
-    }
-    #[inline]
-    pub fn a3(&self) -> usize {
-        self.x[13]
-    }
-    #[inline]
-    pub fn a4(&self) -> usize {
-        self.x[14]
-    }
-    #[inline]
-    pub fn a5(&self) -> usize {
-        self.x[15]
-    }
-    #[inline]
-    pub fn a6(&self) -> usize {
-        self.x[16]
     }
     #[inline]
     pub fn a7(&self) -> usize {
@@ -91,16 +72,11 @@ extern "C" {
 
 /// Jump to `__trap_return` with `a0` = frame. Used for the first `sret`
 /// into U-mode (T2.5) and later for every resume. Does not return.
-#[cfg_attr(
-    any(
-        feature = "panic-selftest",
-        feature = "hang-selftest",
-        feature = "stress",
-        feature = "frame-exhaust-selftest",
-        feature = "freeze-selftest"
-    ),
-    allow(dead_code)
-)]
+///
+/// Compiled out of images that never `sret` (`no-sret`, enabled by those
+/// selftests in Cargo.toml). Adding a kmain-only selftest means listing
+/// `no-sret` there, not growing this `cfg` by hand.
+#[cfg(not(feature = "no-sret"))]
 pub fn resume(frame: *mut TrapFrame) -> ! {
     unsafe {
         asm!(
@@ -146,6 +122,7 @@ pub fn install() {
             addr, got
         );
     }
+    crate::phase::stamp(crate::phase::STVEC);
 }
 
 /// Instruction width in bytes from the trapped instruction's low halfword.
@@ -218,11 +195,7 @@ extern "C" fn trap_handler(frame: &mut TrapFrame) -> &mut TrapFrame {
                 // returns a *different* task's frame. `__trap_return` then
                 // `mv sp, a0` onto the survivor. Returning `frame` here
                 // would `sret` into a dead task.
-                return crate::task::kill_and_reschedule(
-                    user_fault_cause(code),
-                    frame.sepc,
-                    stval,
-                );
+                return crate::task::kill_and_reschedule(user_fault_cause(code), frame.sepc, stval);
             }
             panic!(
                 "trap scause={} ({}) sepc={:#x} stval={:#x} sp={:#x}",
@@ -235,11 +208,7 @@ extern "C" fn trap_handler(frame: &mut TrapFrame) -> &mut TrapFrame {
         }
         _ => {
             if from_user(frame) {
-                return crate::task::kill_and_reschedule(
-                    user_fault_cause(code),
-                    frame.sepc,
-                    stval,
-                );
+                return crate::task::kill_and_reschedule(user_fault_cause(code), frame.sepc, stval);
             }
             unknown_trap(scause, code, false, frame, stval);
         }

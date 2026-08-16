@@ -1,0 +1,17 @@
+[package]
+name = "app"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["rlib"]
+
+[features]
+default = []
+# T3.9 sibling: echo datagrams instead of serving HTTP.
+udp-echo = []
+# T3.12: after EOF, loop for the next connection instead of exit.
+persist = []
+
+[dependencies]
+usys = { path = "../usys" }

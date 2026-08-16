@@ -1075,15 +1075,702 @@ D-0011 onward are working decisions made under those constraints.
   restores `SIE` from `SPIE` in U only. There is still no interruptible
   kernel-side allocator caller.
 
-  **67 frames consumed before freeze.** `frames frozen: free=N` compared
-  with the `FRAME OK` total is a gap of 67 on the default image: 65 page
-  tables plus 2. The 65 are `page::tables_used()` — one Sv39 root, one L1
-  (VPN[2]=2 covers `0x8000_0000..0xC000_0000`; we do not allocate an L0 for
-  the unmapped OpenSBI 2 MiB at `0x8000_0000`), and 63 L0 tables for
-  `0x8020_0000..0x8800_0000`. The other two are the `FRAME OK` self-test's
-  leftover pair: it allocates `a` and `b`, frees `a`, reallocates `c==a`,
-  and never frees `b` or `c`. That is a deliberate LIFO check, not a leak
-  to plug; freeze then pins them. Feature images can print a different
-  `FRAME OK` total (`__heap_end` moves with code size) — `just test-stress`
-  compares exhaust's panic against **that boot's** `FRAME OK` line, not
-  against `just run`.
+  **69 frames consumed before freeze (was 67 before T3.1).** `frames frozen:
+  free=N` compared with the `FRAME OK` total is a gap of 69 on the default
+  image: 67 page tables plus 2. The 67 are `page::tables_used()` — one Sv39
+  root, one L1 (VPN[2]=2 covers `0x8000_0000..0xC000_0000`; we do not
+  allocate an L0 for the unmapped OpenSBI 2 MiB at `0x8000_0000`), 63 L0
+  tables for `0x8020_0000..0x8800_0000`, plus D-0039's extra L1 (VPN[2]=0)
+  and L0 (VPN[1]=0x80) for the virtio-mmio window. Those two table frames
+  come from the RAM pool; the eight MMIO pages themselves do not, so
+  `FRAME OK`'s `frames N` (`total_frames()`) does not move. The other two
+  held frames are the `FRAME OK` self-test's leftover pair: it allocates
+  `a` and `b`, frees `a`, reallocates `c==a`, and never frees `b` or `c`.
+  That is a deliberate LIFO check, not a leak to plug; freeze then pins
+  them. Feature images can print a different `FRAME OK` total (`__heap_end`
+  moves with code size) — `just test-stress` compares exhaust's panic
+  against **that boot's** `FRAME OK` line, not against `just run`.
+
+## D-0037: Hand-rolled network stack; the TCP scope tripwire
+- Date: 2026-08-15 — Status: accepted
+- **Decision:** M3's network path is written from scratch: Ethernet framing,
+  ARP, IPv4, ICMP echo, UDP echo, and a minimal TCP that serves one HTTP
+  response to a real client. No smoltcp, no third-party stack, no TLS.
+  **Tripwire:** any TCP work beyond "serves one GET to curl, verified in a
+  capture" requires M4 to already have first numbers. No retransmission
+  tuning, no multiple connections, no feature past the demo until
+  measurement exists.
+- **Alternatives considered:** `smoltcp` (rejected: it is the sane
+  production choice and precisely thereby the wrong one here — the project's
+  value is being able to defend every byte of the path, and M4's phase
+  decomposition wants a stack whose cost structure we authored). UDP-only
+  demo (rejected: the headline metric is boot-to-first-**HTTP**-byte, and
+  HTTP-over-TCP against a real client is the credibility line). TLS
+  (rejected: an order of magnitude more surface with zero measurement
+  value at this layer).
+- **Rationale:** the stack is the instrument for M4's measurement, not a
+  product. A hand-rolled stack lets every microsecond on the response path
+  be attributed to a line we wrote, which is what "find the floor" needs.
+  The tripwire exists because TCP is the recognized schedule risk: the
+  demo defines done, and measurement — the project's actual deliverable —
+  outranks protocol completeness.
+- **Consequences:** our TCP is honest about what it omits (D-0041) and the
+  report may not make throughput or robustness claims beyond the demo. The
+  tripwire is enforced structurally: M3's task list ends at T3.12 and
+  contains no TCP-polish task.
+
+## D-0038: Modern virtio-mmio, split virtqueue, static DMA pool; the freeze stands
+- Date: 2026-08-15 — Status: accepted
+- **Decision:** the driver speaks modern virtio-mmio (version 2, forced with
+  `-global virtio-mmio.force-legacy=false`) with split virtqueues, 16
+  descriptors per queue, negotiating `VIRTIO_F_VERSION_1` and
+  `VIRTIO_NET_F_MAC` only — no `MRG_RXBUF`, so RX buffers are 2048 bytes,
+  whole-frame, single-descriptor chains. Rings and buffers are page-aligned
+  statics in kernel `.bss` (RX 16×2048 + TX 8×2048 + rings ≈ 64 KiB): the
+  frame allocator is never touched, `frame::freeze()` stands verbatim, and
+  D-0036's reason 1 survives unamended. RX buffers are re-posted after
+  consumption, never freed — the NIC owns a fixed set of 24 buffers from
+  boot to shutdown; there is no buffer allocation path.
+  `virtq::verify()` runs before `DRIVER_OK` (the T1.6 move): alignment
+  16/2/4, every descriptor address inside the pool and identity-mapped,
+  indices zero, and the six queue-address registers read back and compared.
+  Memory barriers from day one: `fence w,w` before the avail-idx store,
+  `fence w,o` before the notify store, `fence r,r` after reading used-idx.
+- **Alternatives considered:** legacy virtio-mmio (rejected: page-shifted
+  `QueuePFN` forces the three structures into one contiguous layout and the
+  10/12-byte header ambiguity into the fast path; "we speak the current
+  spec" is also the defensible interview position). `MRG_RXBUF` (rejected:
+  buys nothing at one connection and adds descriptor-chain walking).
+  Preallocating the pool from the frame allocator before freeze (rejected:
+  buffer addresses would depend on allocation order and the pool would need
+  its own bookkeeping; statics are placed by the linker and verifiable by
+  name). Unfreezing plus a frame-side detector (rejected: reopens the
+  exact hazard D-0036 closed, and D-0036 predicted this moment).
+- **Rationale:** D-0036 expected M3 to need the allocator; it does not,
+  because everything the NIC touches is fixed-size and known at link time —
+  the same static-preallocation logic that produced D-0030's task slots.
+  The barriers are written although QEMU's device model will likely hide
+  their absence: a bug that cannot be provoked on the only test platform
+  must be prevented by review, not testing.
+- **Consequences:** 24 buffers cap in-flight traffic — irrelevant at one
+  connection, recorded for M4's threats-to-validity. The pool is dead
+  weight in netless images (~64 KiB of `.bss`; nothing, against 128 MiB).
+  `virtq::verify()` joins the boot cost that `fast-boot` may eventually
+  strip, with the same price-of-paranoia accounting as the map verify.
+
+  **T3.2: the six queue-address registers are write-only.** Virtio 1.2
+  §4.2.2 marks QueueDesc/QueueDriver/QueueDevice Low/High as write-only.
+  QEMU 8.2 `virtio_mmio_read` returns 0 and logs `LOG_GUEST_ERROR`, so a
+  FEATURES_OK-style readback cannot catch a wrong offset or a swapped
+  high/low word on this transport — a missed write and a successful write
+  both read as 0. The load-bearing guards are: a single `write_addr`
+  helper that always stores `gpa as u32` at `off` and `gpa >> 32` at
+  `off+4` (swapped halves are unrepresentable at the call site); named
+  offsets citing the spec; and `verify()` still reading both halves, so a
+  device that implements the registers as RW panics on mismatch
+  (`wrote=… read=…; wrong offset or swapped high/low`). A zero read of a
+  nonzero write is printed as write-only MMIO, not treated as a match.
+  QueueReady is readable and must stay 0 across the write+verify window
+  — that one readback *does* work, and it is what keeps the device from
+  owning the ring while we check it.
+
+## D-0039: Map the virtio-mmio window at build; map-then-probe
+- Date: 2026-08-15 — Status: accepted (amends D-0025; D-0031 intact)
+- **Decision:** `page::build` maps the 8-page virtio-mmio window
+  `0x1000_1000..0x1000_9000` (8 transports, 0x1000 stride, QEMU
+  `hw/riscv/virt.c`) as R+W, never X, U=0, at boot, before `activate`.
+  Discovery probes all 8 slots after paging is on. No PTE is edited after
+  activation — D-0031's ban stands. Every QEMU invocation in the harness
+  gains the NIC flags so feature images do not diverge from the default
+  boot.
+- **Alternatives considered:** probe-then-map (impossible under D-0031:
+  probing reads the magic register, which requires a mapped page — the
+  no-edit rule forces map-then-probe). Mapping only the discovered slot
+  (same impossibility). Relaxing D-0031 with a one-shot post-activation
+  map call (rejected: the one hard-won M1 property is that the address
+  space is validated before anything runs on it and never changes; eight
+  pages of window is a small price for keeping it).
+- **Rationale:** D-0025 already contained its own amendment clause — "M3
+  adds the virtio pages in the same task that adds the driver" — and this
+  entry is that clause exercised. The permissions are justified against
+  the code that uses them: the driver reads/writes device registers (R+W)
+  and nothing fetches from device memory (never X).
+- **Consequences:** eight pages of device memory are now reachable by a
+  stray kernel pointer that previously would have faulted — the cost
+  D-0025's rationale conceded the moment a driver exists. The T2.2 verify
+  walk asserts the window's mapping and permissions. sifive_test remains
+  unmapped (D-0017's escape hatch stays an `ecall`). Mapping a new VPN[2]
+  costs two page-table frames (L1 + L0); `tables_used` is 67 and freeze
+  holds 69. The MMIO pages are not RAM, so the frame allocator's
+  `total_frames()` / `FRAME OK` count is untouched.
+
+## D-0040: Driver and stack in the kernel; `recv`/`send`; polling, no PLIC
+- Date: 2026-08-15 — Status: accepted (amends D-0010 and D-0033)
+- **Decision:** the virtio driver and the entire network stack live in the
+  kernel. The app talks payloads over two new syscalls — `recv` (6):
+  `recv(buf, len) → (err, n)`, returning request payload or an
+  `EAGAIN`-style error, **each call polling the NIC and advancing the
+  stack**; `send` (7): `send(buf, len, flags)`, a FIN flag bit closing the
+  connection. One listener, one connection at a time, no accept, no fds.
+  Polling only: the PLIC stays unmapped and uninitialized in M3. Two
+  invariants: **the NIC is touched only from syscall context** (never from
+  the trap path — networking adds zero code to the path D-0028 constrains;
+  TCP's timer is driven from `recv` polling via `rdtime`, not the tick
+  handler), and **remote bytes are user input** (a malformed packet
+  increments a counter and is dropped; it never panics the kernel —
+  D-0034's spirit extended to the wire).
+- **Alternatives considered:** raw-frame syscalls with the stack in the app
+  (rejected: every packet crosses U/S twice through the SUM window instead
+  of twice per connection; TCP timers would depend on a task that might be
+  spinning elsewhere; and the whole stack becomes compiled-Rust-in-`.utext`,
+  multiplying T3.9's checker risk by the stack's size). Everything in the
+  task with MMIO and rings mapped U=1 (rejected outright: a U-writable
+  descriptor table lets user code point device DMA at kernel memory — the
+  U/S boundary the project exists to measure becomes decorative exactly
+  where it matters). PLIC interrupts (rejected for M3: init cost lands in
+  the boot path the headline metric measures, and per-packet trap entry
+  plus claim/complete MMIO round-trips land in the response path; polling
+  costs host CPU, which the metric does not price — a single-purpose VM
+  serving one request has nothing better to do with the core). Multiplexing
+  over `write` (rejected: overloading the console syscall with a channel
+  argument saves one number at the cost of the ABI's legibility).
+- **Rationale:** the response path is RX-used-ring → TCP → TX-avail-ring
+  entirely in S-mode, with exactly two U/S crossings for the whole
+  connection. The layering story is defensible: the kernel is the
+  transport, the app is the HTTP server — mirroring real OS structure and
+  what Unikraft's lib-stack does inside its single domain. D-0035 survives
+  untouched: no Blocked state, no idle loop — a task waiting for a packet
+  is running, spinning on `recv`, and that spin *is* the poll loop.
+- **Consequences:** the five-syscall wall becomes seven, by decision entry
+  as D-0010 prescribed. M2's polling-first recommendation is upgraded to
+  no-PLIC-in-M3; if M4's data ever wants interrupt-driven numbers for the
+  comparison, that is a new entry. The app cannot be given a second
+  connection without reopening this entry.
+
+## D-0041: Minimal TCP: passive open, stop-and-wait, one fixed RTO
+- Date: 2026-08-15 — Status: accepted
+- **Decision:** passive open only. States: LISTEN → SYN_RCVD → ESTABLISHED
+  → FIN_WAIT_1 → FIN_WAIT_2 → truncated TIME_WAIT (log and drop to CLOSED
+  immediately), plus CLOSE_WAIT → LAST_ACK for the peer-closes-first race.
+  Duplicate SYN in SYN_RCVD re-sends the SYN/ACK. ISN from `rdtime` low
+  bits. MSS parsed from the SYN; all other options skipped via the data
+  offset field, which is honored on every segment. Fixed 8 KiB advertised
+  window. Stop-and-wait transmission: at most one unacked data segment in
+  flight, retransmitted on a fixed 200 ms `rdtime` deadline checked from
+  the polling loop, 8 attempts then RST. Anything unexpected gets RST plus
+  a counter — never silence, never a panic. Checksums with pseudo-header
+  in both directions. SYN and FIN each consume a sequence number.
+- **Alternatives considered:** no retransmission at all (defensible on a
+  near-lossless slirp leg and rejected anyway: the failure symptom is curl
+  hanging forever with nothing on serial — the single worst debugging
+  experience available in this project — bought back for ~30 lines; a
+  stack without retransmission is also not honestly called TCP).
+  Congestion control, window scaling, SACK, timestamps (all rejected: the
+  response is one segment; there is no window to grow and no loss pattern
+  to recover; each is listed so the report can say what was omitted and
+  why the omission is invisible at this workload). Full TIME_WAIT
+  (rejected: a one-shot server holding 2MSL state serves nothing; the
+  consequence — a retransmitted peer FIN meets RST — is visible in the
+  capture and harmless).
+- **Rationale:** the peer is libslirp (D-0042), which negotiates MSS and
+  little else, so the design rules that matter are the ones that keep any
+  naive stack alive against any peer: honor data offset (the number-one
+  naive-stack killer is assuming 20-byte headers), get the SYN/FIN
+  sequence-number consumption right (the off-by-one produces
+  hangs-at-close that masquerade as retransmit bugs), ACK unconditionally
+  on in-order receipt, and say RST when confused so the capture shows it.
+- **Consequences:** sequenced to land with demonstrable checkpoints —
+  handshake in pcap (T3.10), data + close + provoked retransmit + curl
+  end-to-end (T3.11). The tripwire (D-0037) applies beyond that line. A
+  browser (multiple parallel connections) is out of scope by construction;
+  curl is the demo client.
+
+## D-0042: Static network configuration; no DHCP; slirp is the peer
+- Date: 2026-08-15 — Status: accepted
+- **Decision:** the guest uses QEMU user-net's contractual constants
+  statically: 10.0.2.15/24, gateway 10.0.2.2. No DHCP client. The TCP/UDP
+  demo ports arrive via `hostfwd`. It is recorded plainly that under
+  user-net the guest's TCP peer is **libslirp's internal stack** — a
+  `hostfwd` connection is terminated on the host side and re-originated
+  from 10.0.2.2 — and that inbound ICMP echo is unroutable, so ICMP is
+  exercised guest→out (ping 10.0.2.2, slirp answers).
+- **Alternatives considered:** DHCP (rejected: burns boot milliseconds to
+  discover constants — the wrong direction for a boot-to-first-byte
+  metric — and adds a UDP client state machine with no measurement value;
+  the Linux baseline gets static config too, preserving comparability).
+  Tap networking for a real host-kernel peer (rejected for M3: needs
+  root/setup and breaks the "runs anywhere per SETUP.md" property;
+  recorded as the M4 threat-to-validity escape hatch if a hostile TCP
+  peer is ever needed).
+- **Rationale:** slirp's addressing is documented, stable API surface, not
+  guesswork. The de-risking is honest: curl's kernel-grade TCP options
+  never reach us, which makes the demo achievable, and the pcap — not the
+  claim "survives a real client" — is the arbiter of protocol correctness.
+- **Consequences:** the M4 report's threats-to-validity section inherits
+  the slirp-termination caveat verbatim. If the demo ever moves to tap,
+  ARP stops being a one-gateway affair and this entry reopens.
+
+## D-0043: Measurement edges, `fast-boot`, capture in the harness
+- Date: 2026-08-15 — Status: accepted
+- **Decision:** the boot-to-first-HTTP-byte edges are named: E0 = host
+  clock at QEMU exec; E1 = machine start (`mtime` ≈ 0); E2 = kernel entry
+  (`rdtime` at `_start`); E3g = `rdtime` at response-TX publish;
+  E3w = pcap timestamp of that frame; E4 = first byte at the client.
+  E0→E4 is both the honest and the comparable number (identical harness,
+  no guest cooperation required); E2→E3g decomposed by phase at 100 ns
+  `rdtime` resolution is the floor number, available for Whimbrel only
+  (stated, not hidden). Divergences are reported where they occur:
+  E3w−E3g prices virtio+slirp transit, E4−E3w the host loopback, E0→E1
+  QEMU init shared by all systems. The client runs a tight (~1 ms)
+  connect-retry loop started before E0; boot-to-ready (E0 → first
+  successful connect) is reported alongside. **The E2 assumption is
+  validated, not assumed:** T3.12(a) freezes the machine at reset and
+  reads `time` via GDB before the first guest instruction; the observed
+  offset is recorded in this entry when measured, and the firmware row of
+  the M4 table cites the measurement. Phase timestamps live in a static
+  array and are printed only after the response is sent (DBCN is one
+  `ecall` per byte). A `fast-boot` cargo feature (same codebase, sibling
+  shape) removes the boot tick wait, self-tests, and non-essential prints;
+  it **keeps the map verify initially**, and the safe/fast delta is
+  reported as the price-of-paranoia finding. The M1 timer acceptance moves,
+  not vanishes: the default profile's 30-tick wait shrinks to 3 ticks with
+  `tick 3` on serial, and timer coverage also holds structurally (the
+  T2.9 preemption counters cannot advance without live ticks). Packet
+  capture (`-object filter-dump`) is standing harness infrastructure from
+  the first TX packet onward; `tshark` joins SETUP.md and
+  `scripts/install.sh` as a dependency so assertions run everywhere the
+  harness does. Full determinism is not promised — slirp timing rides
+  host scheduling; the harness promises reproducible statistics (N
+  trials, median/IQR, pinned QEMU version) plus a pcap per run.
+  **Unikraft baseline:** the riscv64 port is an open PR
+  (unikraft/unikraft#1698, rebased June 2026; kraftkit riscv64 merged), so
+  the M4 comparison rests on a timeboxed feasibility spike at the M3/M4
+  boundary with a recorded fallback ladder: (1) it works — full three-way
+  under identical conditions; (2) runs only on arm64/x86_64 — two-way
+  riscv64 head-to-head as primary, Unikraft as a labeled different-ISA
+  reference; (3) does not run — two-way plus qualitative boot-path
+  analysis from source.
+- **Alternatives considered:** first-serial-byte as the readiness edge
+  (rejected as primary: serial cost differs across guests and is not the
+  service the user waits for; kept as a secondary marker). `-icount` for
+  determinism (rejected: does not tame the slirp/host boundary and
+  distorts the host-clock edges the comparison needs). Stripping the map
+  verify in `fast-boot` from the start (rejected: it is the project's
+  signature safety net, and "we measured the cost of our own verification"
+  is itself a result — it gets stripped only if the phase data shows it
+  matters, as a recorded amendment).
+- **Rationale:** a benchmark whose edges are not pinned before measurement
+  drifts toward the number its author wanted. Naming E0–E4 now, validating
+  E2, and building the instrumentation into T3.12 makes M4 a measurement
+  exercise instead of a definition argument.
+- **Consequences:** boot prints nothing new on the measured path; the
+  phase block appears after first-byte. The `fast-boot` profile is a
+  feature flag, not a fork — the sibling-selftest pattern already proves
+  the shape. **E2 offset, measured T3.12(a):** QEMU `-S` at reset,
+  `pc=0x1000` (OpenSBI), GDB `$time` = **0**. `rdtime` at `_start` is
+  therefore the OpenSBI phase with nothing to subtract. Re-measure with
+  `just measure-e2` if the firmware or QEMU version changes.
+  **T3.12 wrap amendment (2026-08-16):** Headline boot-to-first-byte uses a
+  client retry loop started **before E0** (`CLIENT_EARLY=1`,
+  `just test-fast-release`). `sret→E3g` on `just test` / `just test-fast`
+  is waiting for `HTTP READY` then spawning curl — that is harness time,
+  not kernel work, and is not the M4 number. Kernel boot-to-ready is
+  E2→sret (stack-ready is E2→listen). Debug `opt-level=0` paging (~150 ms
+  walking ~32k pages twice) is not the cost of paging; M4 cites
+  `cargo build --release --features fast-boot`. The default `just test`
+  curl-after-`HTTP READY` path stays a correctness gate. Release LTO
+  constant-folds `==` of distinct linker symbols (DEBUGGING.md §4.14);
+  `task::pa` / page / virtq address helpers `black_box` those loads.
+
+## D-0044: App crate in the user sections; check-utext bans FP, including compressed
+- Date: 2026-08-15 — Status: accepted
+- **Decision:** the M3 app is a real crate linked into the existing user
+  sections — the linker script matches the app archive's
+  `.text/.rodata/.data/.bss` into `.utext/.urodata/.udata/.ubss` — with a
+  `usys` wrapper crate for the syscalls. `check-utext` grows to handle
+  compiled-Rust output and **rejects every floating-point instruction in
+  `.utext`: the F/D mnemonics and the compressed forms** — `c.fld`,
+  `c.fsd`, `c.fldsp`, `c.fsdsp` — the encodings a compiler emits silently
+  and a naive mnemonic list misses (llvm-objdump may print either
+  spelling; both are banned). `sstatus.FS` stays Off.
+- **Alternatives considered:** enabling FS so FP just works (rejected: the
+  TrapFrame saves no FP state, so it is only safe while exactly one task
+  uses FP — an invariant nobody is checking two milestones from now; and
+  the demo needs no floats). Building the app for a soft-float target
+  (rejected: `riscv64gc`'s hard-float ABI and a soft-float ABI cannot link
+  into one image). Trusting that integer HTTP code emits no FP (rejected:
+  hope is not a gate; the checker already fails closed on unknown forms,
+  so the ban is a natural extension).
+- **Rationale:** an FP instruction from U-mode with FS=Off is an
+  **undelegated illegal instruction** — OpenSBI dump, hart parked, no
+  `task N killed` line, the M2 known limit and the worst failure mode in
+  the project. The choice is to handle it at runtime (enable FS, save FP
+  state) or make it unrepresentable at build time; the checker already
+  exists and the demo has no floats, so unrepresentable wins.
+- **Consequences:** the app crate must avoid `f32`/`f64` end to end
+  (formatting included); a violation fails `just check-utext` by name
+  rather than parking the hart silently. If a future milestone needs FP in
+  U-mode, this entry reopens together with a TrapFrame FP-state design.
+  T3.9 carries the checker work and its acceptance includes a planted
+  `c.fld` being caught.
+
+## D-0045: ARP cache wraparound is exercised at init, then cleared
+- Date: 2026-08-15 — Status: accepted
+- **Decision:** the 4-entry ARP cache's wraparound eviction runs a
+  five-insert self-test at driver init (distinct synthetic IPs), asserts
+  the oldest is gone and the newest four remain, prints `ARP CACHE WRAP
+  OK`, then **clears** the table so dummy entries do not shadow the
+  gateway. slirp only ever offers one peer (10.0.2.2); a wraparound path
+  that ships unrun is an untested path.
+- **Alternatives considered:** leave wraparound untested and document it
+  (rejected: the user-facing rule is not to ship an unrun wrap; a comment
+  is not a test). Wait for five real peers (rejected: they will not
+  arrive). Keep the dummy entries after the self-test (rejected: they
+  occupy the only slots the gateway then has to evict into — a live
+  table polluted by a test).
+- **Rationale:** a 4-slot ring whose occupancy never exceeds 1 is a lie
+  about being a cache. The self-test is the same shape as `heap::self_test`
+  / `frame::self_test`: prove the invariant on every boot, then leave
+  production state clean.
+- **Consequences:** every image that reaches `net::init` prints
+  `ARP CACHE WRAP OK`. `just test` greps it. If eviction breaks, boot
+  panics before any packet.
+
+## D-0046: T3.6 ARP test does not depend on GARP teaching slirp
+- Date: 2026-08-15 — Status: accepted
+- **Decision:** the first hostfwd connect fires on `DRIVER_OK`, which is
+  printed **before** the GARP (T3.5 item 10: slirp caches a GARP and
+  then never ARPs). That connect is the ARP trigger. After the guest
+  prints `TX ARP reply`, the harness connects a **second** time. Pcap
+  asserts slirp's request, then our unicast reply, then IPv4
+  10.0.2.2→10.0.2.15 with a later frame number. The GARP still goes out
+  after the reply so T3.4's greps hold; it is not how this test teaches
+  slirp our MAC.
+- **Alternatives considered:** skip the GARP for this task (rejected:
+  T3.4 acceptance still runs on the same boot). Fire the first connect
+  after the GARP (rejected: that is the T3.5 failure — no request).
+  Treat the first connect's SYN as the "proceeds past ARP" proof
+  (rejected: the stated acceptance is a *subsequent* connect; relying
+  on slirp sending SYN on the same attempt that elicited ARP couples
+  the proof to one slirp timing). A second QEMU `-netdev` trick or a
+  static ARP on the host (rejected: extra moving parts; two connects
+  on the existing hostfwd is the same trigger T3.5 already uses).
+- **Rationale:** GARP-caching makes "one connect after DRIVER_OK"
+  order-dependent. Splitting provoke (connect #1, before GARP, must
+  ARP) from prove (connect #2, after our reply, must be IPv4) keeps
+  both halves deterministic.
+- **Consequences:** `scripts/boot-test.sh` waits for `TX ARP reply`
+  before the second `provoke-hostfwd` **on `net-init-selftest` only**
+  (D-0054). `assert-pcap-arp-reply.sh` fail-closes on request-only,
+  reply-before-request, and reply-without a later IPv4 frame.
+  Panic/hang images never print `DRIVER_OK` and are not provoked.
+  **T3.12 wrap amendment:** After D-0054 the guest ARPs `10.0.2.2`
+  itself; slirp often never ARPs us, so `TX ARP reply` is not a boot
+  event. The watcher fires **one** `provoke-hostfwd` after
+  `gateway 10.0.2.2 MAC learned` (cache full, SYN not `noarp`). The
+  slirp-asked-first pcap chain (`assert-pcap-slirp-arp.sh`,
+  `assert-pcap-arp-reply.sh`) is no longer a live gate; the scripts
+  remain for fail-closed coverage of the scripts themselves.
+  `just test-net-init` / `just test-net-tcp` keep the handshake asserts;
+  `net-init-selftest` stays in `poll_rx` until ESTABLISHED and LISTEN
+  restore so the feature image does not exit during ping.
+
+## D-0047: TX uses the ARP cache; empty gateway is a panic, not a queue
+- Date: 2026-08-16 — Status: accepted
+- **Decision:** every IPv4 TX is Ethernet-unicast to the **gateway**
+  MAC (`10.0.2.2`) looked up in the ARP cache. There is no routing
+  table. If that lookup misses, the driver **panics** by name. It does
+  not emit an ARP request, and it does not queue the datagram. T3.7's
+  ping runs after `wait_gateway_arp` (D-0054), which learns 10.0.2.2 from
+  slirp's reply to our request; an empty cache at that point is a real
+  resolution failure, not a missed hostfwd window.
+- **Alternatives considered:** ARP-then-queue (rejected: there is no TX
+  queue, and a pending ICMP datagram plus a wait-for-ARP loop is a
+  second protocol on the same descriptor we reuse after `wait_tx`).
+  Broadcast the IP datagram (rejected: slirp would still ARP, and we
+  would be sending IPv4 to ff:ff:ff:ff:ff:ff). Hard-code QEMU's slirp
+  MAC (rejected: the cache would be ornamental; T3.6 already proved
+  learn-from-request).
+- **Rationale:** fail loudly. A silent drop looks like slirp never
+  answered the ping; a panic saying `no MAC for gateway 10.0.2.2`
+  names the missing precondition. The guest-initiated ping is sequenced
+  after the cache is populated, so the panic is a regression alarm, not
+  a startup race.
+- **Consequences:** `arp::lookup([10,0,2,2])` is the only L2 resolution
+  IPv4 has. The echo-reply path uses the same lookup even though the
+  IPv4 destination is the requester — Ethernet dest is still the
+  gateway (no routing). T3.12 (D-0054) fills the cache with an ARP
+  request at init; an empty cache after that wait is a real miss.
+
+## D-0048: ICMP echo server exists; slirp only lets us test the client
+- Date: 2026-08-16 — Status: accepted
+- **Decision:** type 8 → type 0 (echo reply) is implemented: copy
+  identifier/sequence/data, recompute the ICMP checksum, swap IPv4
+  addresses, TX to the gateway MAC. **The harness cannot exercise that
+  half.** Under `-netdev user`, inbound ICMP echo is unroutable
+  (PLAN concept 4, D-0042); a host `ping 10.0.2.15` never arrives as
+  an RX used-ring entry. The tested direction is guest→out: we ping
+  10.0.2.2, slirp answers. A build self-test (`ICMP REPLY BUILD OK`)
+  proves the reply writer produces a checksum-valid type-0 copy; it is
+  not a wire test. RTT is `rdtime` at the 10 MHz virt timebase
+  (`timer::TICK_NS` = 100): one line
+  `PING RTT dst=10.0.2.2 id= seq= tx= rx= ticks= ns=` so M4 can parse
+  the same keys rather than a one-off debug print. `tx` is `rdtime` at
+  QueueNotify of our echo request; `rx` is `rdtime` when the matching
+  echo reply is classified. `ns = ticks * 100`.
+- **Alternatives considered:** skip the server path because slirp cannot
+  deliver inbound echo (rejected: "untested" and "unimplemented" must
+  stay distinct; the limitation is recorded, the code is not omitted).
+  Test inbound via tap (rejected for M3: D-0042; tap is the M4
+  escape hatch). Print only microseconds (rejected: the native unit is
+  `rdtime` ticks; ns is a scaled copy of the same integer, not a
+  different clock).
+- **Rationale:** an echo server that exists only in a comment is how
+  the dishonest skip happens. Shipping the type-8 path and saying
+  plainly that user-net cannot feed it keeps the interview answer
+  honest: the client RTT is the acceptance; the server is correct by
+  construction and untested on the wire.
+- **Consequences:** `just test` greps `PING RTT` and asserts pcap
+  echo-request then echo-reply. It does not send a host ping. Malformed
+  IPv4/ICMP counters (`csum`, `frag`, `ihl`, …) must read 0 on that
+  path; `ipv4 drop_proto` may be non-zero because hostfwd SYNs are
+  IPv4/TCP, not malformed. **That exception expired at T3.10 (D-0049);
+  `just test` now requires `proto=0`.**
+
+## D-0049: `drop_proto` hostfwd-SYN exception expires at T3.10
+- Date: 2026-08-16 — Status: accepted
+- **Decision:** through T3.9, `ipv4 drop_proto` is allowed to be
+  non-zero on the happy path. The hostfwd TCP connects that provoke
+  slirp ARP (T3.5/T3.6) deliver protocol 6 to a stack that only handles
+  ICMP (1) and UDP (17). That is expected noise, **named as temporary**.
+  T3.10 (TCP passive open) **removes the exception**: once we parse
+  SYNs, a non-zero `drop_proto` means an unknown protocol, not a
+  hostfwd SYN, and it must not sit in the "expected noise" category.
+  `just test` requires `proto=0`. The `ipv4: drop proto=6 (TCP; expected
+  until T3.10)` print is gone: protocol 6 is delivered to `tcp`.
+- **Alternatives considered:** stop sending hostfwd connects after ARP
+  is cached (rejected: T3.6's second connect is the "past ARP" proof).
+  Classify TCP as a separate `drop_tcp` that stays non-zero forever
+  (rejected: that launders the exception past T3.10). Ignore proto=6
+  without a counter (rejected: silent).
+- **Rationale:** a counter that is "allowed to be whatever" is how
+  real drops hide. Dating the exception to the task that makes it
+  false keeps T3.10 from inheriting T3.7's excuse.
+- **Consequences:** T3.8 did not grep `proto=0`. T3.10 deleted the
+  exception: `just test` / `just test-net-init` fail the boot if
+  `drop_proto != 0` on the happy path. Do not "fix" it by stopping
+  the hostfwd watcher.
+
+## D-0050: UDP echo swaps ports and addresses; checksum 0 is 0xFFFF
+- Date: 2026-08-16 — Status: accepted
+- **Decision:** UDP echo on guest port 7 (`hostfwd=udp::7777-:7`).
+  Parse/build uses the 12-byte IPv4 pseudo-header (src, dst, zero,
+  protocol 17, UDP length) plus the real UDP header and payload.
+  UDP length is summed **twice** — once in the pseudo-header, once
+  as the Length field in the real header — that is RFC 768, not a
+  double-count bug. A computed checksum of 0 is transmitted as
+  `0xFFFF` (0 means "no checksum"). On RX, checksum 0 is **dropped**
+  (`drop_csum`) — a **deliberate deviation from RFC 768**, which
+  permits zero to mean "no checksum was computed." We do not treat
+  optional-checksum as valid. slirp always fills in a real checksum,
+  so the QEMU user-net peer never exercises the RFC's zero; a
+  real-world peer that legitimately sends 0 is dropped by this
+  policy, not by accident. Echo **mirrors** payload and UDP length,
+  **swaps** source/dest ports and IPv4 addresses, **recomputes** IP
+  checksum, UDP checksum, TTL, and Ethernet dest (gateway MAC). The
+  harness waits for serial `UDP ECHO READY` before sending; the
+  client is a datagram socket with a 2 s recv timeout (the `nc -u`
+  shape) so a silent guest is TEST FAIL, not a hang.
+- **Alternatives considered:** accept RX checksum 0 per RFC 768
+  (rejected: that is skipping verification, the T3.7 dishonest skip
+  applied to UDP; recorded here as a named deviation rather than
+  left implicit, because a non-slirp peer may send zero in good
+  faith). Rebuild the datagram from parsed fields (rejected:
+  echo is a swap; rebuilding is how payload bytes get lost). Fire
+  `nc -u` on `DRIVER_OK` (rejected: the guest is still in ARP/ping;
+  UDP would sit in the used ring or be dropped as proto-not-yet).
+  Call distro `nc -u` directly (rejected: EOF/timeout behavior is not
+  portable; a SOCK_DGRAM + `settimeout` is the same packet and is
+  fail-closed).
+- **Rationale:** the pseudo-header and the 0/`0xFFFF` wrinkle are the
+  interview questions; they live in `udp.rs` with a self-test that
+  forces a zero computed sum. Dropping RX 0 is stricter than the RFC
+  and is defensible against slirp (it always computes one) but is
+  still a protocol choice, not "the RFC says so." The harness race
+  is the same lesson as T3.5: provoke only after the guest has
+  printed that it is polling for this packet.
+- **Consequences:** every QEMU invocation gains
+  `hostfwd=udp::7777-:7`. `just test-net-udp` is a sibling feature
+  (`net-udp-selftest`) so the default boot does not spin 2 s waiting
+  for a datagram `just test` never sends. T3.9 moved the echo into the
+  app over `recv`/`send`; this entry's wire behavior stays.
+  Revisit RX-0 if a non-slirp peer (tap, M4) needs optional-checksum.
+
+## D-0051: Compiled Rust in `.utext` stays inside the app/usys archives
+- Date: 2026-08-16 — Status: accepted
+- **Decision:** T3.9 links a real `app` crate (and a `usys` wrapper) into
+  the existing user sections via linker `EXCLUDE_FILE` on those
+  archives' `.text/.rodata/.data/.bss` (D-0044). The image has **one**
+  `#[panic_handler]` lang item, and it stays in the kernel: S-mode
+  cannot fetch `U=1` pages (SUM does not affect instruction fetch),
+  and U-mode cannot fetch `U=0` pages, so a single handler cannot
+  serve both. The app crate therefore does not carry a lang-item
+  panic handler. Its abort path is `usys::exit` / `unimp` in `.utext`.
+  The app is written so rustc does not emit calls into `core`'s
+  panicking/fmt/builtins: no `panic!`/`unwrap`/`expect`, no indexing
+  that can fail, no `format!`/`println!`, no `f32`/`f64`, overflow
+  checks and debug assertions off on the `app` and `usys` packages,
+  `opt-level = 1` so small copies inline instead of calling
+  `memcpy`/`memset`. `-C no-redzone` is an x86 concern; RISC-V has
+  no red zone, so the flag is a no-op here and is not set. `panic =
+  "abort"` is already the workspace profile (no unwinder /
+  `eh_personality` in either half). `check-utext` requires `app_main`
+  to sit in `[__utext_start, __utext_end)` so a failed section match
+  cannot hide in kernel `.text`. Unknown mnemonics stay a hard
+  error; FP including `c.fld`/`c.fsd`/`c.fldsp`/`c.fsdsp` is
+  rejected by name (D-0044). `recv` (6) / `send` (7) join the ABI;
+  0 stays reserved; numbers `>= 8` still kill. UDP `send` ignores
+  the FIN bit (T3.10's TCP close); a task waiting on a packet stays
+  `Running` and spins on `recv` (D-0035, D-0040).
+- **Alternatives considered:** `#[panic_handler]` in the app crate as
+  well as the kernel (rejected: rustc allows one `panic_impl` per
+  image; a second compilation + `objcopy --redefine-sym` is how
+  you fake two, and that is exactly the archive-boundary iteration
+  this task is forbidden to wander into). Putting the one lang item
+  in `.utext` (rejected: a kernel `panic!` would instruction-fault
+  fetching U=1 text). `panic = "immediate-abort"` (rejected: needs
+  nightly `-Zunstable-options` on 1.97). Sharing `core` helpers
+  that are not inlined (rejected: those objects already live in
+  kernel `.text`; an `auipc+jalr` from `.utext` into them is the
+  silent-wrong outcome `check-utext` exists to catch). Building the
+  app for a soft-float target (rejected: D-0044, ABI mismatch).
+  Growing `check-utext` with a permissive default for unknown ops
+  (rejected: the checker's contract is fail-closed). A `Blocked`
+  state for `recv` (rejected: D-0035). Kernel auto-echo remaining
+  in `classify_udp` "for the harness" (rejected: T3.9's acceptance
+  is the echo moving into the app).
+- **Rationale:** the structural risk is not the echo logic; it is
+  LLVM emitting a symbol that resolves outside the user sections.
+  The mitigations are "don't generate that call" plus a checker
+  that fails if we did. The panic-handler split is hardware: two
+  privilege levels, one identity map, one lang item.
+- **Consequences:** rustc passes `libapp-HASH.rlib` whose members are
+  `app-HASH.*.rcgu.o`, and LLVM names string literals
+  `.rodata..Lanon.*`. Matching only `*libapp-*.rlib:(.rodata)` left
+  those strings in kernel `.rodata` (`auipc` from `.utext` into
+  `0x8022xxxx`). The working placement is `#[link_section]` on user
+  functions and data, plus matching both the rlib and the `*.rcgu.o`
+  member names. If that pairing breaks, **stop** and inspect
+  `cargo rustc -- --print link-args` — do not iterate wildcards.
+  Symptom of the silent case: `app_main` at `0x8020xxxx`, every test
+  green until the first `sret`. The planted `c.fld` image is a
+  build-only feature (`utext-c-fld-selftest`); it must not ship in
+  the default kernel. `net-udp-selftest` drops `no-sret` so the app
+  actually runs. Revisit if a future app needs `core::fmt` or a real
+  `memcpy` in `.utext` (that is a local `#[no_mangle]` in `usys`,
+  not a link to `compiler_builtins`).
+
+## D-0052: T3.10 handshake only; no RST on FIN or a second 4-tuple
+- Date: 2026-08-16 — Status: superseded in part by D-0053
+- **Decision:** T3.10 implements LISTEN → SYN_RCVD → ESTABLISHED and
+  nothing past that. One listener (guest port 80), one TCB. Duplicate
+  SYN in SYN_RCVD re-sends the same SYN/ACK (same ISN). Payload, FIN,
+  RST, and a SYN from a second 4-tuple are **dropped with a counter,
+  not RST**. Empty ARP cache on a SYN is the same drop (no panic,
+  no ARP-and-queue). D-0041's RST-on-unexpected and the close
+  sequence land at T3.11.
+- **Alternatives considered:** RST every unexpected segment as D-0041
+  already says (rejected at this checkpoint: the hostfwd watcher
+  `close()`s after `connect()`, slirp sends FIN, and a second
+  hostfwd connect is a second 4-tuple; an honest RST would fail the
+  T3.10 "no RST" pcap gate without testing close). Queue a second
+  SYN until the first TCB is free (rejected: one connection, no
+  timer, and T3.11 is when close exists). Panic on a SYN before the
+  gateway MAC is cached (rejected: D-0040, remote bytes never panic).
+- **Rationale:** the acceptance is a standalone handshake: SYN →
+  SYN/ACK → ACK, ESTABLISHED set, no RST. The harness that makes
+  slirp ARP (D-0046) is also the harness that completes the
+  handshake; it must not be rewritten to hide FINs. Dropping
+  unexpected segments keeps the capture honest for this checkpoint
+  without pretending close is implemented.
+- **Consequences:** `just test-net-init` fires one hostfwd connect after
+  the gateway MAC is learned (D-0046 / D-0054).
+  `just test` does not use the watcher. `busy` / `unexpected` in `tcp_drop` may be non-zero on a happy
+  boot (second SYN, peer FIN after ESTABLISHED). Malformed counters
+  (`short`, `doff`, `csum`, `opt`) must read 0. `drop_proto` must
+  read 0 (D-0049). T3.11 (D-0053) implements FIN consumption and
+  close. A second 4-tuple is still dropped, not queued and not RST:
+  that is one TCB, not a second connection.
+
+## D-0053: One-shot HTTP/1.0, Connection: close, one-segment request
+- Date: 2026-08-16 — Status: accepted
+- **Decision:** T3.11 serves one GET. The app parses a request line in
+  the **one segment `recv` returned** (no kernel reassembly, no
+  cross-segment buffer). `send` of a fixed `HTTP/1.0 200 OK` body
+  with `Connection: close` and the FIN flag is the only data TX and
+  the only close the app issues. Stop-and-wait: at most one unacked
+  segment; 200 ms `rdtime` RTO from the `recv` poll loop; 8 attempts
+  then RST. FIN consumes a sequence number on send (`snd_nxt +=
+  len + 1`) and on receive (`rcv_nxt += len + 1`). Close states:
+  FIN_WAIT_1 → FIN_WAIT_2 → truncated TIME_WAIT (log, LISTEN);
+  CLOSE_WAIT → LAST_ACK when the peer FINs first. An unused TCB
+  (no payload delivered to `recv`, no `send`) that sees peer FIN is
+  closed by the kernel (FIN+ACK) so LISTEN is restored — that is
+  the hostfwd probe, not keep-alive. A second 4-tuple SYN is
+  dropped (`busy`), not queued and not RST. The `tcp-drop-first-tx`
+  selftest **posts the first data segment** (so the capture has it)
+  and **ignores ACKs until one RTO retransmit**; lossless slirp
+  would otherwise ACK immediately and hide the timer. While those
+  ACKs are held, a peer FIN is also deferred: ACKing the close first
+  lets slirp CLOSED and the RTO copy meets RST instead of an ACK.
+  The tripwire (D-0037) applies the moment curl has its 200: no
+  second `send`, no second TCB, no header-driven keep-alive.
+- **Alternatives considered:** reassemble a request line across
+  segments (rejected: curl's GET is one segment; a buffer is the
+  start of a real HTTP parser and the tripwire forbids it). RST a
+  second 4-tuple (rejected: the hostfwd watcher shares the pcap;
+  an RST there fails "no RST on the happy path" without proving
+  multi-connection). Drop the first TX from the virtio ring
+  (rejected: the capture would contain one copy, not two). Full
+  TIME_WAIT (rejected: D-0041; a retransmitted peer FIN after we
+  are LISTEN meets RST, visible, harmless).
+- **Rationale:** the demo is one GET, one response, one FIN pair.
+  Everything else is a door D-0037 says not to walk through.
+- **Consequences:** the exact body is `whimbrel\n` (9 bytes,
+  `Content-Length: 9`). T3.12 flips `just test` to `M3 UNIKERNEL OK`.
+  `just test-net-http` is the curl checkpoint; `just test-net-rto` is
+  the timer checkpoint. `http-persist` (T3.12) recycles LISTEN after
+  close so `just run-http` can serve sequential Connection: close
+  connections; it is not keep-alive and still one TCB.
+  `recv` returns 0 only after the peer FIN **and** our inflight
+  segment is ACKed — otherwise the app would `exit` before the RTO
+  could fire. Truncated TIME_WAIT does not clear that EOF. A late
+  FIN after LISTEN is dropped, not RST, so the happy-path capture
+  stays RST-free (the hostfwd watcher and a retransmitted peer FIN
+  share that pcap).
+
+## D-0054: ARP for the gateway at init; do not wait to be asked
+- Date: 2026-08-16 — Status: accepted
+- **Decision:** `net::init` transmits an ARP request for `10.0.2.2` and
+  waits for the reply. That populates the cache D-0047 panics on. The
+  kernel no longer waits to be ARPed by slirp (the ~2 s `wait_rx_arp`
+  that panics on a standalone boot). We still answer a request for our
+  IP if one arrives. GARP still goes out after the cache is filled.
+- **Alternatives considered:** keep the hostfwd watcher as a boot
+  dependency (rejected: M4 measurement runs and `just run-http` have no
+  watcher; a demo that panics without an external connect is not a
+  unikernel). Hard-code slirp's MAC (rejected: D-0047 — the cache would
+  be ornamental). ARP-and-queue on the first IPv4 TX (rejected: still
+  D-0047; init is the one place we may wait).
+- **Rationale:** being asked is a harness accident, not a protocol
+  requirement. An ARP client is the missing half of RFC 826 and the
+  only way D-0047's empty-cache panic means "resolution failed" rather
+  than "nobody poked hostfwd in time".
+- **Consequences:** `just run-http` boots to LISTEN with nothing else
+  running. The T3.5/T3.6 "slirp ARPs us first" pcap chain is no longer
+  the default-boot story; the live assert is our request then slirp's
+  reply (`assert-pcap-gateway-arp.sh`). D-0046's watcher remains for the
+  `net-init-selftest` handshake sibling only, and fires after the cache
+  is filled rather than after `TX ARP reply`. D-0047 is amended: the
+  panic is a real miss.
+

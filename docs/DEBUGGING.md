@@ -71,8 +71,10 @@ Read: `async:0` = exception (1 = interrupt), `cause`/`desc` = what happened,
 
 - **It's noisy.** Every SBI console byte is an `ecall` (`desc=supervisor_ecall`
   → M-mode and back). Filter: `grep -v supervisor_ecall qemu.log`.
-- `guest_errors` is gold: it reports accesses to unmapped *physical* addresses
-  (MMIO typos) that otherwise fail silently or as store faults.
+- `guest_errors` is gold for MMIO typos and unmapped *physical* addresses
+  that otherwise fail silently or as store faults. It is **not** where
+  the virtio device model reports a broken ring — that is QEMU stderr
+  (`Looped descriptor`, `in_num`/`out_num`). See M3 ladder item 1.
 - A rapidly repeating identical trap block = trap loop (see §4).
 - `-d in_asm` additionally logs every translated code block — extreme but
   definitive when you doubt the CPU is reaching your code at all.
@@ -308,12 +310,113 @@ stack, which costs a load and a comparison in the hottest path because RISC-V
 S-mode has only one `sscratch` and no hardware IST equivalent.
 
 **M3 (expand at milestone start)**
-1. Virtqueue memory not physically contiguous / wrong physical address given
-   to the device → device silently does nothing (no trap at all — the worst
-   kind; check with `-d guest_errors` and the device's status field).
-2. Missing memory barrier between writing descriptors and ringing the
+
+Silent-device ladder — work **in this order**. A dead virtqueue produces
+no trap; the first channel that can name the bug is the one to read.
+
+1. **QEMU stderr** — a distinct diagnostic channel from `-d guest_errors`.
+   The device model prints structural virtqueue complaints there and
+   nowhere else: `Looped descriptor`, `virtio-net receive queue contains
+   no in buffers`, `in_num`/`out_num` via `virtio_error` → `error_vreport`
+   (`qemu-system-riscv64: …` on the host). `-d guest_errors` is MMIO and
+   physical-access noise (write-only register reads, unmapped GPAs).
+   **`-D qemu.log` captures only `-d` items; it does not capture stderr.**
+   `just test` redirects stderr into `serial.log` (`2>&1`) — grep
+   `qemu-system-riscv64:`. This named the T3.5 WRITE-vs-NEXT bug
+   directly; `guest_errors` did not.
+2. Virtqueue memory not physically contiguous / wrong physical address
+   given to the device → device silently does nothing (no trap at all —
+   the worst kind; check with `-d guest_errors` and the device's status
+   field).
+3. Missing memory barrier between writing descriptors and ringing the
    doorbell.
-3. Legacy vs modern virtio-mmio register layout mismatch.
+4. Legacy vs modern virtio-mmio register layout mismatch.
+5. Reading QueueDesc/QueueDriver/QueueDevice Low/High returns 0 on QEMU.
+   Those six registers are write-only (virtio 1.2 §4.2.2); QEMU logs
+   `read of write-only register` under `-d guest_errors`. A zero read is
+   not proof the write stuck. QueueReady (0x044) *is* readable — if it is
+   already 1, the device owns the ring and `verify()` is too late.
+   **A wrong register offset remains undetectable at init on this
+   transport** (the readback cannot distinguish it from a correct write).
+   If the ring is dead in T3.3, re-derive the offsets against the spec
+   table first, not last.
+6. A Status=0 soft reset (`virtio_mmio_soft_reset`) clears the queue
+   address registers. Any re-init path must rewrite them before
+   QueueReady. A driver that writes them once at startup and resets later
+   has a dead ring with no diagnostic — `used.idx` never moves, the pcap
+   stays empty.
+7. `net::dump` showing `isr=0x1` after the first used-ring update is
+   expected under polling. Virtio-mmio InterruptStatus bit 0
+   (`VIRTIO_MMIO_INT_VRING`) stays set until a write to InterruptACK
+   (0x064). We never ACK: the PLIC is unmapped (D-0040) and the bit is
+   not how we notice work — `used.idx` is. Do not "fix" this by ACK-ing
+   in the dump path; that would hide a later accidental interrupt enable.
+8. **Harness assertions fail closed, and every new one must have its
+   failure modes exercised before it is trusted.** A missing file, an
+   empty file, a well-formed file with zero matching frames, and a
+   missing tool (`tshark`, `llvm-objdump`) are four different bugs; if
+   you only run the happy path, a vacuous pass is indistinguishable from
+   a real one. This is the same shape as `check-utext` (unknown objdump
+   lines are a hard error, not a skip) and as the T3.4 `just test` hole:
+   that recipe is `set -u` without `set -e`, so a bare
+   `bash scripts/assert-….sh` returning 1 was ignored and the recipe
+   still printed PASS. Wrap every new assert with `if ! …; then exit 1;
+   fi` (or give the recipe `set -e`). It will recur in each new test
+   script — treat an untested failure mode as an unwritten assert.
+9. RX `used.idx` stuck, status gains `0x40` (`DEVICE_NEEDS_RESET`), QEMU
+   **stderr** prints `Looped descriptor` and `virtqueue_pop … in_num 0
+   out_num 1`: `VIRTQ_DESC_F_WRITE` is **2**, `NEXT` is **1**. Flagging
+   RX buffers with 1 makes the device follow `next` (often 0) around the
+   table. TX still works — those descriptors are device-readable
+   (`flags=0`). Read stderr (item 1) before `-d guest_errors`.
+10. A hostfwd connect after our GARP does not produce an ARP request.
+    slirp caches the GARP (or already learned us from our request for
+    `10.0.2.2`) and sends IPv4 (TCP SYN) unicast. After D-0054 we ARP
+    the gateway ourselves; slirp often never ARPs us, so `TX ARP reply`
+    is not a boot event. The net-init watcher fires one connect after
+    `gateway 10.0.2.2 MAC learned` so the SYN is not dropped as noarp
+    (D-0046). The live pcap assert is our request then slirp's reply
+    (`assert-pcap-gateway-arp.sh`), not the T3.5/T3.6 slirp-asked-first
+    chain.
+11. `ipv4 drop_proto` non-zero on a happy boot used to be the hostfwd
+    TCP SYN (protocol 6) hitting a stack that did not yet parse TCP.
+    That exception **expired at T3.10** (D-0049). TCP exists, so
+    `drop_proto != 0` is a real drop. Do not "fix" a non-zero by
+    grepping it away or by stopping the hostfwd watcher.
+12. Archive section matching does **not** catch LLVM-generated anonymous
+    rodata symbols. rustc emits string literals (and similar constants)
+    as unique `.rodata..Lanon.*` sections inside `app-HASH.*.rcgu.o`
+    members of `libapp-HASH.rlib`. A linker rule that only names
+    `*libapp-*.rlib:(.rodata)` misses them; LLD orphans them into kernel
+    `.rodata`. The symptom is the silent-wrong case: `app_main` sits in
+    `.utext` at a user address, an `auipc` from that function into
+    kernel `.rodata` (`0x8022xxxx`) **passes the link**, and the first
+    use (the load of `UDP ECHO READY`) faults. `check-utext` catches
+    the `auipc` after the fact; it does not place the bytes.
+    `#[link_section = ".urodata"]` on the constant is the mechanism
+    that works (same as `#[link_section = ".utext"]` on the function),
+    plus matching the `*.rcgu.o` member names. Do not iterate
+    `EXCLUDE_FILE` wildcards (D-0051).
+13. A drop-first-TX retransmit selftest that **posts** the first data
+    segment (so the pcap has two copies) but **ignores ACKs** until
+    one RTO must also defer the peer FIN. If you ACK their FIN while
+    still pretending you have not seen the ACK of yours, slirp goes
+    CLOSED and the 200 ms copy meets RST — `rexmit=1` can still pass
+    via RST clearing the TCB, and the capture will not show an ACK of
+    the second segment. Symptom: `HTTP RETRANSMIT OK` on serial,
+    pcap has two copies ~200 ms apart, then RST, assert "no ACK of
+    nxtseq after second copy". Cause: simultaneous-close FIN-ACK
+    while `hold_acks` is true (D-0053). Truncated TIME_WAIT also must
+    not clear the app's EOF, and `recv` 0 must wait until inflight is
+    gone, or the app exits before the timer can fire.
+14. `cargo build --release` panics in `check_layout` with addresses that
+    already look adjacent (`__kernel_end` and `__heap_start` both
+    `0x80272000`). LLVM treats distinct `extern static`s as non-aliasing,
+    so `addr_of!(a) == addr_of!(b)` constant-folds to false under LTO
+    even when the linker placed them at the same VA. `!=` of two linker
+    symbols (`.utext must follow boot stack`) is the same bug with the
+    opposite fold. `core::hint::black_box` on the address keeps the
+    comparison as a runtime load. Debug `opt-level=0` never hits this.
 
 ## 5. QEMU monitor — inspect a hung machine *without* GDB
 
@@ -342,7 +445,9 @@ Work the list in order; each step either finds it or shrinks the search space.
 2. **`git stash` / diff against the last green commit.** What changed since
    the acceptance test last passed? (Commit at every green state precisely to
    make this step cheap.)
-3. **Rerun with `-d int,guest_errors -D qemu.log`**, grep away the `ecall`
+3. **QEMU stderr, then `-d int,guest_errors`.** Structural virtqueue
+   failures (`Looped descriptor`) print on stderr, not under `-d`. Then
+   rerun with `-d int,guest_errors -D qemu.log`, grep away the `ecall`
    noise, read the *first* abnormal trap block — later ones are usually
    fallout.
 4. **Verify the binary, not the source:** `just objdump` — is the entry where
