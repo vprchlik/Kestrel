@@ -675,6 +675,13 @@ pub fn handle(payload: &[u8], src: &[u8; 4], dst: &[u8; 4]) -> Out {
     }
 
     if flags & FIN != 0 {
+        if hold_acks() {
+            // Simultaneous close would ACK this FIN and let slirp
+            // CLOSED; the RTO copy would then meet RST and never
+            // prove an ACK of the retransmit (D-0053).
+            println!("tcp: hold peer FIN until first TX is ACKed");
+            return Out::None;
+        }
         let fin_seq = seq.wrapping_add(data.len() as u32);
         if fin_seq != t.rcv_nxt {
             println!(
