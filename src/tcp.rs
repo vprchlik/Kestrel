@@ -585,6 +585,7 @@ pub fn handle(payload: &[u8], src: &[u8; 4], dst: &[u8; 4]) -> Out {
         };
         match t.state {
             State::Listen => {
+                crate::phase::stamp(crate::phase::SYN_RX);
                 let isn = csr::time::read() as u32;
                 t.remote_ip = *src;
                 t.remote_port = sport;
@@ -635,6 +636,7 @@ pub fn handle(payload: &[u8], src: &[u8; 4], dst: &[u8; 4]) -> Out {
     if t.state == State::SynRcvd {
         if flags & ACK != 0 && flags & SYN == 0 && ack == t.snd_nxt && seq == t.rcv_nxt {
             t.state = State::Established;
+            crate::phase::stamp(crate::phase::ESTABLISHED);
             unsafe { ESTABLISHED = ESTABLISHED.wrapping_add(1) };
             println!("TCP ESTABLISHED");
         } else {

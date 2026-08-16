@@ -1545,7 +1545,7 @@ widened.
 ### T4.2 — Attribution stamps and phase renames — M
 The stamp set becomes the audit's finding-3/5/6/7/9 decomposition,
 verbatim (D-0057): `frame_init`, `task_init`, `page_build`, `page_verify`
-split out of "paging" (which shrinks to the `satp` switch); `virtq_init`
+split out of "paging"; the `satp` switch is stamped `activate`; `virtq_init`
 split out of the DRIVER_OK delta; `serving_ready` stamped when the
 gateway MAC is learned (the true earliest-serve point, finding 6);
 `LISTEN` renamed `net_init_done` (what it is); `heap_init` and

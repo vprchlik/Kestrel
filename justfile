@@ -10,6 +10,10 @@ qemu      := "qemu-system-riscv64"
 # (audit finding 28).
 qemu_args := `bash scripts/qemu-args.sh`
 
+# D-0057 / finding 26: one name list for the three HTTP phase greps.
+# The harness parses PHASE lines from serial and is not a fourth copy.
+phase_names := "_start stamp_a stamp_b stvec frame_init task_init page_build page_verify activate virtq_init DRIVER_OK first_rx serving_ready net_init_done heap_init accounting freeze sret syn_rx established E3g E3g_doorbell"
+
 # Cross-compile the debug kernel for riscv64gc-unknown-none-elf.
 # Frame pointers: scripts/cargo-debug.sh (finding 14).
 build:
@@ -185,11 +189,9 @@ test expect="M3 UNIKERNEL OK" timeout_s="12":
             echo 'TEST FAIL: unexpected retransmit on the happy path'
             exit 1
         fi
-        # Finding 26: this name list is triplicated (test / test-fast /
-        # test-fast-release). The T4.1 harness parses PHASE lines from
-        # serial and must not become a fourth copy. Collapsing these
-        # three waits for T4.2 (D-0057), when the names change.
-        for ph in _start stvec paging DRIVER_OK first_rx listen freeze sret E3g E3g_doorbell; do
+        # Finding 26 / D-0057: one `phase_names` list (test / test-fast /
+        # test-fast-release). The harness parses serial, not this list.
+        for ph in {{phase_names}}; do
             if ! grep -a -q "PHASE ${ph} " "$log"; then
                 echo "TEST FAIL: missing PHASE ${ph}"
                 exit 1
@@ -200,6 +202,7 @@ test expect="M3 UNIKERNEL OK" timeout_s="12":
             grep -a 'PHASE .* unset' "$log" || true
             exit 1
         fi
+        python3 scripts/bench.py check-serial "$log"
         if [ ! -f http.status ]; then
             echo 'TEST FAIL: http.status missing (curl never ran or was killed first)'
             exit 1
@@ -652,7 +655,7 @@ test-fast:
     set -euo pipefail
     EXPECT="M3 UNIKERNEL OK" TIMEOUT_S=12 bash scripts/boot-test.sh fast-boot
     log=serial.log
-    for ph in _start stvec paging DRIVER_OK first_rx listen freeze sret E3g E3g_doorbell; do
+    for ph in {{phase_names}}; do
         if ! grep -a -q "PHASE ${ph} " "$log"; then
             echo "TEST FAIL: missing PHASE ${ph}"
             exit 1
@@ -663,6 +666,7 @@ test-fast:
         grep -a 'PHASE .* unset' "$log" || true
         exit 1
     fi
+    python3 scripts/bench.py check-serial "$log"
     if [ ! -f http.status ] || [ "$(cat http.status)" != "0" ]; then
         echo "TEST FAIL: curl status $(cat http.status 2>/dev/null || echo missing), want 0"
         exit 1
@@ -688,7 +692,7 @@ test-fast-release:
     PROFILE=release CLIENT_EARLY=1 EXPECT="M3 UNIKERNEL OK" TIMEOUT_S=12 \
         bash scripts/boot-test.sh fast-boot
     log=serial.log
-    for ph in _start stvec paging DRIVER_OK first_rx listen freeze sret E3g E3g_doorbell; do
+    for ph in {{phase_names}}; do
         if ! grep -a -q "PHASE ${ph} " "$log"; then
             echo "TEST FAIL: missing PHASE ${ph}"
             exit 1
@@ -699,6 +703,7 @@ test-fast-release:
         grep -a 'PHASE .* unset' "$log" || true
         exit 1
     fi
+    python3 scripts/bench.py check-serial "$log"
     if [ ! -f http.status ] || [ "$(cat http.status)" != "0" ]; then
         echo "TEST FAIL: curl status $(cat http.status 2>/dev/null || echo missing), want 0"
         exit 1

@@ -296,7 +296,34 @@ def parse_phases(serial_text: str) -> list[dict]:
         )
     if "E3g" not in names:
         raise BenchFail("TEST FAIL: PHASE E3g missing")
+    if "stamp_a" not in names or "stamp_b" not in names:
+        raise BenchFail("TEST FAIL: stamp_a/stamp_b missing (overhead pair)")
+    assert_phases_sum_to_e3g(rows)
     return rows
+
+
+TICK_NS = 100
+
+
+def stamp_overhead_ns(rows: list[dict]) -> int:
+    by = {r["phase"]: r for r in rows}
+    return max(int(by["stamp_b"]["delta_ns"]), TICK_NS)
+
+
+def assert_phases_sum_to_e3g(rows: list[dict]) -> int:
+    """Sum of deltas up to E3g must equal E2→E3g within the stamp floor."""
+    overhead = stamp_overhead_ns(rows)
+    e3g = next(r for r in rows if r["phase"] == "E3g")
+    e2e3g = int(e3g["ns_since_e2"])
+    total = sum(
+        int(r["delta_ns"]) for r in rows if int(r["ns_since_e2"]) <= e2e3g
+    )
+    if abs(total - e2e3g) > overhead:
+        raise BenchFail(
+            f"TEST FAIL: phase deltas sum to {total} ns, E2→E3g is {e2e3g} ns "
+            f"(overhead floor {overhead} ns)"
+        )
+    return overhead
 
 
 def pcap_time_ns(line: str) -> int:
@@ -976,6 +1003,17 @@ def cmd_summarize(args: argparse.Namespace) -> int:
     ]
     if "shuffle_seed" in runs[0]:
         lines.insert(-1, f"shuffle_seed={runs[0]['shuffle_seed']}")
+    oh_vals = [
+        float(p["delta_ns"])
+        for p in phases
+        if p.get("phase") == "stamp_b" and int(p.get("warmup", "0")) == 0
+    ]
+    if oh_vals:
+        lines.insert(
+            -1,
+            f"stamp_overhead_ns={statistics.median(oh_vals):.0f} "
+            f"(floor max(that, {TICK_NS} ns); not a stability metric)",
+        )
     groups: dict[tuple[str, str, str], list[dict]] = {}
     for r in runs:
         key = (r["batch_id"], r["system"], r["config"])
@@ -1035,6 +1073,21 @@ def cmd_summarize(args: argparse.Namespace) -> int:
         )
         return 1
     print("TEST PASS: bench summary")
+    return 0
+
+
+def cmd_check_serial(args: argparse.Namespace) -> int:
+    path = Path(args.serial)
+    if not path.is_file():
+        raise BenchFail(f"TEST FAIL: serial log missing: {path}")
+    text = path.read_bytes().decode("utf-8", errors="replace")
+    rows = parse_phases(text)
+    overhead = stamp_overhead_ns(rows)
+    e3g = next(r for r in rows if r["phase"] == "E3g")
+    print(
+        f"TEST PASS: phase deltas sum to E2→E3g "
+        f"({int(e3g['ns_since_e2'])} ns) within stamp overhead {overhead} ns"
+    )
     return 0
 
 
@@ -1159,11 +1212,30 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
     good_serial = (
         "PHASE ticks (10 MHz, 100 ns/tick); ns = ticks * 100\n"
         "PHASE _start ticks=100 ns=10000 since_start=0 ns=0 delta=0 ns=0\n"
-        "PHASE E3g ticks=200 ns=20000 since_start=100 ns=10000 delta=100 ns=10000\n"
+        "PHASE stamp_a ticks=110 ns=11000 since_start=10 ns=1000 delta=10 ns=1000\n"
+        "PHASE stamp_b ticks=111 ns=11100 since_start=11 ns=1100 delta=1 ns=100\n"
+        "PHASE E3g ticks=200 ns=20000 since_start=100 ns=10000 delta=89 ns=8900\n"
     )
     rows = parse_phases(good_serial)
-    if [r["phase"] for r in rows] != ["_start", "E3g"]:
+    if [r["phase"] for r in rows] != ["_start", "stamp_a", "stamp_b", "E3g"]:
         raise BenchFail(f"good PHASE parse unexpected: {rows}")
+    if stamp_overhead_ns(rows) != 100:
+        raise BenchFail("stamp overhead parse unexpected")
+
+    bad_sum = (
+        "PHASE ticks (10 MHz, 100 ns/tick); ns = ticks * 100\n"
+        "PHASE _start ticks=100 ns=10000 since_start=0 ns=0 delta=0 ns=0\n"
+        "PHASE stamp_a ticks=110 ns=11000 since_start=10 ns=1000 delta=10 ns=1000\n"
+        "PHASE stamp_b ticks=111 ns=11100 since_start=11 ns=1100 delta=1 ns=100\n"
+        "PHASE E3g ticks=200 ns=20000 since_start=100 ns=10000 delta=50 ns=5000\n"
+    )
+    try:
+        parse_phases(bad_sum)
+        raise BenchFail("phase-sum mismatch did not fire")
+    except BenchFail as e:
+        if "phase deltas sum" not in str(e):
+            raise
+        fired.append(f"phase-sum mismatch: {e}")
 
     if steal_ticks_from_stat("cpu  1 0 2 3 4 5 6 7 8 9\ncpu0 0 0 0 0 0 0 0 0 0 0\n") != 7:
         raise BenchFail("steal column parse unexpected")
@@ -1239,6 +1311,10 @@ def main() -> int:
 
     st = sub.add_parser("selftest")
     st.set_defaults(func=cmd_selftest)
+
+    chk = sub.add_parser("check-serial", help="assert PHASE deltas sum to E2→E3g")
+    chk.add_argument("serial")
+    chk.set_defaults(func=cmd_check_serial)
 
     args = p.parse_args()
     try:

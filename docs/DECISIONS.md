@@ -1887,6 +1887,17 @@ D-0011 onward are working decisions made under those constraints.
   governor is `unavailable`. Cumulative steal is nonzero (203 ticks at
   diagnosis start) but almost never lands inside a 2 s trial. Report-grade
   numbers are not obtainable here; the bench host has to be dedicated.
+  **Dedicated host (after T4.1 diagnosis):** development and correctness
+  gates run anywhere. Every report number comes from a dedicated Ubuntu
+  machine (native, performance governor, SMT off, steal 0) whose spec
+  block lives in the report. The cloud workspace is a pod on a KVM guest
+  with no cpufreq and cannot meet this entry's host controls.
+  **Harness findings that survive the move:** (1) per-trial `/proc/stat`
+  steal at USER_HZ=100 cannot resolve millisecond misses — steal=0 is
+  necessary, not sufficient. (2) Interleaving configs and shuffling
+  recorded trials fixed a batch-order confound that had looked like a
+  guest-internal shift (release-default E2→E3g 98.5 → 105.6 ms under
+  sequential blocks; the same contrast passed once trials were mixed).
 
 ## D-0056: Pre-baseline corrections (T4.0b)
 - Date: 2026-08-16 — Status: accepted
@@ -1944,15 +1955,20 @@ D-0011 onward are working decisions made under those constraints.
 - Date: 2026-08-16 — Status: accepted
 - **Decision:** the phase set becomes the audit's decomposition,
   verbatim. New stamps: `frame_init` (after `frame::init`; check_dtb
-  rides with it), `task_init`, `page_build`, `page_verify` (leaving
-  `paging` to mean only the `satp` switch), `virtq_init` (splitting the
+  rides with it), `task_init`, `page_build`, `page_verify`, `activate`
+  (the `satp` switch — finding 3 named this remainder `paging`; the T4.2
+  landing names it `activate` so the old composite cannot hide behind
+  the same word), `virtq_init` (splitting the
   doubled program+verify out of DRIVER_OK, finding 4), `serving_ready`
   (gateway MAC learned — the true earliest-serve point, finding 6),
   `heap_init` and `accounting` (splitting the freeze delta, finding 7),
   `syn_rx` and `established` (splitting client arrival out of the E3g
   tail, finding 9). Renames: `listen` → `net_init_done` (finding 6).
-  Stamp overhead is measured by two adjacent stamps at boot and reported
-  with the table. The audit's finding-10 cost inventory and finding-12
+  Stamp overhead is measured by two adjacent stamps at boot (`stamp_a`,
+  `stamp_b`) and reported with the table; every attributed delta is
+  quoted against that floor. Phase deltas from `_start` through `E3g`
+  must sum to E2→E3g within that floor (harness fail-closed, not a
+  visual check). The audit's finding-10 cost inventory and finding-12
   variance prediction are **pre-registered claims**: T4.2's first
   attributed table is checked against both, and agreement or
   disagreement is recorded in the report draft — if they disagree, one
@@ -1967,13 +1983,53 @@ D-0011 onward are working decisions made under those constraints.
   four unrelated costs; every ladder decision downstream keys off this
   table. Instrumentation precedes the baseline freeze because a frozen
   baseline without attribution would have to be re-frozen immediately.
-- **Consequences (the co-edit checklist, audit finding 26):** the same
-  commit must touch `src/phase.rs` (N, index consts, NAMES), the three
-  justfile phase lists (`justfile:187,650,686` as of `4660fab`), and the
-  `PHASE .* unset` checks — a stamp that is legitimately unset in some
-  image must be exempted per image, not grepped away. Phase names are
-  frozen after T4.2 so `phases.csv` rows stay comparable across the
-  whole ladder.
+- **Consequences (the co-edit checklist, audit finding 26):** T4.2
+  touched `src/phase.rs` (N=22, index consts, NAMES) and collapsed the
+  three justfile HTTP greps onto one `phase_names` variable. They can
+  collapse that far — the three loops were identical — but they cannot
+  merge with `phase::NAMES` without a generator (Rust consts vs shell).
+  The harness still parses names from serial and is not a fourth copy.
+  A stamp that is legitimately unset in some image must be exempted per
+  image, not grepped away. Phase names are frozen after T4.2 so
+  `phases.csv` rows stay comparable across the whole ladder.
+  **T4.2 landing (this host, ladder ordering only — not a results
+  table, not a report number):** one boot each of debug-default,
+  debug-fast-boot, release-default, release-fast-boot. Stamp overhead
+  (`stamp_b` − `stamp_a`) was 6.8 µs / 7.0 µs on release and 27.6 µs /
+  34.2 µs on debug. Phase deltas summed to E2→E3g within that floor.
+  Finding 10 vs **release+fast-boot** (the inventory's path), quoted
+  against the 6.8 µs floor:
+  - **Right class:** `frame_init` is ms (here 93 ms, list-build dominates
+    the old "paging" blob); `page_build` 1.4 ms and `page_verify` 2.2 ms
+    are both ms, verify ≥ build; `accounting` 5.1 ms (inventory ~6 ms);
+    `freeze` itself is 11 µs under fast-boot (the bool store); `heap_init`
+    is trivial (30 µs); `sret` is 30 µs; `ping_gateway` is ms on the safe
+    profile (`net_init_done` 6.1 ms) once it is not overlapped by an
+    early client.
+  - **Wrong class / mixed:** `task_init` is 0.89 ms, not µs; `virtq_init`
+    first pass is 1.0 ms, not tens of µs; `stvec` (DBCN + CSR + install)
+    is 0.29 ms, not µs. `timer::init` rides inside `frame_init` (the
+    inventory's tick-trap cost is not its own line; fast-boot also skips
+    the tick-3 wait). `ping_gateway` is **not** ms under CLIENT_EARLY
+    fast-boot: `syn_rx` lands during the ARP/ping wait, so the diagnostic
+    RTT is overlapped (finding 6). HTTP READY's 11 DBCN ecalls are not a
+    visible E3g-tail line when the client is early — `established`→`E3g`
+    is 1.7 ms of serve, not console.
+  - **Finding 6 confirmed:** on CLIENT_EARLY, `syn_rx` and `established`
+    fire before `serving_ready` / `net_init_done`. TCP was serving during
+    the ping wait; `listen` was the wrong name twice.
+  - **Finding 12 refuted here** (already un-quantized by D-0056.3):
+    `first_rx` is 0.60 ms on this boot, not a 10 ms tick-wide IQR. The
+    prediction was about `wfi`; those waits spin now.
+  - **Safe-profile leftover:** without fast-boot, `freeze` is still 6.3 ms
+    because `freeze()`'s `free_count()` println argument is evaluated —
+    a second walk after `accounting`. Finding 7 called that out for
+    fast-boot only.
+  Debug paging is still opt-level=0 (page_build+verify 81 ms fast / 103 ms
+  default on this boot), not the cost of paging, and must not migrate into
+  a results table (finding 20). Ladder order implied here: `frame_init`
+  first, then `accounting` / `page_verify`, then data-driven residue.
+  Magnitudes are this noisy KVM pod; the dedicated host re-measures.
 
 ## D-0058: Optimization-ladder governance
 - Date: 2026-08-16 — Status: accepted

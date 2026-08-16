@@ -591,6 +591,7 @@ pub fn enter(id: usize) -> ! {
             tables, leftover, held
         );
     }
+    crate::phase::stamp(crate::phase::ACCOUNTING);
     crate::frame::freeze();
     crate::phase::stamp(crate::phase::FREEZE);
     let t = get(id);

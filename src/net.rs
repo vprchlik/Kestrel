@@ -359,7 +359,7 @@ pub fn init() {
     ping_gateway(base);
     #[cfg(feature = "net-init-selftest")]
     wait_tcp_handshake(base);
-    crate::phase::stamp(crate::phase::LISTEN);
+    crate::phase::stamp(crate::phase::NET_INIT_DONE);
 }
 
 /// Build a 12-byte zero virtio-net header plus a 60-byte Ethernet frame
@@ -424,6 +424,7 @@ fn wait_gateway_arp(base: usize) {
         let _ = poll_rx(base);
         if arp::lookup(GW).is_some() {
             println!("virtio-net: gateway 10.0.2.2 MAC learned");
+            crate::phase::stamp(crate::phase::SERVING_READY);
             dump();
             return;
         }

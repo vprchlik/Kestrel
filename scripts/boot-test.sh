@@ -159,6 +159,9 @@ if [ "$status" -eq 124 ]; then
     exit 2
 fi
 if grep -a -q "$EXPECT" serial.log && [ "$status" -eq 0 ]; then
+    if grep -a -q '^PHASE ticks' serial.log; then
+        python3 scripts/bench.py check-serial serial.log
+    fi
     echo "TEST PASS: found \"${EXPECT}\""
     exit 0
 fi

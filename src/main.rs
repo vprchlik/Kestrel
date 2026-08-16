@@ -108,6 +108,8 @@ compile_error!("net-udp-selftest is exclusive of the HTTP images");
 /// FAIL and HANG without editing this file.
 #[no_mangle]
 extern "C" fn kmain(_hartid: usize, dtb_pa: usize) -> ! {
+    crate::phase::stamp(crate::phase::STAMP_A);
+    crate::phase::stamp(crate::phase::STAMP_B);
     sbi::require_dbcn();
     println!("whimbrel: hello from hart {}, dtb at {:#x}", _hartid, dtb_pa);
     {
@@ -166,16 +168,19 @@ extern "C" fn kmain(_hartid: usize, dtb_pa: usize) -> ! {
         // 0x87e00000 is clobberable — it lies inside the free-list range.
         frame::check_dtb(dtb_pa);
         frame::init();
+        crate::phase::stamp(crate::phase::FRAME_INIT);
         #[cfg(not(feature = "fast-boot"))]
         frame::self_test();
         task::check_layout();
         task::init();
+        crate::phase::stamp(crate::phase::TASK_INIT);
         page::init();
         page::activate();
         virtio::probe();
         virtq::init();
         net::init();
         heap::init();
+        crate::phase::stamp(crate::phase::HEAP_INIT);
         #[cfg(not(feature = "fast-boot"))]
         heap::self_test();
         println!("M1 FUNDAMENTALS OK");

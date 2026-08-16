@@ -709,7 +709,9 @@ pub fn init() {
         _satp,
         root >> OFF_BITS
     );
+    crate::phase::stamp(crate::phase::PAGE_BUILD);
     verify(root);
+    crate::phase::stamp(crate::phase::PAGE_VERIFY);
     println!("PAGETABLE OK");
 }
 
@@ -813,5 +815,5 @@ pub fn activate() {
         panic!("satp wrote {:#x}, read {:#x}", satp, got);
     }
     println!("PAGING OK");
-    crate::phase::stamp(crate::phase::PAGING);
+    crate::phase::stamp(crate::phase::ACTIVATE);
 }

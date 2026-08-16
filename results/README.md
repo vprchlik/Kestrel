@@ -5,11 +5,12 @@ Long/tidy CSV, not wide. T4.2 adding stamps is **more rows in
 
 The bench harness **does not** contain a phase-name list. It parses
 whatever `PHASE <name> ticks=...` lines serial prints (`src/phase.rs`
-`NAMES`). That is how it avoids becoming a fourth copy of the triplicated
-justfile gate list (audit finding 26 / D-0057). The three justfile lists
-stay until T4.2, when the names actually change and D-0057's co-edit
-checklist (`phase.rs` N/NAMES + those three recipes) lands in one commit.
-Collapsing them now would make that checklist stale mid-milestone.
+`NAMES`). That is how it avoids becoming a fourth copy of the justfile
+list (audit finding 26 / D-0057). The three HTTP gate greps share one
+`phase_names` justfile variable as of T4.2; they still cannot merge with
+`NAMES` without a generator. Collapsing the remaining copy is declined:
+the kernel owns the printed names, the gates own the required-presence
+set.
 
 `client_granularity_ns` is per-batch metadata duplicated onto every run
 row (C1): median inter-attempt interval from a 200-try calibration of
@@ -68,7 +69,7 @@ unique, if `git_sha` is not unique, or if there are zero recorded rows.
 | `warmup` | same as runs |
 | `system` | `whimbrel` |
 | `config` | same as runs |
-| `phase` | name from the `PHASE` line (`_start`, `E3g`, `E3g_doorbell`, …) |
+| `phase` | name from the `PHASE` line (`_start`, `stamp_a`, `activate`, `net_init_done`, `syn_rx`, `E3g`, …) |
 | `ticks` | guest `rdtime` |
 | `ns_since_e2` | ns since `_start` (E2); 100 ns/tick |
 | `delta_ticks` | ticks since the previous stamp in serial order |
