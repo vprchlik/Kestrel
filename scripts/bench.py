@@ -436,15 +436,25 @@ def calibrate_client(client_cpu: int, port: int) -> int:
     return gran
 
 
-def cargo_build(features: list[str], extra: list[str] | None = None) -> Path:
+def cargo_build(
+    features: list[str],
+    extra: list[str] | None = None,
+    env_extra: dict[str, str] | None = None,
+) -> Path:
     cmd = ["cargo", "build", "--release", "--manifest-path", str(ROOT / "Cargo.toml")]
     if features:
         cmd += ["--features", ",".join(features)]
     if extra:
         cmd += extra
+    env = os.environ.copy()
+    if env_extra:
+        env.update(env_extra)
+    target_dir = Path(env.get("CARGO_TARGET_DIR", ROOT / "target"))
     print("bench: " + " ".join(cmd), flush=True)
-    subprocess.run(cmd, cwd=ROOT, check=True)
-    kernel = ROOT / "target" / "riscv64gc-unknown-none-elf" / "release" / "whimbrel"
+    if env_extra:
+        print("bench: env " + " ".join(f"{k}={v}" for k, v in env_extra.items()), flush=True)
+    subprocess.run(cmd, cwd=ROOT, check=True, env=env)
+    kernel = target_dir / "riscv64gc-unknown-none-elf" / "release" / "whimbrel"
     if not kernel.is_file():
         raise BenchFail(f"TEST FAIL: cargo build produced no kernel at {kernel}")
     return kernel
@@ -563,19 +573,22 @@ def run_trial(
     }
 
 
-def configs_for(kind: str) -> list[tuple[str, list[str], list[str]]]:
+def configs_for(kind: str) -> list[tuple[str, list[str], dict[str, str]]]:
     if kind == "whimbrel":
         return [
-            ("release-default", [], []),
-            ("release-fast-boot", ["fast-boot"], []),
+            ("release-default", [], {}),
+            ("release-fast-boot", ["fast-boot"], {}),
         ]
     if kind == "fp-ab":
-        nofp = [
-            "--config",
-            'target.riscv64gc-unknown-none-elf.rustflags=["-C","link-arg=-Tlinker.ld"]',
-        ]
+        nofp = {
+            "CARGO_TARGET_DIR": str(ROOT / "target-nofp"),
+            "RUSTFLAGS": (
+                f"-C link-arg=-T{ROOT / 'linker.ld'} "
+                "-C force-frame-pointers=no"
+            ),
+        }
         return [
-            ("release-fast-boot", ["fast-boot"], []),
+            ("release-fast-boot", ["fast-boot"], {}),
             ("release-fast-boot-nofp", ["fast-boot"], nofp),
         ]
     raise BenchFail(f"TEST FAIL: unknown bench kind {kind}")
@@ -608,8 +621,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     timeout_s = float(os.environ.get("BENCH_TIMEOUT_S", "12"))
 
     kernels: dict[str, tuple[Path, str]] = {}
-    for config, features, extra in configs_for(args.kind):
-        kernel_src = cargo_build(features, extra)
+    for config, features, env_extra in configs_for(args.kind):
+        kernel_src = cargo_build(features, env_extra=env_extra or None)
         kdir = out_dir / "bin"
         kdir.mkdir(parents=True, exist_ok=True)
         kernel = kdir / config
@@ -618,7 +631,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     for batch_i in range(1, batches + 1):
         batch_id = f"{stamp}-{batch_i}"
-        for config, _features, _extra in configs_for(args.kind):
+        for config, _features, _env in configs_for(args.kind):
             kernel, k_hash = kernels[config]
             total = warmup + n
             for trial in range(1, total + 1):
