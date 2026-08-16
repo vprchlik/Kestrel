@@ -7,8 +7,9 @@ is mitigated-and-measured or stated. This is a seed, not the section.
    taxed differently than on silicon. Every claim carries "under QEMU TCG".
 2. **slirp is a peer**, not a wire. E3w−E3g prices virtio+slirp, not a NIC.
 3. **Client granularity.** The measurement client is a persistent process
-   at ~1 ms cadence; the achieved median is `client_granularity_ns` on
-   every `runs.csv` row (C1). Fork-per-attempt curl was 5–15 ms (finding 32).
+   at ~1 ms cadence. Measured median `client_granularity_ns` = **1 000 232 ns**
+   (≈ 1.000 ms; min 1.000 ms, max 1.10 ms on the T4.1 batch). Fork-per-attempt
+   curl was 5–15 ms (finding 32).
 4. **Single hart and fixed RAM.** The floor is for this machine shape.
 5. **Debug-era history is not evidence.** Regeneration from CSV kills
    chat-only numbers (audit findings 16–23).

@@ -1831,9 +1831,19 @@ D-0011 onward are working decisions made under those constraints.
   **T4.1 implementation:** `scripts/qemu-args.sh` is the shared QEMU argv
   (boot-test, justfile, bench); `scripts/bench.sh` writes long/tidy
   `results/runs.csv` and `results/phases.csv`. The summarizer refuses
-  dirty trees and mixed QEMU/git SHA. Finding 14's measured delta is
-  recorded in this entry when the A/B batch completes; strip-vs-record
-  is the operator's call (T4.1 query), not an automatic strip.
+  dirty trees and mixed QEMU/git SHA. **Finding 14 A/B (release+fast-boot,
+  N=30 recorded, git `9871d87`, QEMU 8.2.2):** E2→E3g median with
+  `-C force-frame-pointers=yes` is 31.062 ms, without is 30.812 ms,
+  Δ = +0.250 ms (FP slower). E0→E4 Δ = +0.078 ms. Both sit inside
+  max(2%, 200 µs). Strip-vs-record is the operator's call; this entry
+  does not strip the flag. **Stability criterion (two consecutive
+  30-trial batches, git `356b37a`):** not met. release-default shifted
+  systematically slower on batch 2 (E2→E3g 98.5 → 105.6 ms; paging,
+  DRIVER_OK, listen, freeze, first_rx all moved). release-fast-boot's
+  guest-internal phases stayed inside the bar; its E0-anchored edges
+  missed by a little (E0→E4 74.0 → 75.6 ms; first-connect 17.58 →
+  18.08 ms). The criterion is not widened. Client granularity median
+  1.000232 ms (C1; curl was 5–15 ms).
 
 ## D-0056: Pre-baseline corrections (T4.0b)
 - Date: 2026-08-16 — Status: accepted
