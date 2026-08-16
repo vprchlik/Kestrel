@@ -23,7 +23,7 @@ KERNEL="target/${TARGET}/debug/whimbrel"
 QEMU="qemu-system-riscv64"
 # D-0038 / D-0039 / D-0042 / D-0043: keep in sync with justfile qemu_args
 # and .cargo/config.toml.
-QEMU_ARGS=(-machine virt -nographic -bios default -global virtio-mmio.force-legacy=false -netdev user,id=net0,hostfwd=tcp::8080-:80 -device virtio-net-device,netdev=net0 -object filter-dump,id=f0,netdev=net0,file=whimbrel.pcap)
+QEMU_ARGS=(-machine virt -nographic -bios default -global virtio-mmio.force-legacy=false -netdev user,id=net0,hostfwd=tcp::8080-:80,hostfwd=udp::7777-:7 -device virtio-net-device,netdev=net0 -object filter-dump,id=f0,netdev=net0,file=whimbrel.pcap)
 
 feat=()
 if [ -n "$FEATURE" ]; then
@@ -37,7 +37,7 @@ case "${FEATURE}" in
     panic-selftest|hang-selftest|stress|frame-exhaust-selftest) ;;
     *) bash scripts/check-utext.sh "$KERNEL" ;;
 esac
-rm -f serial.log whimbrel.pcap
+rm -f serial.log whimbrel.pcap udp-echo.got udp-echo.status
 
 # Watch serial for DRIVER_OK, then provoke twice (D-0046). Must start
 # before QEMU so a fast guest cannot print DRIVER_OK unobserved. grep
@@ -54,6 +54,20 @@ rm -f serial.log whimbrel.pcap
 ) &
 wpid=$!
 
+# T3.8: do not send UDP until the guest is polling for it. Recv timeout
+# is inside provoke-udp-echo.py (2s) so a silent guest fails closed.
+upid=""
+if [ "$FEATURE" = "net-udp-selftest" ]; then
+    (
+        while ! grep -a -q 'UDP ECHO READY' serial.log 2>/dev/null; do
+            sleep 0.05
+        done
+        python3 scripts/provoke-udp-echo.py udp-echo.got
+        echo $? >udp-echo.status
+    ) &
+    upid=$!
+fi
+
 set +e
 if command -v stdbuf >/dev/null 2>&1; then
     timeout --foreground "$TIMEOUT_S" stdbuf -oL "$QEMU" "${QEMU_ARGS[@]}" -kernel "$KERNEL" > serial.log 2>&1
@@ -63,6 +77,10 @@ fi
 status=$?
 kill "$wpid" 2>/dev/null
 wait "$wpid" 2>/dev/null
+if [ -n "$upid" ]; then
+    kill "$upid" 2>/dev/null
+    wait "$upid" 2>/dev/null
+fi
 set -e
 
 if grep -a -q 'PANIC' serial.log; then

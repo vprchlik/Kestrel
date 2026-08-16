@@ -29,6 +29,8 @@ user-fault-selftest = []
 freeze-selftest = ["no-sret"]
 # T3.3: handshake to DRIVER_OK, then stop before U-mode.
 net-init-selftest = ["no-sret"]
+# T3.8: UDP echo on port 7, then stop before U-mode.
+net-udp-selftest = ["no-sret"]
 
 [dependencies]
 

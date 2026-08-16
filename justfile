@@ -8,7 +8,7 @@ qemu      := "qemu-system-riscv64"
 # D-0038 / D-0039 / D-0042 / D-0043: modern virtio-mmio, a net device,
 # hostfwd (slirp ARPs 10.0.2.15 on a host TCP connect), and capture on
 # every invocation.
-qemu_args := "-machine virt -nographic -bios default -global virtio-mmio.force-legacy=false -netdev user,id=net0,hostfwd=tcp::8080-:80 -device virtio-net-device,netdev=net0 -object filter-dump,id=f0,netdev=net0,file=whimbrel.pcap"
+qemu_args := "-machine virt -nographic -bios default -global virtio-mmio.force-legacy=false -netdev user,id=net0,hostfwd=tcp::8080-:80,hostfwd=udp::7777-:7 -device virtio-net-device,netdev=net0 -object filter-dump,id=f0,netdev=net0,file=whimbrel.pcap"
 
 # Build the kernel (debug profile; target + linker script via .cargo/config.toml).
 build:
@@ -117,6 +117,10 @@ test expect="M2 EXECUTION OK" timeout_s="5":
             echo 'TEST FAIL: missing ICMP REPLY BUILD OK'
             exit 1
         fi
+        if ! grep -a -q 'UDP ECHO BUILD OK' "$log"; then
+            echo 'TEST FAIL: missing UDP ECHO BUILD OK'
+            exit 1
+        fi
         if ! grep -a -q 'tx avail=2 used=2 posted=2 completed=2' "$log"; then
             echo 'TEST FAIL: TX posted/completed is not 2/2 (ARP reply + GARP)'
             exit 1
@@ -166,6 +170,11 @@ test expect="M2 EXECUTION OK" timeout_s="5":
         fi
         if ! grep -a -q 'ip_drop short=0 ver=0 ihl=0 csum=0 frag=0' "$log"; then
             echo 'TEST FAIL: IPv4 malformed counters are not 0'
+            exit 1
+        fi
+        # D-0049: do not require proto=0 until T3.10 (hostfwd SYN).
+        if ! grep -a -q 'udp_drop short=0 len=0 csum=0 port=0' "$log"; then
+            echo 'TEST FAIL: UDP malformed counters are not 0'
             exit 1
         fi
         if ! grep -a -q 'icmp_drop short=0 csum=0' "$log"; then
@@ -352,6 +361,10 @@ test-net-init:
         echo 'TEST FAIL: missing ICMP REPLY BUILD OK'
         exit 1
     fi
+    if ! grep -a -q 'UDP ECHO BUILD OK' serial.log; then
+        echo 'TEST FAIL: missing UDP ECHO BUILD OK'
+        exit 1
+    fi
     if ! grep -a -q 'tx avail=2 used=2 posted=2 completed=2' serial.log; then
         echo 'TEST FAIL: TX posted/completed is not 2/2 (ARP reply + GARP)'
         exit 1
@@ -396,6 +409,11 @@ test-net-init:
         echo 'TEST FAIL: IPv4 malformed counters are not 0'
         exit 1
     fi
+    # D-0049: do not require proto=0 until T3.10 (hostfwd SYN).
+    if ! grep -a -q 'udp_drop short=0 len=0 csum=0 port=0' serial.log; then
+        echo 'TEST FAIL: UDP malformed counters are not 0'
+        exit 1
+    fi
     if ! grep -a -q 'icmp_drop short=0 csum=0' serial.log; then
         echo 'TEST FAIL: ICMP malformed counters are not 0'
         exit 1
@@ -405,6 +423,45 @@ test-net-init:
         exit 1
     fi
     echo 'TEST PASS: DRIVER_OK, MAC, dump, GARP, RX ARP, ARP reply, PING RTT'
+
+# T3.8: UDP echo on hostfwd 7777→7. Feature image waits for one datagram
+# after UDP ECHO READY, then shuts down. The client is SOCK_DGRAM with a
+# 2s recv timeout (nc -u shape); silence is FAIL, not a hang (D-0050).
+test-net-udp:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    EXPECT="NET UDP OK" TIMEOUT_S=8 bash scripts/boot-test.sh net-udp-selftest
+    if [ ! -f udp-echo.got ]; then
+        echo 'TEST FAIL: udp-echo.got missing (client never ran or timed out)'
+        cat udp-echo.status 2>/dev/null || true
+        exit 1
+    fi
+    if [ "$(cat udp-echo.status 2>/dev/null || echo 1)" != "0" ]; then
+        echo 'TEST FAIL: UDP echo client exited nonzero'
+        cat udp-echo.status || true
+        exit 1
+    fi
+    if [ "$(cat udp-echo.got)" != "whimbrel-udp-echo" ]; then
+        echo "TEST FAIL: UDP payload mismatch: $(cat udp-echo.got | sed 's/[^[:print:]]/?/g')"
+        exit 1
+    fi
+    if ! grep -a -q 'UDP ECHO READY' serial.log; then
+        echo 'TEST FAIL: missing UDP ECHO READY'
+        exit 1
+    fi
+    if ! grep -a -q 'TX UDP echo' serial.log; then
+        echo 'TEST FAIL: missing TX UDP echo'
+        exit 1
+    fi
+    if ! grep -a -q 'udp_drop short=0 len=0 csum=0 port=0' serial.log; then
+        echo 'TEST FAIL: UDP malformed counters are not 0'
+        exit 1
+    fi
+    if ! bash scripts/assert-pcap-udp-echo.sh whimbrel.pcap; then
+        echo 'TEST FAIL: pcap UDP echo assertion'
+        exit 1
+    fi
+    echo 'TEST PASS: UDP echo verbatim, pcap request→reply'
 
 # Disassemble the kernel. Extra flags as one quoted arg, e.g. just objdump '-d --source'
 objdump flags="-d": build

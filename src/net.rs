@@ -1,11 +1,10 @@
-//! virtio-net device: handshake, RX/TX, ARP, IPv4, ICMP (D-0038, D-0040).
+//! virtio-net device: handshake, RX/TX, ARP, IPv4, ICMP, UDP (D-0038, D-0040).
 //!
 //! Owns the feature negotiation, QueueReady, RX posting, TX (gratuitous
-//! ARP, ARP replies, ICMP echo), MAC print, and `dump` / stall /
-//! DEVICE_NEEDS_RESET observability. ARP parse and the cache live in
-//! `arp`; IPv4/ICMP parse live in `ipv4`/`icmp`. The rings stay in
-//! `virtq`. Without this module the NIC never leaves reset and the
-//! guest-initiated ping has nowhere to go.
+//! ARP, ARP replies, ICMP echo, UDP echo), MAC print, and `dump` / stall /
+//! DEVICE_NEEDS_RESET observability. Parse lives in `arp`/`ipv4`/`icmp`/
+//! `udp`. The rings stay in `virtq`. Without this module the NIC never
+//! leaves reset and hostfwd UDP has nowhere to echo.
 
 #![cfg_attr(
     any(feature = "panic-selftest", feature = "hang-selftest"),
@@ -20,6 +19,7 @@ use crate::ipv4;
 use crate::print;
 use crate::println;
 use crate::timer;
+use crate::udp;
 use crate::virtio;
 use crate::virtq;
 use core::arch::asm;
@@ -97,6 +97,8 @@ static mut STALL_DUMPED: bool = false;
 static mut PING_TX: usize = 0;
 static mut PING_RX: usize = 0;
 static mut PING_DONE: bool = false;
+#[cfg_attr(not(feature = "net-udp-selftest"), allow(dead_code))]
+static mut UDP_DONE: bool = false;
 
 fn status(base: usize) -> u32 {
     virtio::read32(base, virtio::OFF_STATUS)
@@ -173,7 +175,7 @@ pub fn dump() {
         ""
     };
     println!(
-        "net: dump{tag} status={st:#x} isr={isr:#x} rx avail={rx_a} used={rx_u} posted={rx_p} completed={rx_c} tx avail={tx_a} used={tx_u} posted={tx_p} completed={tx_c} drop_short={d_short} drop_other={d_other} arp_drop short={} htype={} ptype={} hlen={} plen={} op={} tpa={} ip_drop short={} ver={} ihl={} csum={} frag={} dst={} proto={} icmp_drop short={} csum={} type={}",
+        "net: dump{tag} status={st:#x} isr={isr:#x} rx avail={rx_a} used={rx_u} posted={rx_p} completed={rx_c} tx avail={tx_a} used={tx_u} posted={tx_p} completed={tx_c} drop_short={d_short} drop_other={d_other} arp_drop short={} htype={} ptype={} hlen={} plen={} op={} tpa={} ip_drop short={} ver={} ihl={} csum={} frag={} dst={} proto={} icmp_drop short={} csum={} type={} udp_drop short={} len={} csum={} port={}",
         arp::drop_short(),
         arp::drop_htype(),
         arp::drop_ptype(),
@@ -191,6 +193,10 @@ pub fn dump() {
         icmp::drop_short(),
         icmp::drop_csum(),
         icmp::drop_type(),
+        udp::drop_short(),
+        udp::drop_len(),
+        udp::drop_csum(),
+        udp::drop_port(),
     );
 }
 
@@ -323,6 +329,7 @@ pub fn init() {
     arp::wrap_selftest();
     checksum::selftest();
     icmp::reply_selftest();
+    udp::selftest();
     dump();
     poll_stall();
     // RX before GARP: slirp learns our MAC from the GARP and will not
@@ -333,6 +340,8 @@ pub fn init() {
     // D-0047: cache holds 10.0.2.2 from slirp's request. Ping fails
     // loudly if that learn did not happen — no ARP-and-queue.
     ping_gateway(base);
+    #[cfg(feature = "net-udp-selftest")]
+    wait_udp_echo(base);
 }
 
 /// Build a 12-byte zero virtio-net header plus a 60-byte Ethernet frame
@@ -519,6 +528,10 @@ fn classify_ipv4(base: usize, frame: &[u8]) {
     let Some(d) = ipv4::parse(frame, &IP) else {
         return;
     };
+    if d.proto == ipv4::PROTO_UDP {
+        classify_udp(base, &d);
+        return;
+    }
     match icmp::parse(d.payload) {
         Some(icmp::Msg::EchoReq { id, seq, raw }) => {
             println!("virtio-net: RX icmp echo-req id={id} seq={seq}");
@@ -536,6 +549,83 @@ fn classify_ipv4(base: usize, frame: &[u8]) {
             }
         }
         None => {}
+    }
+}
+
+fn classify_udp(base: usize, d: &ipv4::Datagram<'_>) {
+    let Some(echo) = udp::parse(d.payload, &d.src, &IP) else {
+        return;
+    };
+    println!(
+        "virtio-net: RX udp echo sport={} dport={} len={}",
+        echo.src_port,
+        udp::ECHO_PORT,
+        echo.raw.len()
+    );
+    tx_udp_echo(base, d.src, echo.raw);
+    unsafe { UDP_DONE = true };
+}
+
+fn tx_udp_echo(base: usize, dst_ip: [u8; 4], req: &[u8]) {
+    let gw = gateway_mac();
+    let mac = unsafe { MAC };
+    let udp_len = req.len();
+    let ip_tot = 20 + udp_len;
+    let eth_len = core::cmp::max(ETH_HDR + ip_tot, ETH_MIN);
+    let post = (VNET_HDR + eth_len) as u32;
+    {
+        let buf = virtq::tx_buf(0);
+        if buf.len() < post as usize {
+            panic!("virtio-net: TX buf {} < {post}", buf.len());
+        }
+        for b in buf.iter_mut().take(post as usize) {
+            *b = 0;
+        }
+        let f = &mut buf[VNET_HDR..];
+        f[0..6].copy_from_slice(&gw);
+        f[6..12].copy_from_slice(&mac);
+        f[12..14].copy_from_slice(&ETH_TYPE_IPV4.to_be_bytes());
+        ipv4::write_header(
+            &mut f[ETH_HDR..],
+            ip_tot as u16,
+            ipv4::PROTO_UDP,
+            &IP,
+            &dst_ip,
+        );
+        udp::write_echo(&mut f[ETH_HDR + 20..], req, &IP, &dst_ip);
+    }
+    virtq::post_tx(0, post);
+    unsafe { TX_POSTED = TX_POSTED.wrapping_add(1) };
+    arm_tx_stall();
+    println!(
+        "virtio-net: TX UDP echo to {}.{}.{}.{} dport mirrored",
+        dst_ip[0], dst_ip[1], dst_ip[2], dst_ip[3]
+    );
+    virtq::notify(base, virtq::Q_TX);
+    wait_tx(base, "UDP echo");
+}
+
+/// Poll until one UDP echo is transmitted. Printed `UDP ECHO READY`
+/// first so the harness does not send into a guest that is still in
+/// ARP/ping (D-0050).
+#[cfg(feature = "net-udp-selftest")]
+fn wait_udp_echo(base: usize) {
+    println!("UDP ECHO READY");
+    let t0 = csr::time::read();
+    loop {
+        require_device(base);
+        let _ = poll_rx(base);
+        if unsafe { UDP_DONE } {
+            dump();
+            return;
+        }
+        poll_stall();
+        if csr::time::read().wrapping_sub(t0) >= RX_WAIT_TICKS {
+            println!("virtio-net: RX no UDP echo after ~2s");
+            dump();
+            panic!("virtio-net: no UDP datagram on port 7");
+        }
+        unsafe { asm!("wfi") };
     }
 }
 

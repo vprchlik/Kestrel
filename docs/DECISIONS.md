@@ -1510,4 +1510,65 @@ D-0011 onward are working decisions made under those constraints.
   echo-request then echo-reply. It does not send a host ping. Malformed
   IPv4/ICMP counters (`csum`, `frag`, `ihl`, …) must read 0 on that
   path; `ipv4 drop_proto` may be non-zero because hostfwd SYNs are
-  IPv4/TCP, not malformed.
+  IPv4/TCP, not malformed. **That exception expires at T3.10 (D-0049).**
+
+## D-0049: `drop_proto` hostfwd-SYN exception expires at T3.10
+- Date: 2026-08-16 — Status: accepted
+- **Decision:** through T3.9, `ipv4 drop_proto` is allowed to be
+  non-zero on the happy path. The hostfwd TCP connects that provoke
+  slirp ARP (T3.5/T3.6) deliver protocol 6 to a stack that only handles
+  ICMP (1) and UDP (17). That is expected noise, **named as temporary**.
+  T3.10 (TCP passive open) **removes the exception**: once we parse
+  SYNs, a non-zero `drop_proto` means an unknown protocol, not a
+  hostfwd SYN, and it must not sit in the "expected noise" category.
+  `just test` will then require `proto=0` (or a TCP-classified counter
+  instead). Until then the dump prints
+  `ipv4: drop proto=6 (TCP; expected until T3.10)` so the exception is
+  visible on serial, not only in this entry.
+- **Alternatives considered:** stop sending hostfwd connects after ARP
+  is cached (rejected: T3.6's second connect is the "past ARP" proof).
+  Classify TCP as a separate `drop_tcp` that stays non-zero forever
+  (rejected: that launders the exception past T3.10). Ignore proto=6
+  without a counter (rejected: silent).
+- **Rationale:** a counter that is "allowed to be whatever" is how
+  real drops hide. Dating the exception to the task that makes it
+  false keeps T3.10 from inheriting T3.7's excuse.
+- **Consequences:** T3.8 does not grep `proto=0`. T3.10's first commit
+  must delete this exception and fail the boot if `drop_proto != 0`
+  on the happy path. Do not "fix" it by stopping the hostfwd watcher.
+
+## D-0050: UDP echo swaps ports and addresses; checksum 0 is 0xFFFF
+- Date: 2026-08-16 — Status: accepted
+- **Decision:** UDP echo on guest port 7 (`hostfwd=udp::7777-:7`).
+  Parse/build uses the 12-byte IPv4 pseudo-header (src, dst, zero,
+  protocol 17, UDP length) plus the real UDP header and payload.
+  UDP length is summed **twice** — once in the pseudo-header, once
+  as the Length field in the real header — that is RFC 768, not a
+  double-count bug. A computed checksum of 0 is transmitted as
+  `0xFFFF` (0 means "no checksum"). On RX, checksum 0 is **dropped**
+  (`drop_csum`); we do not treat optional-checksum as valid. Echo
+  **mirrors** payload and UDP length, **swaps** source/dest ports and
+  IPv4 addresses, **recomputes** IP checksum, UDP checksum, TTL, and
+  Ethernet dest (gateway MAC). The harness waits for serial
+  `UDP ECHO READY` before sending; the client is a datagram socket
+  with a 2 s recv timeout (the `nc -u` shape) so a silent guest is
+  TEST FAIL, not a hang.
+- **Alternatives considered:** accept RX checksum 0 per RFC 768
+  (rejected: that is skipping verification, the T3.7 dishonest skip
+  applied to UDP). Rebuild the datagram from parsed fields (rejected:
+  echo is a swap; rebuilding is how payload bytes get lost). Fire
+  `nc -u` on `DRIVER_OK` (rejected: the guest is still in ARP/ping;
+  UDP would sit in the used ring or be dropped as proto-not-yet).
+  Call distro `nc -u` directly (rejected: EOF/timeout behavior is not
+  portable; a SOCK_DGRAM + `settimeout` is the same packet and is
+  fail-closed).
+- **Rationale:** the pseudo-header and the 0/`0xFFFF` wrinkle are the
+  interview questions; they live in `udp.rs` with a self-test that
+  forces a zero computed sum. The harness race is the same lesson as
+  T3.5: provoke only after the guest has printed that it is polling
+  for this packet.
+- **Consequences:** every QEMU invocation gains
+  `hostfwd=udp::7777-:7`. `just test-net-udp` is a sibling feature
+  (`net-udp-selftest`) so the default boot does not spin 2 s waiting
+  for a datagram `just test` never sends. T3.9 will move the echo
+  into the app over `recv`/`send`; this entry's wire behavior stays.

@@ -30,8 +30,10 @@ carries `-object filter-dump,id=f0,netdev=net0,file=whimbrel.pcap`
 (D-0043: capture is standing infrastructure). From T3.5 every
 invocation also carries `hostfwd=tcp::8080-:80` on that netdev — a host
 TCP connect to 127.0.0.1:8080 is what makes slirp ARP for 10.0.2.15.
-`tshark` above is what the harness uses to assert on those captures —
-without it, `just test` fails on a machine that has everything else.
+From T3.8 every invocation also carries `hostfwd=udp::7777-:7` (UDP
+echo on guest port 7). `tshark` above is what the harness uses to assert
+on those captures — without it, `just test` fails on a machine that has
+everything else.
 
 ## 2. Rust toolchain
 

@@ -35,6 +35,7 @@ mod arp;
 mod checksum;
 mod ipv4;
 mod icmp;
+mod udp;
 mod net;
 
 use core::arch::{asm, global_asm};
@@ -171,7 +172,8 @@ extern "C" fn kmain(hartid: usize, dtb_pa: usize) -> ! {
             feature = "frame-exhaust-selftest",
             feature = "stress",
             feature = "freeze-selftest",
-            feature = "net-init-selftest"
+            feature = "net-init-selftest",
+            feature = "net-udp-selftest"
         )))]
         {
             // D-0035: kmain does not return after the first sret to U.
@@ -192,6 +194,16 @@ extern "C" fn kmain(hartid: usize, dtb_pa: usize) -> ! {
         #[cfg(feature = "net-init-selftest")]
         {
             println!("NET INIT OK");
+            let ret = sbi::shutdown();
+            println!(
+                "shutdown failed: SRST error={} value={}",
+                ret.error, ret.value
+            );
+            park()
+        }
+        #[cfg(feature = "net-udp-selftest")]
+        {
+            println!("NET UDP OK");
             let ret = sbi::shutdown();
             println!(
                 "shutdown failed: SRST error={} value={}",

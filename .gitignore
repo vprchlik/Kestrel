@@ -2,6 +2,8 @@
 serial.log
 qemu.log
 whimbrel.pcap
+udp-echo.got
+udp-echo.status
 
 # Agent scratch, editor debris, local transcripts — never commit
 .cursor/*.log

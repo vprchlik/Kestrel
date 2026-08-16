@@ -379,6 +379,11 @@ no trap; the first channel that can name the bug is the one to read.
     `TX ARP reply` and connects again; pcap asserts IPv4 after that
     reply. The first connect's SYN may also appear after the reply —
     surplus, not the trigger.
+11. `ipv4 drop_proto` non-zero on a happy boot is the hostfwd TCP SYN
+    (protocol 6) hitting a stack that does not yet parse TCP. Temporary
+    (D-0049): **remove at T3.10**. After TCP exists, `drop_proto != 0`
+    is a real drop, not expected noise. Do not "fix" it by grepping it
+    away or by stopping the hostfwd watcher.
 
 ## 5. QEMU monitor — inspect a hung machine *without* GDB
 

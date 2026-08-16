@@ -24,9 +24,10 @@ pub fn fold(mut sum: u32) -> u16 {
     sum as u16
 }
 
-/// One's-complement sum of `data` as 16-bit big-endian words.
-pub fn sum(data: &[u8]) -> u16 {
-    let mut acc: u32 = 0;
+/// One's-complement sum of `data` as 16-bit big-endian words. Does not
+/// fold; callers fold once at the end so a pseudo-header and a UDP
+/// datagram can share one accumulator.
+pub fn accumulate(mut acc: u32, data: &[u8]) -> u32 {
     let mut i = 0;
     while i + 1 < data.len() {
         acc = acc.wrapping_add(u16::from_be_bytes([data[i], data[i + 1]]) as u32);
@@ -36,7 +37,12 @@ pub fn sum(data: &[u8]) -> u16 {
         // Odd length: last byte is the high half of a padded word.
         acc = acc.wrapping_add((data[i] as u32) << 8);
     }
-    fold(acc)
+    acc
+}
+
+/// One's-complement sum of `data` as 16-bit big-endian words.
+pub fn sum(data: &[u8]) -> u16 {
+    fold(accumulate(0, data))
 }
 
 /// Value to store in a checksum field: the complement of `sum`, with
