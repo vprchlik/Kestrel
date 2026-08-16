@@ -470,7 +470,7 @@ pub fn create(id: usize, entry: usize) {
 /// `sepc = 0`. Userptr selftests keep a single Ready task in slot 0.
 /// `user-fault-selftest` uses the same two-task table; `kmain` `enter`s
 /// task 2 so the load page fault is the first U-mode work.
-/// `net-udp-selftest` runs the compiled app in slot 3 (D-0051).
+/// `net-udp-selftest` / HTTP images run the compiled app in slot 3 (D-0051).
 pub fn init() {
     #[cfg(any(feature = "userptr-kernel-selftest", feature = "userptr-span-selftest"))]
     {
@@ -480,7 +480,11 @@ pub fn init() {
             get(id).state = State::Exited;
         }
     }
-    #[cfg(feature = "net-udp-selftest")]
+    #[cfg(any(
+        feature = "net-udp-selftest",
+        feature = "net-http-selftest",
+        feature = "tcp-drop-first-tx"
+    ))]
     {
         create(0, 0);
         create(1, 0);
@@ -493,7 +497,9 @@ pub fn init() {
     #[cfg(not(any(
         feature = "userptr-kernel-selftest",
         feature = "userptr-span-selftest",
-        feature = "net-udp-selftest"
+        feature = "net-udp-selftest",
+        feature = "net-http-selftest",
+        feature = "tcp-drop-first-tx"
     )))]
     {
         create(0, 0);
@@ -666,11 +672,20 @@ fn finish_sched() -> ! {
     {
         finish_user_fault();
     }
-    #[cfg(feature = "net-udp-selftest")]
+    #[cfg(any(
+        feature = "net-udp-selftest",
+        feature = "net-http-selftest",
+        feature = "tcp-drop-first-tx"
+    ))]
     {
-        finish_udp_echo();
+        finish_app();
     }
-    #[cfg(not(any(feature = "user-fault-selftest", feature = "net-udp-selftest")))]
+    #[cfg(not(any(
+        feature = "user-fault-selftest",
+        feature = "net-udp-selftest",
+        feature = "net-http-selftest",
+        feature = "tcp-drop-first-tx"
+    )))]
     {
         let t1 = get(1);
         let t2 = get(2);
@@ -714,10 +729,27 @@ fn finish_sched() -> ! {
     }
 }
 
-#[cfg(feature = "net-udp-selftest")]
-fn finish_udp_echo() -> ! {
+#[cfg(any(
+    feature = "net-udp-selftest",
+    feature = "net-http-selftest",
+    feature = "tcp-drop-first-tx"
+))]
+fn finish_app() -> ! {
     crate::net::dump();
+    #[cfg(feature = "net-udp-selftest")]
     println!("NET UDP OK");
+    #[cfg(feature = "tcp-drop-first-tx")]
+    {
+        if crate::tcp::rexmit() != 1 {
+            panic!(
+                "tcp: drop-first-tx expected exactly one retransmit, got {}",
+                crate::tcp::rexmit()
+            );
+        }
+        println!("HTTP RETRANSMIT OK");
+    }
+    #[cfg(all(feature = "net-http-selftest", not(feature = "tcp-drop-first-tx")))]
+    println!("HTTP OK");
     stop_until_scheduler();
 }
 

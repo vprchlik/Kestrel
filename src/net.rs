@@ -183,7 +183,7 @@ pub fn dump() {
         ""
     };
     println!(
-        "net: dump{tag} status={st:#x} isr={isr:#x} rx avail={rx_a} used={rx_u} posted={rx_p} completed={rx_c} tx avail={tx_a} used={tx_u} posted={tx_p} completed={tx_c} drop_short={d_short} drop_other={d_other} arp_drop short={} htype={} ptype={} hlen={} plen={} op={} tpa={} ip_drop short={} ver={} ihl={} csum={} frag={} dst={} proto={} icmp_drop short={} csum={} type={} udp_drop short={} len={} csum={} port={} tcp_drop short={} doff={} csum={} opt={} port={} noarp={} busy={} unexpected={} established={}",
+        "net: dump{tag} status={st:#x} isr={isr:#x} rx avail={rx_a} used={rx_u} posted={rx_p} completed={rx_c} tx avail={tx_a} used={tx_u} posted={tx_p} completed={tx_c} drop_short={d_short} drop_other={d_other} arp_drop short={} htype={} ptype={} hlen={} plen={} op={} tpa={} ip_drop short={} ver={} ihl={} csum={} frag={} dst={} proto={} icmp_drop short={} csum={} type={} udp_drop short={} len={} csum={} port={} tcp_drop short={} doff={} csum={} opt={} port={} noarp={} busy={} unexpected={} established={} rexmit={}",
         arp::drop_short(),
         arp::drop_htype(),
         arp::drop_ptype(),
@@ -214,6 +214,7 @@ pub fn dump() {
         tcp::drop_busy(),
         tcp::drop_unexpected(),
         tcp::established(),
+        tcp::rexmit(),
     );
 }
 
@@ -575,19 +576,37 @@ fn classify_tcp(base: usize, d: &ipv4::Datagram<'_>) {
         tcp::note_noarp();
         return;
     }
-    let Some(synack) = tcp::handle(d.payload, &d.src, &IP) else {
-        return;
-    };
-    tx_tcp_synack(base, &synack);
+    tx_tcp(base, tcp::handle(d.payload, &d.src, &IP));
 }
 
-fn tx_tcp_synack(base: usize, sa: &tcp::SynAck) {
-    let gw = match arp::lookup(GW) {
-        Some(m) => m,
-        None => {
-            tcp::note_noarp();
-            return;
-        }
+fn pump_tcp(base: usize) {
+    tx_tcp(base, tcp::check_rto());
+}
+
+fn tx_tcp(base: usize, out: tcp::Out) {
+    match out {
+        tcp::Out::None => {}
+        tcp::Out::SynAck {
+            dst_ip,
+            dst_port,
+            seq,
+            ack,
+        } => tx_tcp_synack(base, dst_ip, dst_port, seq, ack),
+        tcp::Out::Seg {
+            dst_ip,
+            dst_port,
+            seq,
+            ack,
+            flags,
+            data_len,
+        } => tx_tcp_seg(base, dst_ip, dst_port, seq, ack, flags, data_len),
+    }
+}
+
+fn tx_tcp_synack(base: usize, dst_ip: [u8; 4], dst_port: u16, seq: u32, ack: u32) {
+    let Some(gw) = arp::lookup(GW) else {
+        tcp::note_noarp();
+        return;
     };
     let mac = unsafe { MAC };
     let tcp_len = 24;
@@ -611,27 +630,90 @@ fn tx_tcp_synack(base: usize, sa: &tcp::SynAck) {
             ip_tot as u16,
             ipv4::PROTO_TCP,
             &IP,
-            &sa.dst_ip,
+            &dst_ip,
         );
         tcp::write_synack(
             &mut f[ETH_HDR + 20..],
             tcp::LISTEN_PORT,
-            sa.dst_port,
-            sa.seq,
-            sa.ack,
+            dst_port,
+            seq,
+            ack,
             &IP,
-            &sa.dst_ip,
+            &dst_ip,
         );
     }
     virtq::post_tx(0, post);
     unsafe { TX_POSTED = TX_POSTED.wrapping_add(1) };
     arm_tx_stall();
-    println!(
-        "virtio-net: TX TCP SYN/ACK seq={} ack={} dport={}",
-        sa.seq, sa.ack, sa.dst_port
-    );
+    println!("virtio-net: TX TCP SYN/ACK seq={seq} ack={ack} dport={dst_port}");
     virtq::notify(base, virtq::Q_TX);
     wait_tx(base, "TCP SYN/ACK");
+}
+
+fn tx_tcp_seg(
+    base: usize,
+    dst_ip: [u8; 4],
+    dst_port: u16,
+    seq: u32,
+    ack: u32,
+    flags: u8,
+    data_len: usize,
+) {
+    let Some(gw) = arp::lookup(GW) else {
+        tcp::note_noarp();
+        return;
+    };
+    let mac = unsafe { MAC };
+    let payload = if data_len == 0 {
+        &[][..]
+    } else {
+        let u = tcp::unacked_bytes();
+        if data_len > u.len() {
+            panic!("virtio-net: TCP data_len {data_len} > unacked {}", u.len());
+        }
+        &u[..data_len]
+    };
+    let tcp_len = 20 + payload.len();
+    let ip_tot = 20 + tcp_len;
+    let eth_len = core::cmp::max(ETH_HDR + ip_tot, ETH_MIN);
+    let post = (VNET_HDR + eth_len) as u32;
+    {
+        let buf = virtq::tx_buf(0);
+        if buf.len() < post as usize {
+            panic!("virtio-net: TX buf {} < {post}", buf.len());
+        }
+        for b in buf.iter_mut().take(post as usize) {
+            *b = 0;
+        }
+        let f = &mut buf[VNET_HDR..];
+        f[0..6].copy_from_slice(&gw);
+        f[6..12].copy_from_slice(&mac);
+        f[12..14].copy_from_slice(&ETH_TYPE_IPV4.to_be_bytes());
+        ipv4::write_header(
+            &mut f[ETH_HDR..],
+            ip_tot as u16,
+            ipv4::PROTO_TCP,
+            &IP,
+            &dst_ip,
+        );
+        tcp::write_seg(
+            &mut f[ETH_HDR + 20..],
+            tcp::LISTEN_PORT,
+            dst_port,
+            seq,
+            ack,
+            flags,
+            payload,
+            &IP,
+            &dst_ip,
+        );
+    }
+    virtq::post_tx(0, post);
+    unsafe { TX_POSTED = TX_POSTED.wrapping_add(1) };
+    arm_tx_stall();
+    println!("virtio-net: TX TCP seg seq={seq} ack={ack} flags={flags:#04x} dlen={data_len}");
+    virtq::notify(base, virtq::Q_TX);
+    wait_tx(base, "TCP seg");
 }
 
 fn classify_udp(_base: usize, d: &ipv4::Datagram<'_>) {
@@ -673,7 +755,32 @@ fn classify_udp(_base: usize, d: &ipv4::Datagram<'_>) {
 /// Drain the RX used ring. Every `recv` syscall does this — that is
 /// what advances the stack (D-0040). Never called from the trap path.
 pub fn poll() {
-    let _ = poll_rx(virtio::net_base());
+    let base = virtio::net_base();
+    let _ = poll_rx(base);
+    pump_tcp(base);
+}
+
+pub fn tcp_pending() -> Option<&'static [u8]> {
+    tcp::pending()
+}
+
+pub fn tcp_consume() {
+    tcp::consume();
+}
+
+pub fn tcp_eof() -> bool {
+    tcp::take_eof()
+}
+
+pub fn tcp_send(payload: &[u8], flags: usize) -> bool {
+    let fin = flags & 1 != 0;
+    match tcp::app_send(payload, fin) {
+        tcp::Out::None => false,
+        out => {
+            tx_tcp(virtio::net_base(), out);
+            true
+        }
+    }
 }
 
 /// Pending UDP payload, if `poll` has classified one since the last take.
@@ -833,9 +940,10 @@ fn wait_ping_reply(base: usize) {
     loop {
         require_device(base);
         let _ = poll_rx(base);
-        // Ping can complete before slirp's completing ACK is in the
-        // ring. Keep polling until ESTABLISHED or the ~2 s budget.
-        if unsafe { PING_DONE } && tcp::established() != 0 {
+        pump_tcp(base);
+        // Handshake, then recycle the hostfwd probe to LISTEN so curl
+        // is not a second 4-tuple against a live TCB (D-0053).
+        if unsafe { PING_DONE } && tcp::established() != 0 && tcp::listening() {
             print_ping_rtt();
             dump();
             return;

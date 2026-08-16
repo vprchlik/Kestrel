@@ -38,7 +38,7 @@ case "${FEATURE}" in
     panic-selftest|hang-selftest|stress|frame-exhaust-selftest) ;;
     *) bash scripts/check-utext.sh "$KERNEL" ;;
 esac
-rm -f serial.log whimbrel.pcap udp-echo.got udp-echo.status
+rm -f serial.log whimbrel.pcap udp-echo.got udp-echo.status http.body http.hdr http.status
 
 # Watch serial for DRIVER_OK, then provoke twice (D-0046). Must start
 # before QEMU so a fast guest cannot print DRIVER_OK unobserved. grep
@@ -69,6 +69,18 @@ if [ "$FEATURE" = "net-udp-selftest" ]; then
     upid=$!
 fi
 
+hpid=""
+if [ "$FEATURE" = "net-http-selftest" ] || [ "$FEATURE" = "tcp-drop-first-tx" ]; then
+    (
+        while ! grep -a -q 'HTTP READY' serial.log 2>/dev/null; do
+            sleep 0.05
+        done
+        curl -sS --max-time 5 -D http.hdr -o http.body http://127.0.0.1:8080/
+        echo $? >http.status
+    ) &
+    hpid=$!
+fi
+
 set +e
 if command -v stdbuf >/dev/null 2>&1; then
     timeout --foreground "$TIMEOUT_S" stdbuf -oL "$QEMU" "${QEMU_ARGS[@]}" -kernel "$KERNEL" > serial.log 2>&1
@@ -81,6 +93,18 @@ wait "$wpid" 2>/dev/null
 if [ -n "$upid" ]; then
     kill "$upid" 2>/dev/null
     wait "$upid" 2>/dev/null
+fi
+if [ -n "$hpid" ]; then
+    # Guest shutdown races the host `echo $? >http.status` after curl's
+    # TCP close. Wait briefly so a clean 200 is not a missing file.
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        if [ -f http.status ]; then
+            break
+        fi
+        sleep 0.05
+    done
+    kill "$hpid" 2>/dev/null
+    wait "$hpid" 2>/dev/null
 fi
 set -e
 

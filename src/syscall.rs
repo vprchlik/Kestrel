@@ -202,8 +202,8 @@ fn sys_yield(frame: &mut TrapFrame) -> &mut TrapFrame {
 }
 
 /// `recv(buf, len) -> (err, n)`. Polls the NIC, then copies a pending
-/// UDP payload or returns `EAGAIN`. The task stays Running (D-0035).
-/// SUM is raised only inside `copy_to_user`'s memcpy (D-0034).
+/// TCP or UDP payload, or 0 on TCP EOF, or `EAGAIN`. The task stays
+/// Running (D-0035). SUM is raised only inside `copy_to_user` (D-0034).
 fn sys_recv(frame: &mut TrapFrame) -> &mut TrapFrame {
     let ptr = frame.a0();
     let len = frame.a1();
@@ -219,30 +219,53 @@ fn sys_recv(frame: &mut TrapFrame) -> &mut TrapFrame {
         Ok(()) => {}
     }
     net::poll();
+    if let Some(payload) = net::tcp_pending() {
+        return recv_copy(frame, task, ptr, ncap, payload, true);
+    }
+    if net::tcp_eof() {
+        advance_ecall(frame);
+        frame.set_retval(OK, 0);
+        return frame;
+    }
     let Some(payload) = net::udp_pending() else {
         advance_ecall(frame);
         frame.set_retval(ERR_AGAIN, 0);
         return frame;
     };
+    recv_copy(frame, task, ptr, ncap, payload, false)
+}
+
+fn recv_copy<'a>(
+    frame: &'a mut TrapFrame,
+    task: &mut crate::task::Task,
+    ptr: usize,
+    ncap: usize,
+    payload: &[u8],
+    tcp: bool,
+) -> &'a mut TrapFrame {
     let n = core::cmp::min(payload.len(), ncap);
     match uaccess::copy_to_user(task, ptr, &payload[..n]) {
         Ok(n) => {
-            net::udp_consume();
+            if tcp {
+                net::tcp_consume();
+            } else {
+                net::udp_consume();
+            }
             advance_ecall(frame);
             frame.set_retval(OK, n);
             frame
         }
         Err(UserPtrError::SpansPastInterval) => {
-            kill_invalid_ptr(frame, ptr, len, "spans past interval", "recv")
+            kill_invalid_ptr(frame, ptr, ncap, "spans past interval", "recv")
         }
         Err(UserPtrError::NotInUserInterval) => {
-            kill_invalid_ptr(frame, ptr, len, "not in a user interval", "recv")
+            kill_invalid_ptr(frame, ptr, ncap, "not in a user interval", "recv")
         }
     }
 }
 
-/// `send(buf, len, flags)`. Copies from the user, transmits to the last
-/// UDP peer. FIN is ignored for UDP (D-0051).
+/// `send(buf, len, flags)`. TCP if a connection can take data; else UDP.
+/// TCP honors FIN (D-0053); UDP ignores it (D-0051).
 fn sys_send(frame: &mut TrapFrame) -> &mut TrapFrame {
     let ptr = frame.a0();
     let len = frame.a1();
@@ -250,7 +273,12 @@ fn sys_send(frame: &mut TrapFrame) -> &mut TrapFrame {
     let task = task::current();
     match uaccess::copy_from_user(task, ptr, len) {
         Ok(bytes) => {
-            if !net::udp_send(bytes, flags) {
+            let ok = if net::tcp_send(bytes, flags) {
+                true
+            } else {
+                net::udp_send(bytes, flags)
+            };
+            if !ok {
                 advance_ecall(frame);
                 frame.set_retval(ERR_INVALID_PARAM, 0);
                 return frame;

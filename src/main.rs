@@ -83,6 +83,12 @@ _start:
 "#
 );
 
+#[cfg(all(
+    feature = "net-udp-selftest",
+    any(feature = "net-http-selftest", feature = "tcp-drop-first-tx")
+))]
+compile_error!("net-udp-selftest is exclusive of the HTTP images");
+
 /// Rust entry, called from `_start` with OpenSBI's boot arguments in `a0`/`a1`.
 /// Prints hello, the boot CSR snapshot (`CSR OK`), installs `stvec`, starts
 /// 10 ms ticks, continues past an `ebreak` (`TRAP OK`), waits for `tick 30`,
@@ -181,13 +187,19 @@ extern "C" fn kmain(hartid: usize, dtb_pa: usize) -> ! {
             task::enter(0);
             #[cfg(feature = "user-fault-selftest")]
             task::enter(2);
-            #[cfg(feature = "net-udp-selftest")]
+            #[cfg(any(
+                feature = "net-udp-selftest",
+                feature = "net-http-selftest",
+                feature = "tcp-drop-first-tx"
+            ))]
             task::enter(3);
             #[cfg(not(any(
                 feature = "userptr-kernel-selftest",
                 feature = "userptr-span-selftest",
                 feature = "user-fault-selftest",
-                feature = "net-udp-selftest"
+                feature = "net-udp-selftest",
+                feature = "net-http-selftest",
+                feature = "tcp-drop-first-tx"
             )))]
             task::enter(1);
         }

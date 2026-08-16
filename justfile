@@ -558,6 +558,114 @@ test-net-udp:
     fi
     echo 'TEST PASS: UDP echo verbatim, pcap request→reply'
 
+# T3.11: one GET, HTTP/1.0 200, Connection: close, FIN close, checksums
+# good, no RST. Timeout 12s: same slirp SYN backoff window as test-net-tcp.
+test-net-http:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    EXPECT="HTTP OK" TIMEOUT_S=12 bash scripts/boot-test.sh net-http-selftest
+    if [ ! -f http.status ]; then
+        echo 'TEST FAIL: http.status missing (curl never ran or was killed first)'
+        exit 1
+    fi
+    if [ "$(cat http.status)" != "0" ]; then
+        echo "TEST FAIL: curl exited $(cat http.status), want 0"
+        cat http.hdr 2>/dev/null || true
+        exit 1
+    fi
+    if ! python3 -c 'import sys; sys.exit(0 if open("http.body","rb").read()==b"whimbrel\n" else 1)'; then
+        echo 'TEST FAIL: HTTP body is not exactly whimbrel\\n'
+        python3 -c 'print(open("http.body","rb").read())' 2>/dev/null || true
+        exit 1
+    fi
+    if ! grep -q 'HTTP/1.0 200' http.hdr; then
+        echo 'TEST FAIL: missing HTTP/1.0 200 in curl headers'
+        cat http.hdr
+        exit 1
+    fi
+    if ! grep -qi 'Connection: close' http.hdr; then
+        echo 'TEST FAIL: missing Connection: close in curl headers'
+        cat http.hdr
+        exit 1
+    fi
+    if ! grep -a -q 'HTTP READY' serial.log; then
+        echo 'TEST FAIL: missing HTTP READY'
+        exit 1
+    fi
+    if ! grep -a -q 'HTTP DONE' serial.log; then
+        echo 'TEST FAIL: missing HTTP DONE'
+        exit 1
+    fi
+    if ! grep -a -q 'tcp: TX FIN' serial.log; then
+        echo 'TEST FAIL: missing TX FIN arithmetic'
+        exit 1
+    fi
+    if ! grep -a -q 'tcp: RX FIN' serial.log; then
+        echo 'TEST FAIL: missing RX FIN arithmetic'
+        exit 1
+    fi
+    if ! grep -a -q 'TCP TIME_WAIT (truncated)' serial.log; then
+        echo 'TEST FAIL: missing truncated TIME_WAIT'
+        exit 1
+    fi
+    if grep -a -q 'TCP RETRANSMIT' serial.log; then
+        echo 'TEST FAIL: unexpected retransmit on the happy path'
+        exit 1
+    fi
+    if ! grep -a -q 'ip_drop short=0 ver=0 ihl=0 csum=0 frag=0 dst=0 proto=0' serial.log; then
+        echo 'TEST FAIL: IPv4 malformed/proto counters are not 0'
+        exit 1
+    fi
+    if ! grep -a -q 'tcp_drop short=0 doff=0 csum=0 opt=0' serial.log; then
+        echo 'TEST FAIL: TCP malformed counters are not 0'
+        exit 1
+    fi
+    if ! bash scripts/assert-pcap-http.sh whimbrel.pcap; then
+        echo 'TEST FAIL: pcap HTTP assertion'
+        exit 1
+    fi
+    echo 'TEST PASS: curl 200 whimbrel, Connection: close, FIN close, checksums good, no RST'
+
+# T3.11: drop-first-tx selftest. First data segment is posted; ACKs are
+# ignored until one 200 ms RTO. Capture must show two copies of the same
+# sequence, ~200 ms apart, second ACKed — that is the timer, not a pass.
+test-net-rto:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    EXPECT="HTTP RETRANSMIT OK" TIMEOUT_S=12 bash scripts/boot-test.sh tcp-drop-first-tx
+    if [ ! -f http.status ]; then
+        echo 'TEST FAIL: http.status missing (curl never ran or was killed first)'
+        exit 1
+    fi
+    if [ "$(cat http.status)" != "0" ]; then
+        echo "TEST FAIL: curl exited $(cat http.status), want 0"
+        cat http.hdr 2>/dev/null || true
+        exit 1
+    fi
+    if ! python3 -c 'import sys; sys.exit(0 if open("http.body","rb").read()==b"whimbrel\n" else 1)'; then
+        echo 'TEST FAIL: HTTP body is not exactly whimbrel\\n'
+        python3 -c 'print(open("http.body","rb").read())' 2>/dev/null || true
+        exit 1
+    fi
+    if ! grep -a -q 'TCP RETRANSMIT' serial.log; then
+        echo 'TEST FAIL: missing TCP RETRANSMIT (timer never fired)'
+        exit 1
+    fi
+    if ! grep -aE -q 'rexmit=1($|[^0-9])' serial.log; then
+        echo 'TEST FAIL: dump rexmit is not 1'
+        grep -a 'rexmit=' serial.log || true
+        exit 1
+    fi
+    if ! grep -a -q 'ip_drop short=0 ver=0 ihl=0 csum=0 frag=0 dst=0 proto=0' serial.log; then
+        echo 'TEST FAIL: IPv4 malformed/proto counters are not 0'
+        exit 1
+    fi
+    if ! bash scripts/assert-pcap-tcp-retransmit.sh whimbrel.pcap; then
+        echo 'TEST FAIL: pcap retransmit assertion'
+        exit 1
+    fi
+    echo 'TEST PASS: one RTO retransmit ~200ms, two copies same seq, second ACKed'
+
 # Disassemble the kernel. Extra flags as one quoted arg, e.g. just objdump '-d --source'
 objdump flags="-d": build
     cargo objdump -- {{flags}}

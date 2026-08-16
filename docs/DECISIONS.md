@@ -1647,7 +1647,7 @@ D-0011 onward are working decisions made under those constraints.
   not a link to `compiler_builtins`).
 
 ## D-0052: T3.10 handshake only; no RST on FIN or a second 4-tuple
-- Date: 2026-08-16 — Status: accepted
+- Date: 2026-08-16 — Status: superseded in part by D-0053
 - **Decision:** T3.10 implements LISTEN → SYN_RCVD → ESTABLISHED and
   nothing past that. One listener (guest port 80), one TCB. Duplicate
   SYN in SYN_RCVD re-sends the same SYN/ACK (same ISN). Payload, FIN,
@@ -1673,6 +1673,50 @@ D-0011 onward are working decisions made under those constraints.
   `busy` / `unexpected` in `tcp_drop` may be non-zero on a happy
   boot (second SYN, peer FIN after ESTABLISHED). Malformed counters
   (`short`, `doff`, `csum`, `opt`) must read 0. `drop_proto` must
-  read 0 (D-0049). T3.11 replaces the drop with RST-on-unexpected
-  and implements FIN consumption.
+  read 0 (D-0049). T3.11 (D-0053) implements FIN consumption and
+  close. A second 4-tuple is still dropped, not queued and not RST:
+  that is one TCB, not a second connection.
+
+## D-0053: One-shot HTTP/1.0, Connection: close, one-segment request
+- Date: 2026-08-16 — Status: accepted
+- **Decision:** T3.11 serves one GET. The app parses a request line in
+  the **one segment `recv` returned** (no kernel reassembly, no
+  cross-segment buffer). `send` of a fixed `HTTP/1.0 200 OK` body
+  with `Connection: close` and the FIN flag is the only data TX and
+  the only close the app issues. Stop-and-wait: at most one unacked
+  segment; 200 ms `rdtime` RTO from the `recv` poll loop; 8 attempts
+  then RST. FIN consumes a sequence number on send (`snd_nxt +=
+  len + 1`) and on receive (`rcv_nxt += len + 1`). Close states:
+  FIN_WAIT_1 → FIN_WAIT_2 → truncated TIME_WAIT (log, LISTEN);
+  CLOSE_WAIT → LAST_ACK when the peer FINs first. An unused TCB
+  (no payload delivered to `recv`, no `send`) that sees peer FIN is
+  closed by the kernel (FIN+ACK) so LISTEN is restored — that is
+  the hostfwd probe, not keep-alive. A second 4-tuple SYN is
+  dropped (`busy`), not queued and not RST. The `tcp-drop-first-tx`
+  selftest **posts the first data segment** (so the capture has it)
+  and **ignores ACKs until one RTO retransmit**; lossless slirp
+  would otherwise ACK immediately and hide the timer. The tripwire
+  (D-0037) applies the moment curl has its 200: no second `send`,
+  no second TCB, no header-driven keep-alive.
+- **Alternatives considered:** reassemble a request line across
+  segments (rejected: curl's GET is one segment; a buffer is the
+  start of a real HTTP parser and the tripwire forbids it). RST a
+  second 4-tuple (rejected: the hostfwd watcher shares the pcap;
+  an RST there fails "no RST on the happy path" without proving
+  multi-connection). Drop the first TX from the virtio ring
+  (rejected: the capture would contain one copy, not two). Full
+  TIME_WAIT (rejected: D-0041; a retransmitted peer FIN after we
+  are LISTEN meets RST, visible, harmless).
+- **Rationale:** the demo is one GET, one response, one FIN pair.
+  Everything else is a door D-0037 says not to walk through.
+- **Consequences:** the exact body is `whimbrel\n` (9 bytes,
+  `Content-Length: 9`). `just test` stays on `M2 EXECUTION OK`
+  (T3.12 flips the default marker). `just test-net-http` is the
+  curl checkpoint; `just test-net-rto` is the timer checkpoint.
+  `recv` returns 0 only after the peer FIN **and** our inflight
+  segment is ACKed — otherwise the app would `exit` before the RTO
+  could fire. Truncated TIME_WAIT does not clear that EOF. A late
+  FIN after LISTEN is dropped, not RST, so the happy-path capture
+  stays RST-free (the hostfwd watcher and a retransmitted peer FIN
+  share that pcap).
 

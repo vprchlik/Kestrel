@@ -54,7 +54,9 @@ extern "C" {
 #[cfg(not(any(
     feature = "userptr-kernel-selftest",
     feature = "userptr-span-selftest",
-    feature = "net-udp-selftest"
+    feature = "net-udp-selftest",
+    feature = "net-http-selftest",
+    feature = "tcp-drop-first-tx"
 )))]
 extern "C" {
     fn task1_entry();
@@ -69,7 +71,9 @@ pub fn entry() -> usize {
 #[cfg(not(any(
     feature = "userptr-kernel-selftest",
     feature = "userptr-span-selftest",
-    feature = "net-udp-selftest"
+    feature = "net-udp-selftest",
+    feature = "net-http-selftest",
+    feature = "tcp-drop-first-tx"
 )))]
 pub fn task1() -> usize {
     task1_entry as *const () as usize
@@ -78,7 +82,9 @@ pub fn task1() -> usize {
 #[cfg(not(any(
     feature = "userptr-kernel-selftest",
     feature = "userptr-span-selftest",
-    feature = "net-udp-selftest"
+    feature = "net-udp-selftest",
+    feature = "net-http-selftest",
+    feature = "tcp-drop-first-tx"
 )))]
 pub fn task2() -> usize {
     task2_entry as *const () as usize
@@ -93,7 +99,9 @@ pub fn task2() -> usize {
     feature = "userptr-kernel-selftest",
     feature = "userptr-span-selftest",
     feature = "user-fault-selftest",
-    feature = "net-udp-selftest"
+    feature = "net-udp-selftest",
+    feature = "net-http-selftest",
+    feature = "tcp-drop-first-tx"
 )))]
 global_asm!(
     r#"

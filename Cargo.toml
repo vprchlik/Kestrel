@@ -30,7 +30,11 @@ freeze-selftest = ["no-sret"]
 # T3.3: handshake to DRIVER_OK, then stop before U-mode.
 net-init-selftest = ["no-sret"]
 # T3.9: UDP echo in the app over recv/send. Enters U-mode (D-0051).
-net-udp-selftest = []
+net-udp-selftest = ["app/udp-echo"]
+# T3.11: HTTP/1.0 one-shot in the app (D-0053).
+net-http-selftest = []
+# T3.11: ignore ACKs until one RTO retransmit of the HTTP body.
+tcp-drop-first-tx = []
 # Build-only: plant a `c.fld` in `.utext` so check-utext can fail by name
 # (D-0044). Not a boot image.
 utext-c-fld-selftest = []

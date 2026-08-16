@@ -29,7 +29,7 @@ pub const ERR_NO_MEM: isize = -3;
 pub const ERR_AGAIN: isize = -4;
 
 /// `send` flags: bit 0 is FIN. UDP ignores it (D-0051); TCP honors it
-/// at T3.11 (close). T3.10 is handshake only.
+/// (D-0053).
 pub const SEND_FIN: usize = 1;
 
 const _: () = assert!(SYS_RESERVED == 0);
