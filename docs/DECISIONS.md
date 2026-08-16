@@ -1774,3 +1774,464 @@ D-0011 onward are working decisions made under those constraints.
   is filled rather than after `TX ARP reply`. D-0047 is amended: the
   panic is a real miss.
 
+## D-0055: M4 methodology frozen before any optimization
+- Date: 2026-08-16 — Status: accepted
+- **Decision:** the benchmark protocol is fixed now and every M4 number
+  obeys it. Per (system, config) batch: 3 warmup trials marked and
+  excluded, 30 recorded trials. Statistics: median and IQR for every
+  comparison and before/after claim; minimum shown alongside as the
+  observed floor bound; means never. Host controls: one host machine for
+  all report numbers, performance governor, `taskset`-pinned QEMU and
+  client on separate cores; recorded per batch: QEMU version + binary
+  hash, whimbrel git SHA + dirty flag, host kernel, CPU model, governor,
+  1-minute load average. Pinning is enforced fail-loudly: the harness
+  refuses to aggregate rows with mismatched QEMU version or a dirty
+  working tree. Data shape: long/tidy CSV — `results/runs.csv` (one row
+  per trial: identity, host metadata, E0-anchored edges, client attempt
+  count, pcap path) and `results/phases.csv` (one row per trial × phase:
+  ticks, ns since E2, delta, source); a summarizer emits
+  n/median/IQR/min/max; report tables are generated from CSV by script,
+  never typed. Phase data reaches the dataset by parsing the existing
+  machine-shaped `PHASE` serial lines; a line that fails to parse fails
+  the batch. The measurement client is a persistent process stamping a
+  monotonic clock at ~1 ms cadence (audit finding 32 retires the
+  fork-per-attempt curl loop); its measured granularity is reported.
+  **Stability criterion (the T4.1 finish line):** two consecutive
+  30-trial batches whose per-metric medians agree within max(2%, 200 µs)
+  for every metric ≥ 1 ms. **No optimization work until that criterion
+  holds and the baseline is frozen at a recorded SHA.** Pre-baseline
+  corrections (D-0056) and instrumentation (D-0057) are exempt from the
+  no-optimization rule, never from the gate list.
+- **Alternatives considered:** wide CSV, one column per phase (rejected:
+  every new stamp is a schema migration; long format makes T4.2 additive).
+  Minimum as the headline statistic — theoretically closest to a floor
+  under one-sided noise (rejected for comparisons: an order statistic
+  improves with N and is unfair across systems with different noise
+  profiles; kept as the shown floor bound). Mean/stddev (rejected: one
+  descheduled run poisons a mean invisibly). Deeper host surgery —
+  isolcpus, turbo off (rejected: breaks the runs-anywhere property;
+  `taskset` plus N trials plus recorded load average covers what the
+  claims need). Record-and-warn on QEMU mismatch (rejected: a
+  mixed-version CSV is silent corruption; fail loudly is the house rule).
+  `-icount` for determinism (already rejected in D-0043).
+- **Rationale:** every before/after claim in the report is only as real
+  as its "before". A numeric stability criterion makes "the harness is
+  ready" a fact instead of a feeling, and it is also the tripwire that
+  catches audit finding 12's predicted tick-quantization variance — if
+  the criterion fails, the investigation is methodology work with a
+  finding at the end, not a reason to lower the bar.
+- **Consequences:** trials are ~2–3 s wall, so 30+3 per config is cheap;
+  the QEMU invocation is already quadruplicated (audit finding 28) and
+  the harness must source a single shared definition rather than become
+  a fifth copy. `just bench` regenerating every cited number is the
+  milestone acceptance test. Finding 14 (`-C force-frame-pointers=yes`
+  in the measured build) is settled inside T4.1 with one A/B batch:
+  strip it if the delta clears the stability floor, else record it as a
+  stated condition — either way with the number in hand.
+
+## D-0056: Pre-baseline corrections (T4.0b)
+- Date: 2026-08-16 — Status: accepted
+- **Decision:** four audit findings are fixed before the first baseline
+  batch, because each changes what the baseline would mean.
+  1. **Fail-closed harness (finding 31):** `scripts/boot-test.sh` runs
+     under `set -euo pipefail` from line 1, with deliberate `set +e`
+     islands only where exit codes are inspected. The build-failure mode
+     is exercised once (DEBUGGING.md §4 item 8: an untested failure mode
+     is an unwritten assert) — a broken `cargo build` must yield FAIL on
+     every gate, never a stale-kernel PASS.
+  2. **E3g at publish (finding 9):** the E3g stamp moves between
+     `post_tx` (descriptor publish — D-0043's definition) and
+     `virtq::notify`. A second stamp `E3g_doorbell` lands after the
+     notify store returns. Under TCG the doorbell runs the device model
+     synchronously, so E3g_doorbell − E3g prices the device handoff as
+     its own measured line instead of silently inflating E3g and
+     distorting E3w − E3g.
+  3. **Spin, don't `wfi`, in boot RX waits (finding 12):** the `wfi`s in
+     `wait_gateway_arp` and `wait_ping_reply` are removed in all
+     profiles — one code path (D-0014). This un-quantizes ARP/ping
+     latency from the 10 ms tick. **Recorded corollary (finding 13):
+     those `wfi`s made timer ticks load-bearing for boot progress — with
+     no tick armed, the first `wfi` with nothing pending halts forever,
+     ahead of the timeout check. Any future rung that removes tick
+     arming from fast-boot is legal only because this entry removed the
+     sleeps first.**
+  4. **Buffer sizes by construction (finding 36):** the app crate exports
+     its recv buffer sizes; the kernel adds `const _` asserts tying them
+     to `tcp::PAYLOAD_MAX` and `net::UDP_PAYLOAD_MAX`, and the UDP
+     image's buffer grows to match. `recv`'s
+     copy-then-consume-everything shape stays; what changes is that
+     silent truncation stops being representable.
+- **Alternatives considered:** measuring first and fixing after
+  (rejected: a baseline with a fail-open harness, a mislabeled E3g, and
+  tick-quantized waits is a "before" the report would have to disown).
+  Fast-boot-only spins with `wfi` kept in the default profile (rejected:
+  two code paths for one loop, and the safe/fast delta would then mix a
+  power idiom into the price-of-paranoia line). Moving E3g without
+  keeping a doorbell stamp (rejected: the synchronous handoff is exactly
+  the kind of term floor-finding wants measured, and it is free to keep).
+- **Rationale:** these are corrections to the instruments, not
+  optimizations of the apparatus — the distinction D-0055 draws. Each was
+  found by reading code the gates already passed, which is the audit's
+  point: green gates and zero warnings do not certify that a label tells
+  the truth.
+- **Consequences:** the spin change costs host CPU during two boot waits
+  (bounded by the same 2 s timeouts; D-0040 already accepted that
+  polling is free at this workload). The stamp addition touches the
+  triplicated justfile phase lists (finding 26) in the same commit.
+  `E3g` keeps its name and its D-0043 definition; every prior chat-level
+  E3g number predates the harness and dies under the report rule anyway.
+
+## D-0057: Attribution stamps and phase renames (T4.2)
+- Date: 2026-08-16 — Status: accepted
+- **Decision:** the phase set becomes the audit's decomposition,
+  verbatim. New stamps: `frame_init` (after `frame::init`; check_dtb
+  rides with it), `task_init`, `page_build`, `page_verify` (leaving
+  `paging` to mean only the `satp` switch), `virtq_init` (splitting the
+  doubled program+verify out of DRIVER_OK, finding 4), `serving_ready`
+  (gateway MAC learned — the true earliest-serve point, finding 6),
+  `heap_init` and `accounting` (splitting the freeze delta, finding 7),
+  `syn_rx` and `established` (splitting client arrival out of the E3g
+  tail, finding 9). Renames: `listen` → `net_init_done` (finding 6).
+  Stamp overhead is measured by two adjacent stamps at boot and reported
+  with the table. The audit's finding-10 cost inventory and finding-12
+  variance prediction are **pre-registered claims**: T4.2's first
+  attributed table is checked against both, and agreement or
+  disagreement is recorded in the report draft — if they disagree, one
+  of them is wrong and that is a result, not an embarrassment.
+- **Alternatives considered:** keeping the nine-stamp set and attributing
+  by code reading alone (rejected: FREEZE already proved labels lie
+  while gates stay green). Perf-style sampling under TCG (rejected:
+  wrong tool for a 40 ms boot in an emulator; stamps at 100 ns
+  resolution are the native instrument). Renaming `E3g` (rejected:
+  D-0043 fixed its meaning; D-0056 moved the stamp to match the name).
+- **Rationale:** rung attribution is impossible while "paging" contains
+  four unrelated costs; every ladder decision downstream keys off this
+  table. Instrumentation precedes the baseline freeze because a frozen
+  baseline without attribution would have to be re-frozen immediately.
+- **Consequences (the co-edit checklist, audit finding 26):** the same
+  commit must touch `src/phase.rs` (N, index consts, NAMES), the three
+  justfile phase lists (`justfile:187,650,686` as of `4660fab`), and the
+  `PHASE .* unset` checks — a stamp that is legitimately unset in some
+  image must be exempted per image, not grepped away. Phase names are
+  frozen after T4.2 so `phases.csv` rows stay comparable across the
+  whole ladder.
+
+## D-0058: Optimization-ladder governance
+- Date: 2026-08-16 — Status: accepted
+- **Decision:** rungs land one at a time, each as: hypothesis → expected
+  gain from the attributed table → land with its co-edit list → full
+  gate list green → N-trial safe+fast regeneration → ladder row in the
+  draft (before/after medians, IQR, min) → one commit. **A rung is
+  eligible only if its attributed projected gain is ≥ 5% of the current
+  E2→E3g median**; below that it is declined-with-reason in the ladder
+  table. Planned order: rung 1 O(1) accounting (D-0060), rung 2
+  superpages (D-0059), then data-driven residue — bump-hybrid frame-list
+  init, `ping_gateway` gated out of fast-boot (needs its own decision
+  entry: wire behavior changes; ARP wait and GARP stay in all profiles),
+  tick arming under fast-boot (legal only after D-0056.3; co-edits the
+  `tick 3` gate), E3g-tail work only if `syn_rx`→`E3g` shows kernel time
+  worth the risk. The ladder closes when no remaining candidate clears
+  the bar — that closure is the floor declaration the report cites.
+  **Declined now, recorded so the report can say why:** DBCN
+  buffer-write FID 0 (nothing prints on the measured path);
+  interrupt-driven networking (D-0040's boot-cost argument is a boot
+  benchmark's argument); Sstc under `-bios default` (unprobeable,
+  D-0018 — it exists only inside D-0061's variant). The T4.3b audit
+  cleanup (findings 33–35, 37–39) is not a rung: it lands after the
+  baseline freeze precisely because it must not move any number.
+- **Alternatives considered:** batching rungs for fewer measurement
+  cycles (rejected: un-attributable regressions; one rung, one row is
+  the whole point). A time budget per rung (rejected: calendar-shaped;
+  the 5% bar is the returns-shaped equivalent). Optimizing the safe
+  profile too (rejected: the safe build is the control; it changes only
+  when correctness demands).
+- **Rationale:** the ladder's product is the before/after table, and the
+  table is only evidence if every row shares the same frozen protocol.
+  The 5% bar operationalizes "diminishing returns" so the open-ended
+  runway cannot become an unfinished ladder.
+- **Consequences:** the safe−fast per-phase delta (price of paranoia) is
+  recomputed at every rung; the D-0043 promise that verification cost
+  survives as its own line is kept by construction. Expected arc, stated
+  as an estimate and not a claim: rungs 1–2 collapse the accounting and
+  page-build/verify deltas, after which firmware (~24 ms class) dominates
+  the honest number and D-0061 is the next rung by the ladder's own rule.
+
+## D-0059: 2 MiB superpages for the RAM interior (amends D-0026)
+- Date: 2026-08-16 — Status: accepted (rung 2; lands at T4.5)
+- **Decision:** the identity map goes mixed-granularity. 4 KiB leaves
+  stay for everything the map distinguishes at 4 KiB grain: kernel image
+  W^X regions, guard holes, user sections, task-slot stacks and break
+  windows, and the virtio-mmio window. The aligned interior of the big
+  R+W RAM range becomes 2 MiB level-1 leaves, with 4 KiB fragments from
+  the fine-grained region's end up to the first 2 MiB boundary. A new
+  `map_2m` panics on misaligned VA/PA (concept: a superpage PPN with
+  nonzero low bits is a hardware fault, D-0026's recorded failure mode).
+  The software walker and every verifier become level-aware: each region
+  carries an *expected leaf level*, RAM-interior probes must resolve at
+  L1 with aligned PPN, everything else at L0, and the wrong level is a
+  panic, not a pass. The cliff-specific `require_leaf` probes
+  (post-`satp` PC, `__trap_entry`, live `sp`) stay in 4 KiB regions and
+  do not change.
+- **Alternatives considered:** 1 GiB leaves (still rejected, D-0026's
+  original reason: one PTE would span OpenSBI, guards, and every W^X
+  boundary). Keeping 4 KiB everywhere and only fixing the walk cost with
+  a faster loop (rejected: the cost is the ~32k-entry structure itself —
+  build and verify are both linear in leaves). Dropping the verify pass
+  under fast-boot instead (rejected: D-0043 keeps verify deliberately;
+  shrinking its cost by shrinking the structure preserves the
+  price-of-paranoia finding instead of deleting it).
+- **Rationale:** D-0026 said revisit "only with an explicit alignment
+  check on the leaf PPN" — this entry is that revisit, with the check in
+  both the mapper and the verifier. The attributed table (D-0057) is
+  expected to show page_build + page_verify as the dominant kernel term;
+  leaf count drops from ~32.6k to a few hundred, and verification cost
+  scales down with it — measured twice, before and after, which is
+  itself a result about what verification costs are made of.
+- **Consequences — the co-edit checklist (audit findings 24/25/27); every
+  item is walked in the same change or the rung does not merge:**
+  1. `src/task.rs` frames-consumed assert: `tables != 67` and the
+     leftover split (finding 24) — recompute and update deliberately.
+  2. `src/page.rs` doc comment deriving 67 (`:113-119` at `4660fab`).
+  3. `walk()`'s superpage panic citing D-0026 (`:356-361`) — becomes the
+     level-aware acceptance path.
+  4. `assert_range` `level == 0` (`:526`) and `require_leaf` L0-only
+     (`:720`) — per-region expected level.
+  5. `virtq` pool verification through `require_identity_rw*`
+     (`src/virtq.rs:305-341,359`) — the pool lives in `.bss` (4 KiB
+     region) and must still verify at L0.
+  6. D-0036's "69 frames (67 tables + 2)" amendment and D-0039's
+     "tables_used is 67" consequence — prose updated with the new
+     derivation.
+  7. justfile probe-format greps (`:87-94`) if the printed row format
+     grows a level column (finding 27).
+  8. DEBUGGING.md gains the superpage first-response note (`info mem`
+     cross-check; misaligned-superpage signature).
+- Revisit trigger: none — after this lands, D-0026's 4-KiB-only rule is
+  superseded for the RAM interior and stands everywhere else.
+
+## D-0060: O(1) frame accounting (rung 1)
+- Date: 2026-08-16 — Status: accepted (lands at T4.4)
+- **Decision:** `alloc_frame` / `free_frame` maintain an allocated
+  counter; `free_count()` becomes `TOTAL − allocated`, O(1). The
+  `task::enter` frames-consumed assert keeps its exact semantics at
+  ~zero cost. The paranoia is not deleted — it is made free: the safe
+  build's `frame::self_test` gains a cross-check of the counter against
+  a full list walk, so counter drift cannot hide, and `stress`'s
+  restored-list assertion keeps a full walk on its own path (audit
+  finding 30) so the storm still verifies the actual list.
+- **Alternatives considered:** deleting the accounting assert (rejected:
+  it caught nothing yet, but it is exactly the boot-time invariant check
+  this project keeps; the audit showed its cost, not its uselessness).
+  Gating the assert out of fast-boot (rejected: then safe and fast
+  diverge on an invariant, and the safe−fast delta stops meaning
+  "verification cost" and starts meaning "different kernels"). Keeping
+  the walk and just labeling it (rejected: ~6 ms for a subtraction's
+  worth of information fails D-0014 in the other direction).
+- **Rationale:** the audit's sharpest finding was that this walk hid
+  inside a stamp named "freeze". The fix demonstrates the ladder's
+  preferred move: keep the check, collapse its cost, and let the
+  before/after row show paranoia becoming free.
+- **Consequences:** `free_count()` stops being evidence about list
+  integrity (the counter is bookkeeping, not a walk); integrity evidence
+  lives in the safe build's cross-check and the stress storm. The
+  freeze-adjacent `accounting` phase delta should collapse to ~µs;
+  finding 7's ~6 ms prediction is the before row.
+
+## D-0061: `-bios none` measurement variant (scoped amendment to D-0003)
+- Date: 2026-08-16 — Status: accepted (investigation; lands at T4.7 or
+  is abandoned by its own criteria)
+- **Decision:** one variant exists to measure firmware cost by removal.
+  `-bios default` remains the platform and the default for every gate
+  and every primary number; the variant is a build lane and one report
+  exhibit. Design: a pure-boot M-mode shim linked at 0x8000_0000 in the
+  same ELF (second LOAD segment; kernel keeps its 0x8020_0000 link
+  address and S-mode identity). The shim programs a PMP catch-all, full
+  delegation (`medeleg`/`mideleg`), `mcounteren.TM`, `menvcfg.STCE`
+  (Sstc), then `mret`s into the existing `_start`. **No resident M-mode
+  services:** timer = `csrw stimecmp` at D-0018's reserved one-site
+  seam; console = polled NS16550A TX in S-mode (D-0004 revisited for
+  this variant only); shutdown = sifive_test store (D-0017's toolbox);
+  UART and sifive_test pages mapped at build (D-0039 pattern). `mtvec`
+  points at a park-with-diagnostic — after boot, any M-mode trap is a
+  bug and says so. **Allowlisted S-kernel seams:** entry, timer-arm
+  site, console backend, shutdown backend, the two page mappings.
+  **Abandon criteria, returns-based:** stop and write up the partial
+  result if (a) the variant demands S-kernel changes beyond the
+  allowlist, (b) the first working boot shows E0→E4 savings under 2× the
+  largest remaining S-mode rung, or (c) M-mode debugging exceeds what
+  the DEBUGGING.md channels can name.
+- **Alternatives considered:** pure M-mode kernel (rejected: `satp` does
+  not govern M-mode, so paging/W^X/U-isolation — the project's identity
+  and its measurable syscall boundary — evaporate). Resident mini-SBI
+  implementing DBCN/TIME/SRST behind the same ecall ABI (rejected: keeps
+  an M trap handler, an M stack, and the MTI→STIP forwarding dance — the
+  structure whose cost we are removing, rebuilt small). Skipping the
+  variant and citing OpenSBI's cost as an assumption (rejected: it is
+  the largest single term in the honest number; floor-finding measures
+  it or does not claim it).
+- **Rationale:** the with/without pair turns firmware cost from an
+  assumption into a measurement, and it carries a structural finding no
+  table row can: mainline riscv64 Linux is an S-mode SBI consumer and
+  cannot take this rung — the unikernel can absorb the firmware layer,
+  the general-purpose OS cannot. Sstc is available here precisely
+  because we own `menvcfg` — D-0018's objection was unprobeability under
+  firmware, and the entry reserved the one-site seam this variant uses.
+- **Consequences:** variant touchpoints per audit finding 29 (`-bios
+  default` in four harness locations; `measure-e2.sh`'s reset asserts
+  are meaningless under the variant; `linker.ld` entry; check-utext's
+  kernel_lo stays valid). A `just test-m` lane covers a gate subset
+  (boot, net, HTTP, fast-release); the full 16-gate list stays on
+  `-bios default`. Delegating cause 2 becomes possible in the variant
+  (M2's undelegated-illegal-instruction limit would lift) — noted as an
+  observation, not built upon: scope stays measurement. E2 ≈ E1 in the
+  variant; the firmware row of its table is ~0 by construction and the
+  exhibit says so.
+
+## D-0062: Linux baseline — buildroot, /init-is-the-server, two rows
+- Date: 2026-08-16 — Status: accepted
+- **Decision:** buildroot at a pinned release, sha-recorded.
+  `qemu_riscv64_virt_defconfig` base; kernel config trimmed toward
+  tinyconfig keeping serial console, virtio-mmio + virtio-net, IPv4 TCP,
+  initramfs, devtmpfs, ELF binfmt; modules, IPv6, block, and everything
+  else discoverable-as-unused off; each delta lives in a committed
+  defconfig fragment. **Two Linux rows:** trimmed (primary — the
+  good-faith floor attempt) and stock defconfig (reference — what tuning
+  bought). Initramfs is a hand-rolled cpio containing `/init` and a
+  console node; `/init` *is* the server: static C, no busybox, no shell —
+  socket, `SO_REUSEADDR`, bind :80, listen, write `READY`, accept loop,
+  single read, write the byte-identical 92-byte response, close.
+  Cmdline primary: `console=ttyS0 quiet loglevel=0 rdinit=/init`;
+  secondary instrumented config: `loglevel=7` + `CONFIG_PRINTK_TIME` +
+  `initcall_debug`. **Edge mapping:** cross-system comparisons ride only
+  on client-observed edges (E0 → first-connect, E0 → E4), identical for
+  all systems; Linux's phase decomposition comes from the instrumented
+  run's printk/initcall timestamps and is presented as its own exhibit
+  with the asymmetry stated — different instrument, measured on the
+  logging config, quiet-vs-instrumented headline delta shown. Identical
+  conditions: same QEMU binary, `-machine virt`, single CPU, default
+  128 MiB, same netdev/hostfwd/filter-dump.
+- **Alternatives considered:** busybox init + httpd (rejected: every
+  userspace byte between kernel and server is a confound; PID-1-is-the-
+  accept-loop is the honest analogue of app-in-image). One
+  maximally-tuned Linux row (rejected: invites "you hobbled Linux" and
+  "you didn't tune enough" simultaneously; two rows plus a published
+  config make the tuning claim falsifiable). Fabricating E2-anchored
+  stamps for Linux from serial timing (rejected: precision theater;
+  coarser-but-labeled beats fake-comparable). Distro kernel + custom
+  initramfs (rejected: unpinnable config surface; buildroot pins the
+  whole toolchain).
+- **Rationale:** the comparison's integrity lives in the shared
+  client-observed edges and the identical wire artifact (same 92 bytes,
+  same handshake shape in the pcap); everything guest-internal is
+  per-system evidence, honestly labeled. The threats section states
+  plainly that a Linux boot-time specialist could likely do better and
+  the config is published for falsification — we claim *a* minimal
+  Linux, not *the* minimal Linux.
+- **Consequences:** `bench/linux/` (or equivalent) holds the defconfig
+  fragment, `server.c`, and a build script with pinned tarball hash;
+  D-0030's reservation-vs-working-set caveat attaches to the memory
+  exhibit. The build is host-heavy but mechanical and cached.
+
+## D-0063: Unikraft spike — go/no-go and the no-core-patches line
+- Date: 2026-08-16 — Status: accepted
+- **Decision:** pin the unikraft/unikraft PR #1698 branch commit and the
+  kraftkit version in this entry when the spike starts. **Go** = the
+  HTTP example builds for qemu/riscv64 at the pin, boots on our pinned
+  QEMU with documented flag deltas, and answers the harness client.
+  **No-go** = build failure surviving config-level fixes; riscv64
+  network path nonfunctional; or any fix requiring patches to Unikraft
+  internals. **The no-core-patches line is both the go/no-go and the
+  abandon criterion:** config and build-system fixes leave "Unikraft"
+  meaning Unikraft; core patches would make the row "our fork", which
+  contaminates the comparison — the spike ends where configuring their
+  system becomes developing it. Fallback outcomes per D-0043, in report
+  terms: (1) works — three-way on client-observed edges plus their
+  native boot instrumentation as a labeled per-system exhibit;
+  (2) different-ISA only — a separate exhibit that never shares a table
+  with riscv64 numbers, plus a source-level riscv64 boot-path analysis;
+  (3) does not run — two-way quantitative plus a qualitative Unikraft
+  section from source, stated in the abstract, not a footnote.
+  "Identical conditions" = same host, same pinned QEMU (a required
+  different QEMU version triggers a Whimbrel control row under that QEMU
+  to bound the version effect), same machine/slirp/hostfwd topology,
+  same client protocol, same first-byte edge; every deviation goes in a
+  deltas table. Sequenced immediately after the baseline freeze so the
+  comparison section's shape settles while the draft is young.
+- **Alternatives considered:** patching their riscv64 port to make the
+  three-way happen (rejected: the number would describe our fork).
+  Waiting for the PR to merge (rejected: unbounded external dependency;
+  the fallback ladder exists so the report converges regardless).
+  Skipping Unikraft (rejected: the comparison against a mature unikernel
+  is the context that makes the floor claim interesting).
+- **Rationale:** the spike is bounded structurally, not by calendar: its
+  end state is one of three pre-named report shapes, so no outcome is a
+  schedule failure — only an unrecorded outcome would be.
+- **Consequences:** the pin (commit + kraftkit version) is recorded here
+  at spike start; whichever fallback fires, the report's abstract states
+  the comparison shape in its opening paragraphs.
+
+## D-0064: Report structure, claims discipline, convergence, audits, quizzes
+- Date: 2026-08-16 — Status: accepted
+- **Decision:** report structure: abstract → background (short) →
+  architecture of the apparatus (decision-log distilled; the deliberate
+  U/S choice and its measurement consequence; what our TCP omits and why
+  it is invisible at this workload) → methodology (edges per D-0043,
+  protocol per D-0055, client, pinning, stamp overhead) → results →
+  threats to validity → future work → appendices. **Centerpiece exhibit
+  columns, fixed now:** phase | what the work is | safe median | fast
+  median | fast IQR | fast min | after-ladder median | Δ vs baseline |
+  structurally necessary? — one row per attributed phase; the safe−fast
+  pair is the price-of-paranoia finding; the last column is the
+  floor-finding argument made row by row. Companion exhibits: the ladder
+  table (rung × cumulative E2→E3g, declined rungs included with
+  reasons) and the cross-system table (system × E0→first-connect,
+  E0→E4, image bytes, RAM; median/IQR/min; N stated). **Claims
+  discipline:** results claim only measured medians under stated
+  conditions; "fastest" never appears without its conditions clause in
+  the same sentence; floor language is "minimum structurally necessary
+  under these conditions, bounded below by the rows argued necessary";
+  the Linux row is "a minimal Linux tuned in good faith, config
+  published". **Appendix, created with the skeleton:** "numbers that
+  must be regenerated" — seeded from audit findings 16–23, listing every
+  inherited quantitative claim with its disposition (regenerate /
+  historical-only / structural), so the kill-list exists before any
+  prose does. **Draft-early:** the skeleton is written with real numbers
+  at T4.3; all later work edits the draft; exhibit tables are generated
+  from CSV. **Second audit:** inside T4.11, between the
+  content-complete draft and the quiz — same findings-only format as
+  `docs/AUDIT-2026-08.md`, scoped to what changed since it (superpage
+  walker/verifier as landed, harness as-built, the `-bios none` shim if
+  it landed, and every report number checked against the CSVs that
+  claim to generate it); recorded as `docs/AUDIT-<date>.md`; blockers
+  fixed before the quiz. **Quizzes:** the comprehensive end-of-project
+  quiz sits between the second audit and the final revision pass, so
+  what it surfaces marks sections needing rework; the standing
+  5-question milestone quiz happens at T4.12 as usual. **Convergence
+  gate** (duplicated in PLAN.md; the PLAN copy is normative): harness
+  stable and all numbers regenerated; ladder closed by the 5% bar;
+  `-bios none` concluded either way; comparison section in its selected
+  fallback shape; threats each mitigated-and-measured or stated; second
+  audit's blockers closed; both quizzes done; sign-off.
+- **Alternatives considered:** writing the report after the data is
+  "done" (rejected: draft-early is the structural rule — a skeleton with
+  real numbers exists from T4.3 and everything edits it). Quiz after
+  final (rejected: ceremonial). Hand-typed exhibit tables (rejected:
+  the one mechanism that guarantees prose cannot drift from data is
+  generating tables from the CSVs). Skipping a second audit because the
+  first was clean-ish (rejected: the first audit's premise — green gates
+  do not certify labels — applies with more force to code written during
+  a measurement campaign).
+- **Rationale:** the report is the artifact; its integrity mechanisms —
+  generated exhibits, the regeneration appendix, pre-registered
+  predictions citable from `docs/AUDIT-2026-08.md`, a scoped second
+  audit — are what let it claim floor-finding instead of benchmarketing.
+- **Consequences:** `report/` lives in-repo; markdown source plus a
+  table-generation script over `results/*.csv`; `just bench`
+  regenerating every cited number is the acceptance test; the
+  threats-to-validity list opened at T4.0 (TCG ≠ hardware; slirp as
+  peer; client granularity measured; single hart and fixed RAM;
+  debug-era history killed by the regeneration rule; Linux-tuning
+  fairness; Unikraft pin; instrumentation observer effect; host
+  variance; E3w fidelity; reservation vs working set per D-0030) is
+  maintained in the draft from day one.
+
