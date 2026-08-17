@@ -60,8 +60,8 @@ pool (D-0024).
 
 **frame freeze.** `frame::freeze()` immediately before the first `sret` to U
 (D-0036). After it, `alloc_frame` / `free_frame` panic printing the request.
-The 69 frames already gone are 67 page tables plus the two `FRAME OK`
-self-test leftovers (D-0036).
+The 7 frames already gone are 5 page tables (`EXPECTED_TABLES`,
+D-0059) plus the two `FRAME OK` self-test leftovers (D-0036).
 
 **GARP (gratuitous ARP).** An ARP request with `spa = tpa` equal to our IP,
 Ethernet-broadcast. We send one after the gateway cache is filled (D-0054)
@@ -154,7 +154,9 @@ error (PLAN M1 concept 11).
 **PTE (page-table entry).** A 64-bit Sv39 word: V/R/W/X/U/G/A/D in the low
 bits, PPN in [53:10]. Any of R/W/X set makes it a leaf (including a 2 MiB
 or 1 GiB superpage); a non-leaf must have V=1 and R=W=X=0 or the walk
-stops early (concept 11.4). We use only 4 KiB leaves (D-0026).
+stops early (concept 11.4). The RAM interior uses 2 MiB L1 leaves
+(D-0059); 4 KiB L0 everywhere the map distinguishes at 4 KiB grain.
+1 GiB L2 leaves are still rejected (D-0026).
 
 **RVC (compressed instructions).** The C extension gives 16-bit encodings for
 common integer operations; a trap can land on either a 2-byte or a 4-byte
@@ -230,14 +232,19 @@ M1 arms through SBI TIME instead (D-0018); Sstc is the M4 comparison, not
 the M1 mechanism.
 
 **superpage.** An Sv39 leaf at level 1 (2 MiB) or level 2 (1 GiB). The PPN
-must be aligned to that size or the walk faults. M1 maps everything with
-4 KiB (level-0) leaves (D-0026): kernel W^X and the 4 KiB guard already
-force that grain, and a mixed path is how a non-leaf with R/W/X set
-accidentally becomes a misaligned superpage.
+must be aligned to that size or the walk faults. We map the aligned
+KERNEL_RW RAM interior (`[0x80400000, RAM_END)`) with 2 MiB L1 leaves
+(D-0059) and keep 4 KiB L0 for W^X, guards, user slots/sections,
+virtio-mmio, and alignment fragments. 1 GiB leaves are still rejected
+(D-0026): one PTE would span OpenSBI, the guard, and every W^X
+boundary. A mixed path whose verifier does not know the expected
+level per region is how a non-leaf with R/W/X set accidentally
+becomes a misaligned superpage — that is a panic, not a pass.
 
 **Sv39.** The smallest rv64 virtual-memory mode: 39-bit virtual addresses
-translated through three levels of 512-entry page tables to 4 KiB pages (with
-2 MiB / 1 GiB leaves possible at higher levels; we do not use them, D-0026).
+translated through three levels of 512-entry page tables to 4 KiB pages, with
+2 MiB L1 leaves on the RAM interior (D-0059) and 1 GiB L2 leaves unused
+(D-0026).
 512 GiB of address space — absurdly more than our 128 MiB of RAM, which is
 why we don't need Sv48.
 

@@ -238,6 +238,34 @@ and 11 for the entries the transition actually uses. The general lesson:
 verify the specific translations the cliff depends on, not a representative
 sample of the range.
 
+**Mixed-granularity superpages (D-0059) — first response**
+
+RAM interior `[0x80400000, RAM_END)` is 2 MiB L1 leaves; everything the
+map distinguishes at 4 KiB grain stays L0 (W^X, guards, user slots and
+sections, virtio-mmio, the `[__heap_end, 0x80400000)` fragment). Wrong
+level is a panic, not a pass. `require_leaf` on the `satp` cliff stays
+L0 because those VAs remain in the 4 KiB region.
+
+- **Monitor `info mem`.** After paging is on, the decoded map should
+  show 2 MiB pages from `0x80400000`. 4 KiB throughout that range means
+  `map_range_2m` never ran (or `assert_range` never asked for L1).
+- **Panic `walk: misaligned 2 MiB PPN` / `map_2m: unaligned`.** This is
+  D-0026's named failure mode: a superpage PPN with nonzero low bits.
+  The mapper and the walker both refuse it.
+- **Panic `… L0 want L1` or `… L1 want L0`.** Mapper and verifier
+  disagree on the region's expected leaf level. The printed probe row
+  already has `L{}`; the panic names both.
+- **`page_verify` still ~2 ms, or `assert_range: L1 leaf … overruns
+  end`.** `assert_range` is still stepping 4 KiB against L1 leaves —
+  the named failed co-edit. Grain-correct verify is hundreds of
+  iterations, not ~32k.
+- **`tables=` not 5, or `tables_used=N want 5`.** L1 leaves were not
+  installed (still 67), or the image grew a table the derivation does
+  not count. Do not patch the assert; recompute `EXPECTED_TABLES`.
+- **`heap_end=… crossed RAM_L1_START`.** `__heap_end` reached the 2 MiB
+  region. That would add an L0 and invalidate the constant. Shrink or
+  recompute; do not raise `RAM_L1_START` to paper over it.
+
 **M2**
 1. `sret` to U-mode with `sstatus.SPP` still S, or `sepc` bogus.
 2. User page lacking the U bit → instruction page fault at the first user

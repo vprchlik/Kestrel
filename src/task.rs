@@ -568,22 +568,24 @@ pub fn enter(id: usize) -> ! {
     //    `SIE` from `SPIE` in U only. The handler is the only kernel code
     //    that runs at all.
     //
-    // Consumed frames are 67 tables (M2's 65 plus D-0039's L1+L0 for
-    // the virtio-mmio VPN[2]) plus, except under `fast-boot`, the two
-    // FRAME OK self-test leftovers (D-0036). The MMIO pages themselves
-    // are not RAM and do not come from the pool — `total_frames()` is
-    // unchanged. Feature images can shift `total` with `__heap_end`;
-    // the split must still hold.
+    // Consumed frames are EXPECTED_TABLES page tables (D-0059 mixed
+    // granularity: 5 on the production image) plus, except under
+    // `fast-boot`, the two FRAME OK self-test leftovers (D-0036). The
+    // MMIO pages themselves are not RAM and do not come from the pool —
+    // `total_frames()` is unchanged. Feature images can shift `total`
+    // with `__heap_end`; if they cross `RAM_L1_START`, `page::init`
+    // panics so EXPECTED_TABLES is recomputed. The split must still hold.
     {
         let total = crate::frame::total_frames();
         let free = crate::frame::free_count(); // D-0065: bump arithmetic
         let tables = crate::page::tables_used();
         let held = total - free;
         let leftover = if cfg!(feature = "fast-boot") { 0 } else { 2 };
-        if tables != 67 || held != tables + leftover {
+        let want_tables = crate::page::EXPECTED_TABLES;
+        if tables != want_tables || held != tables + leftover {
             panic!(
-                "frames held {} tables {} leftover {} want tables=67 leftover={}",
-                held, tables, leftover, leftover
+                "frames held {} tables {} leftover {} want tables={} leftover={}",
+                held, tables, leftover, want_tables, leftover
             );
         }
         println!(

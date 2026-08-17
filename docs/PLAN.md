@@ -1626,27 +1626,29 @@ fix. Do not start this task.
 
 ### T4.6 — Superpages, then `virtq_init`, then data-driven residue — M per rung
 Only rungs whose *attributed* projected gain ≥ 5% of the current E2→E3g
-median (D-0058). **Next is 2 MiB superpages (D-0059).** T4.4 left
-`page_build` + `page_verify` = 3.84 ms = 42% of 9.17 ms, which is the
-re-evaluation condition. Projection is pre-registered in D-0059 as
-ranges (not optimistic bounds): paging 0.15–0.70 ms, E2→E3g 5.5–8.0 ms.
-**No kernel code until that projection is signed off.** When it lands
-it stays L-tier and walks the D-0059 co-edit checklist (findings
-24/25/27) in the same change, including grain-aware `map_range` /
-`assert_range`.
+median (D-0058). **2 MiB superpages (D-0059) landed in tree
+2026-08-17.** Mixed granularity, level-aware walker/verifier,
+grain-aware `map_range_2m` / `assert_range`, `EXPECTED_TABLES` = 5.
+Co-edit checklist (findings 24/25/27) walked in the same change.
+**Awaiting the bench-host N-trial** to fill the ladder row against the
+pre-registered ranges (paging 0.15–0.70 ms, fast E2→E3g 5.5–8.0 ms;
+falsify `page_verify` ≥ 1.0 ms or still 4K-stepping 1.5–2.2 ms). This
+pod's magnitudes are not report-grade (D-0055).
 **`virtq_init` (finding 4):** discarded first program+verify, 845.4 µs
-= 9% of T4.4 9.17 ms — **active candidate**, sequenced after
-superpages; **not** bundled with `DRIVER_OK`. Against the freeze it
-was 4.0% of 21.42 ms and did not clear 5%.
+= 9% of T4.4 9.17 ms — **active candidate**, sequenced after the
+superpage N-trial; **not** bundled with `DRIVER_OK`. Against the freeze
+it was 4.0% of 21.42 ms and did not clear 5%.
 Other candidates, still data-driven: gate `ping_gateway` behind
 `not(fast-boot)` (diagnostics — gateway ARP and GARP stay in all
 profiles; needs its own decision entry since wire behavior changes);
 tick arming under fast-boot (legal only after T4.0b(c); needs the
 justfile `tick 3` co-edit, finding 27); E3g-tail work only if
-`syn_rx`→`E3g` shows kernel time worth taking; E3w→E4 remainder
-(D-0066) is methodology, not a kernel rung. Each rung: hypothesis →
-expected gain → land with its co-edit list → full gates → N-trial →
-ladder row → one commit.
+`syn_rx`→`E3g` shows kernel time worth taking. E3w→E4 remainder
+(D-0066) is the largest term in honest E0→E4; dump placement that
+stops measuring our instrumentation as if it were Whimbrel is
+designed before the Linux baseline, not a 5%-bar kernel rung. Each
+rung: hypothesis → expected gain → land with its co-edit list → full
+gates → N-trial → ladder row → one commit.
 
 - **Acceptance:** every candidate landed-with-row or declined-with-reason;
   the ladder closes when no remaining candidate clears the 5% bar (the

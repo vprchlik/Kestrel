@@ -14,7 +14,7 @@ result.
 | 20 | "~150 ms debug paging" | **historical-only** — labeled not-the-cost-of-paging; must not enter a results table |
 | 21 | "E2 offset = 0"; OpenSBI "Firmware Size 322 KB" | **regenerate** under the pinned M4 QEMU (`just measure-e2`); offset is meaningless for `-bios none` |
 | 22 | chat-only headline budget (OpenSBI ~24 ms, E2→E3g 42.5 ms, …) | **historical-only** — replaced wholesale by `baseline-t4.3` |
-| 23 | 88 KiB/slot reservation; 1 MiB heap; RTO 200 ms; 69 frames = 67+2 | **structural** — may carry as-is until a rung breaks them (finding 24 at superpages) |
+| 23 | 88 KiB/slot reservation; 1 MiB heap; RTO 200 ms; 69 frames = 67+2 | **structural** — 69 = 67+2 died at the superpage rung (finding 24); now 7 = 5 tables + 2 leftovers (D-0059 / D-0036). Slot, heap, and RTO still stand |
 
 Finding 22 is why this appendix exists: a single-run chat budget is
 not a result. The generated exhibits are.

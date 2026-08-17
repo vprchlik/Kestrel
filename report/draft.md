@@ -187,28 +187,31 @@ second hypothesis.
 |---|---|---|---|---|
 | bump / lazy free-list | stop linking ~31k virgin frames; `free_count()` is bump arithmetic | 9.17 ms | −12.25 ms (−57%) | landed T4.4 (D-0065); batches `20260817T052349Z-1`/`-2`; subsumes D-0060. Secondary: `page_verify` −7%, `E3g` −13% from a warmer cache/TLB after the ~125 MiB link disappeared |
 | D-0060 allocated counter | `free_count = TOTAL − allocated` on the current list | — | — | declined-by-subsumption |
-| 2 MiB superpages (D-0059) | mixed-granularity identity map; level-aware verifier | 5.5–8.0 ms (range, not a bound) | paging 3.84 ms → 0.15–0.70 ms | **next**; projection pre-registered below; no kernel code until sign-off |
-| `virtq_init` skip discarded program+verify | first pass wiped by `net::init` reset; `fill_descriptors` stays | — | 845.4 µs = 9% of 9.17 ms; 5% bar is 458 µs | **active candidate** after superpages; not bundled with `DRIVER_OK` |
+| 2 MiB superpages (D-0059) | mixed-granularity identity map; level-aware verifier; grain-aware `assert_range` | awaiting N-trial | paging 3.84 ms → 0.15–0.70 ms (pre-registered range) | **landed in tree**; N-trial is the bench host; projection table below is the prediction, not a result |
+| `virtq_init` skip discarded program+verify | first pass wiped by `net::init` reset; `fill_descriptors` stays | — | 845.4 µs = 9% of 9.17 ms; 5% bar is 458 µs | **active candidate** after the superpage N-trial; not bundled with `DRIVER_OK` |
 
-### Superpage projection (D-0059; awaiting sign-off)
+### Superpage projection (D-0059; landed in tree, awaiting N-trial)
 
-No kernel code in this revision. Mixed granularity as already
-decided: 2 MiB L1 leaves for the aligned KERNEL_RW RAM interior,
-4 KiB for W^X image, guards, user slots/sections, virtio-mmio
-window, and alignment fragments. `map_2m` panics on misaligned
-VA/PA. Walker and verifier become level-aware; the wrong level is
-a panic. Virtio stays L0 (`require_identity_rw*`).
+Kernel code is this revision; the ladder numbers are not. Mixed
+granularity as already decided: 2 MiB L1 leaves for the aligned
+KERNEL_RW RAM interior, 4 KiB for W^X image, guards, user
+slots/sections, virtio-mmio window, and alignment fragments.
+`map_2m` panics on misaligned VA/PA. Walker and verifier are
+level-aware; the wrong level is a panic. Virtio stays L0
+(`require_identity_rw*`). `EXPECTED_TABLES` is 5; `page::init`
+panics if `tables_used()` disagrees. `assert_range` steps by the
+leaf grain that resolved — a 4 KiB-step verify against L1 leaves
+is the named failed co-edit and would leave `page_verify` in the
+1.5–2.2 ms band.
 
-Load-bearing co-edit, named so a miss is a failed co-edit rather
-than a mysterious half-gain: `map_range` and `assert_range` must
-step by the leaf grain they just installed, not blindly 4 KiB.
-A 4 KiB-step verify against L1 leaves still walks ~32k VAs (only
-the walk is shorter). That is not the intended rung.
+The bench host runs the N-trial. This pod is KVM; its magnitudes
+are not report-grade (D-0055). Until that batch, the table below
+is the pre-registered prediction, not a result.
 
 Leaf-count estimate from T4.4 exhaust `total=31823` → `__heap_end`
 ≈ `0x803B1000`: 62 × 2 MiB leaves on `0x80400000..0x88000000`;
 ~520 4 KiB leaves for `0x80200000..0x80400000` plus the virtio
-window; `tables_used` 67 → 5–8.
+window; `tables_used` 67 → 5–8. Landed `EXPECTED_TABLES` is 5.
 
 Point estimates as ranges, because T4.4 leftover bounds were ~40%
 optimistic:
@@ -221,12 +224,14 @@ optimistic:
 | fast E2→E3g | 9.17 ms | 5.5–8.0 ms | still > 8.5 ms, or a phase this hypothesis does not name vanishes |
 | `tables_used` | 67 | 5–8 | still 67 |
 
-Co-edit checklist, walked in the same change when code is allowed:
-`walk()`'s superpage panic (D-0026); `assert_range` `level == 0`;
-`require_leaf` L0; virtq `require_identity_rw*`; `tables_used` and
-`held = tables + leftover`; `page.rs` 67 derivation; D-0036 / D-0039
-prose; justfile virtio probe greps (keep the virtio row format if
-possible); DEBUGGING.md superpage note.
+Co-edit checklist, walked in the same change:
+`walk()` accepts aligned L1, panics on 1 GiB and on a misaligned
+2 MiB PPN (D-0026); `assert_range` expected level **and** grain
+(not `level == 0` + 4 KiB step); `require_leaf` L0; virtq
+`require_identity_rw*` untouched; `EXPECTED_TABLES` and
+`held = tables + leftover`; D-0036 / D-0039 prose (7 = 5 + 2);
+justfile virtio probe greps (row format unchanged, greps did not
+move); DEBUGGING.md superpage first-response note.
 
 ### Cross-system
 
@@ -291,13 +296,13 @@ maintained in [threats-to-validity.md](threats-to-validity.md).
 
 ## Future work
 
-Next: 2 MiB superpages (D-0059), after this projection is signed
-off. Then `virtq_init` as an active candidate (9% of current
-E2→E3g). D-0060 is declined-by-subsumption. E3w→E4 may be reducible
-(D-0066) but is not a ladder rung. `-bios none` (D-0061). Linux row
-(D-0062). Unikraft spike (D-0063). T4.3b audit cleanup. Harness
-per-batch result files (D-0067) if the bench host takes the
-recommendation.
+Next: bench-host N-trial of the superpage rung (D-0059), then
+`virtq_init` as an active candidate (9% of T4.4 E2→E3g). D-0060 is
+declined-by-subsumption. E3w→E4 dump placement is designed before
+the Linux baseline (not a 5% kernel rung). `-bios none` (D-0061).
+Linux row (D-0062). Unikraft spike (D-0063). T4.3b audit cleanup.
+Harness per-batch result files (D-0067) — spec for the bench host;
+this tree does not implement the write path.
 
 ---
 

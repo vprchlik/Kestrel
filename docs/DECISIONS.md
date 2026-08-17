@@ -548,8 +548,9 @@ D-0011 onward are working decisions made under those constraints.
   up in practice.
 
 ## D-0026: Map every region with 4 KiB leaves; no superpages
-- Date: 2026-08-13 — Status: accepted (D-0059 is the recorded revisit;
-  4 KiB-only stands until that rung lands)
+- Date: 2026-08-13 — Status: superseded for the RAM interior by D-0059
+  (landed 2026-08-17); 4 KiB remains mandatory everywhere the map
+  distinguishes at 4 KiB grain; 1 GiB leaves still rejected
 - **Decision:** the M1 kernel address space is built entirely from 4 KiB
   (level-0) leaves. No 2 MiB or 1 GiB superpage leaves.
 - **Alternatives considered:** 1 GiB leaves for the RAM window (rejected: a
@@ -569,6 +570,11 @@ D-0011 onward are working decisions made under those constraints.
   resolves at level 1 or 2. Revisit only if a later milestone has a real
   reason to map a huge contiguous R+W region at a coarser grain — and then
   only with an explicit alignment check on the leaf PPN.
+
+  **Supersession (D-0059, landed):** `[0x80400000, RAM_END)` is 2 MiB L1
+  leaves with an aligned-PPN panic in both the mapper and the walker.
+  The 1 GiB rejection stands. This entry remains the record of why M1
+  was 4 KiB-only and of the misaligned-superpage failure mode.
 
 ## D-0027: Address-sorted heap free list, coalesce on free, first-fit
 - Date: 2026-08-13 — Status: accepted
@@ -1081,21 +1087,26 @@ D-0011 onward are working decisions made under those constraints.
   restores `SIE` from `SPIE` in U only. There is still no interruptible
   kernel-side allocator caller.
 
-  **69 frames consumed before freeze (was 67 before T3.1).** `frames frozen:
-  free=N` compared with the `FRAME OK` total is a gap of 69 on the default
-  image: 67 page tables plus 2. The 67 are `page::tables_used()` — one Sv39
-  root, one L1 (VPN[2]=2 covers `0x8000_0000..0xC000_0000`; we do not
-  allocate an L0 for the unmapped OpenSBI 2 MiB at `0x8000_0000`), 63 L0
-  tables for `0x8020_0000..0x8800_0000`, plus D-0039's extra L1 (VPN[2]=0)
-  and L0 (VPN[1]=0x80) for the virtio-mmio window. Those two table frames
-  come from the RAM pool; the eight MMIO pages themselves do not, so
-  `FRAME OK`'s `frames N` (`total_frames()`) does not move. The other two
-  held frames are the `FRAME OK` self-test's leftover pair: it allocates
-  `a` and `b`, frees `a`, reallocates `c==a`, and never frees `b` or `c`.
-  That is a deliberate LIFO check, not a leak to plug; freeze then pins
-  them. Feature images can print a different `FRAME OK` total (`__heap_end`
-  moves with code size) — `just test-stress` compares exhaust's panic
-  against **that boot's** `FRAME OK` line, not against `just run`.
+  **7 frames consumed before freeze (was 69 = 67 tables + 2 before
+  D-0059).** `frames frozen: free=N` compared with the `FRAME OK` total
+  is a gap of 7 on the default image: 5 page tables plus 2. The 5 are
+  `page::tables_used()` / `EXPECTED_TABLES` — one Sv39 root, one RAM L1
+  (VPN[2]=2 covers `0x8000_0000..0xC000_0000`; L1 slots for the aligned
+  RAM interior are 2 MiB leaves, so they allocate no L0), one RAM L0
+  for the mixed `0x8020_0000..0x8040_0000` slot (W^X, guards, user
+  slots, heap, alignment fragment), plus D-0039's extra L1 (VPN[2]=0)
+  and L0 (VPN[1]=0x80) for the virtio-mmio window. Those two MMIO table
+  frames come from the RAM pool; the eight MMIO pages themselves do
+  not, so `FRAME OK`'s `frames N` (`total_frames()`) does not move. The
+  other two held frames are the `FRAME OK` self-test's leftover pair:
+  it allocates `a` and `b`, frees `a`, reallocates `c==a`, and never
+  frees `b` or `c`. That is a deliberate LIFO check, not a leak to
+  plug; freeze then pins them. Feature images can print a different
+  `FRAME OK` total (`__heap_end` moves with code size) — `just
+  test-stress` compares exhaust's panic against **that boot's**
+  `FRAME OK` line, not against `just run`. If `__heap_end` crosses
+  `0x8040_0000`, `page::init` panics so `EXPECTED_TABLES` is
+  recomputed rather than silently wrong.
 
 ## D-0037: Hand-rolled network stack; the TCP scope tripwire
 - Date: 2026-08-15 — Status: accepted
@@ -1206,9 +1217,11 @@ D-0011 onward are working decisions made under those constraints.
   D-0025's rationale conceded the moment a driver exists. The T2.2 verify
   walk asserts the window's mapping and permissions. sifive_test remains
   unmapped (D-0017's escape hatch stays an `ecall`). Mapping a new VPN[2]
-  costs two page-table frames (L1 + L0); `tables_used` is 67 and freeze
-  holds 69. The MMIO pages are not RAM, so the frame allocator's
-  `total_frames()` / `FRAME OK` count is untouched.
+  costs two page-table frames (L1 + L0); `tables_used` is 5
+  (`EXPECTED_TABLES`; D-0059 mixed granularity: root + RAM L1 + one
+  RAM L0 + these two MMIO tables) and freeze holds 7 (5 tables + 2
+  self-test leftovers). The MMIO pages are not RAM, so the frame
+  allocator's `total_frames()` / `FRAME OK` count is untouched.
 
 ## D-0040: Driver and stack in the kernel; `recv`/`send`; polling, no PLIC
 - Date: 2026-08-15 — Status: accepted (amends D-0010 and D-0033)
@@ -2181,8 +2194,9 @@ D-0011 onward are working decisions made under those constraints.
   the firmware candidate by the ladder's own rule.
 
 ## D-0059: 2 MiB superpages for the RAM interior (amends D-0026)
-- Date: 2026-08-16 — Status: accepted (next rung after T4.4; projection
-  pre-registered 2026-08-17 as ranges; **no kernel code until sign-off**)
+- Date: 2026-08-16 — Status: accepted (landed in tree 2026-08-17;
+  projection pre-registered as ranges; N-trial is the bench host, not
+  this pod)
 - **Decision:** the identity map goes mixed-granularity. 4 KiB leaves
   stay for everything the map distinguishes at 4 KiB grain: kernel image
   W^X regions, guard holes, user sections, task-slot stacks and break
@@ -2270,9 +2284,23 @@ D-0011 onward are working decisions made under those constraints.
      row format so those greps do not move.
   8. DEBUGGING.md gains the superpage first-response note (`info mem`
      cross-check; misaligned-superpage signature).
-- Revisit trigger: none — after this lands, D-0026's 4-KiB-only rule is
-  superseded for the RAM interior and stands everywhere else. No kernel
-  code until this projection is signed off.
+- **Consequences — checklist walk (landed 2026-08-17):** every item
+  above is in this change. (1) `task::enter` uses `EXPECTED_TABLES`
+  (5) and `held == tables + leftover`. (2) `EXPECTED_TABLES` derivation
+  is the module comment; `page::init` panics if `tables_used()`
+  disagrees. (3) `walk()` accepts aligned L1 leaves and still panics
+  on 1 GiB and on a 2 MiB PPN with nonzero low bits. (4) `map_range_2m`
+  / `assert_range` step by leaf grain; `require_leaf` stays L0. (5)
+  virtq `require_identity_rw*` untouched (pool in `.bss`). (6) D-0036
+  and D-0039 prose use 5 tables / 7 held. (7) virtio lo/hi row format
+  unchanged; justfile greps do not move. (8) DEBUGGING.md note added.
+  `map_range` (4 KiB) still steps `PAGE_SIZE` for fine-grained
+  regions; the named failed co-edit was a 4 KiB-step `assert_range`
+  against L1 leaves, which would leave `page_verify` in the 1.5–2.2 ms
+  band. N-trial on the bench host is what fills the ladder row;
+  this pod's magnitudes are not report-grade (D-0055).
+- Revisit trigger: none — D-0026's 4-KiB-only rule is superseded for
+  the RAM interior and stands everywhere else.
 
 ## D-0060: O(1) frame accounting (rung 2)
 - Date: 2026-08-16 — Status: declined-by-subsumption (2026-08-17; D-0065).
@@ -2559,14 +2587,15 @@ D-0011 onward are working decisions made under those constraints.
 - **Consequences — co-edit checklist (D-0059-shaped; every item walked
   in this change or the rung does not merge):**
   1. `page::tables_used()` / the 67 derivation (`src/page.rs`) —
-     **unchanged.** Leaf count does not move.
+     **unchanged at T4.4.** Leaf count did not move. D-0059 later
+     moved this to `EXPECTED_TABLES` = 5.
   2. `task::enter` `held = total − free`, `tables != 67`,
-     `held != tables + leftover` — **unchanged.** Arithmetic
+     `held != tables + leftover` — **unchanged at T4.4.** Arithmetic
      `free_count` keeps `held` equal to frames actually handed out
-     (67 fast / 69 default).
+     (67 fast / 69 default then; 5 / 7 after D-0059).
   3. D-0036's "69 = 67 tables + 2 leftovers" and D-0039's
-     `tables_used is 67` — **unchanged.** Freeze still pins those
-     frames.
+     `tables_used is 67` — **unchanged at T4.4.** D-0059 later
+     moved this to 7 = 5 tables + 2 leftovers.
   4. `just test-stress` `assert_restored` — **meaning changes,
      check stays.** It compared free-list *length*; the 31k list is
      gone. It now compares *available* frames (`free_count`, virgin
@@ -2603,7 +2632,8 @@ D-0011 onward are working decisions made under those constraints.
   cache/TLB secondary of not touching ~125 MiB to link 31k nodes, not
   a falsification.
 - Revisit trigger: none for the representation. Superpages (D-0059)
-  are next: `page_build` + `page_verify` = 3.84 ms = 42% of 9.17 ms.
+  landed next: T4.4 left `page_build` + `page_verify` = 3.84 ms = 42%
+  of 9.17 ms, which was that entry's re-evaluation condition.
 
 ## D-0066: E3w→E4 is a host-side remainder, not an E4 stamp artifact
 - Date: 2026-08-17 — Status: accepted
