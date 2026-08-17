@@ -95,10 +95,10 @@ On release+fast-boot, `frame_init` (7.20 ms, 34% of E2→E3g) and
 `accounting` (4.79 ms, 22%) are 56% of boot-to-publish (11.99 ms of
 21.42 ms). They are the same underlying cost: two separate walks of
 ~31k frames. The first links remaining RAM into the free list at
-`frame::init`; the second is `free_count()` before freeze. The
-ladder's top two rungs (D-0058: bump/lazy free-list, then O(1)
-accounting) share that root cause. Paging is not the dominant kernel
-term.
+`frame::init`; the second is `free_count()` before freeze. Bump /
+lazy free-list (next) subsumes O(1) accounting: the walk is O(n)
+because the list *is* those ~31k virgin frames. D-0060 is
+declined-by-subsumption. Paging is not the dominant kernel term.
 
 ### Verification costs more than the thing verified
 
@@ -120,11 +120,14 @@ the control; it is not the flagship number.
 
 ### Ladder
 
-*(empty — no rungs. Rows land one at a time against this baseline.)*
+*(no rung has landed. Dispositions below are plan, not measurements.)*
 
 | rung | hypothesis | E2→E3g after | Δ vs `baseline-t4.3` | disposition |
 |---|---|---|---|---|
-| — | — | — | — | none yet |
+| bump / lazy free-list | stop linking ~31k virgin frames; `free_count()` becomes bump arithmetic | — | — | planned next; subsumes D-0060 |
+| D-0060 allocated counter | `free_count = TOTAL − allocated` on the current list | — | — | declined-by-subsumption |
+| `page_verify` | keep the pass; shrink or speed the walk | — | — | planned after bump |
+| `virtq_init` skip discarded program+verify | first pass wiped by `net::init` reset; `fill_descriptors` stays | — | — | candidate; 850.5 µs = 4.0% of 21.42 ms, does not clear 5% on its own; not bundled with `DRIVER_OK`; re-evaluate after bump |
 
 ### Cross-system
 
@@ -176,9 +179,10 @@ maintained in [threats-to-validity.md](threats-to-validity.md).
 
 ## Future work
 
-*(stub)* Ladder rungs per D-0058 (no work until this freeze is the
-cited before). `-bios none` (D-0061). Linux row (D-0062). Unikraft
-spike (D-0063). T4.3b audit cleanup after the freeze, not before.
+*(stub)* Next planned: bump/lazy free-list (D-0058). D-0060 is
+declined-by-subsumption. No rung until the bump design entry exists.
+`-bios none` (D-0061). Linux row (D-0062). Unikraft spike (D-0063).
+T4.3b audit cleanup after the freeze, not before.
 
 ---
 

@@ -1596,47 +1596,45 @@ the before is captured; none of these affect measurement.
 - **Acceptance:** zero warnings on all builds; full gate list green;
   N-trial spot-check shows no phase moved beyond noise.
 
-### T4.4 — Rung 1: `frame_init` free-list build — M
-T4.2 attribution (ladder-ordering only, this KVM pod) showed
-`frame_init` at ~93 ms, dwarfing every other kernel term: the eager
-free-list link in `frame::init`, not paging. The bump-pointer / lazy
-free-list candidate that D-0058 parked as residue is now first (finding
-10 already named a bump high-water mark as O(1)). Design is recorded in
-its own decision entry before code. Interacts with finding 30 (`stress`
-restored-list). **Does not start** until the dedicated-host baseline
-exists (D-0055).
+### T4.4 — Rung 1: `frame_init` bump / lazy free-list — M
+T4.3 freeze: `frame_init` 7.20 ms (34% of E2→E3g). The bump-pointer /
+lazy free-list candidate (finding 10) is first. It **subsumes** D-0060:
+`free_count()` is a walk of the ~31k-node list the bump stops building;
+the co-edit is rewriting `free_count()` to bump arithmetic (walking
+`HEAD` after the change would count recycled frames only and is wrong).
+Design — including the D-0019 amendment and finding 30 (`stress`
+restored-list) — is recorded in its own decision entry before code.
+**Does not start** until that entry exists.
 
-- **Acceptance:** gates green; N-trial rerun shows the `frame_init`
-  delta collapsed; ladder row 1 filled in the draft with before/after.
+- **Acceptance:** gates green; N-trial rerun shows `frame_init` and
+  `accounting` both collapsed (and safe `freeze` no longer walks);
+  ladder row filled; D-0060 recorded declined-by-subsumption.
 
-### T4.5 — Rung 2: O(1) frame accounting — S
-Allocated-count maintained in `alloc_frame`/`free_frame`; `free_count()`
-becomes arithmetic; the `task::enter` accounting assert keeps its exact
-semantics at ~zero cost (D-0060). The safe build's `frame::self_test`
-cross-checks the counter against a full list walk so drift cannot hide;
-`stress`'s restored-list assertion keeps a full walk on its own path
-(finding 30). The safe profile's `freeze()` println still evaluates
-`free_count()` — a second walk; this rung fixes both.
+### T4.5 — O(1) frame accounting — declined-by-subsumption
+D-0060 as a separate rung (allocated counter on the current intrusive
+list) is not landed. T4.4's representation change is the accounting
+fix. Do not start this task.
 
-- **Acceptance:** gates green; N-trial rerun shows the `accounting`
-  delta collapsed (and safe `freeze` no longer walks); ladder row 2
-  filled in the draft with before/after.
+- **Acceptance:** ladder row disposition `declined-by-subsumption`.
 
-### T4.6 — Rung 3+: `page_verify`, then data-driven residue — M per rung
+### T4.6 — `page_verify`, then data-driven residue — M per rung
 Only rungs whose *attributed* projected gain ≥ 5% of the current E2→E3g
-median (D-0058). Next after accounting: `page_verify`. Superpages
+median (D-0058). Next after bump: `page_verify`. Superpages
 (D-0059 / the old T4.5) are **re-evaluated** once `page_build` +
-`page_verify` (3.6 ms combined on the T4.2 KVM boot) is a larger share
-of what remains — they are not automatically next. When superpages do
-land they stay L-tier and walk the D-0059 co-edit checklist (findings
-24/25/27) in the same change. Other candidates,
-still data-driven: gate `ping_gateway` behind `not(fast-boot)`
-(diagnostics — gateway ARP and GARP stay in all profiles; needs its own
-decision entry since wire behavior changes); tick arming under
-fast-boot (legal only after T4.0b(c); needs the justfile `tick 3`
-co-edit, finding 27); E3g-tail work only if `syn_rx`→`E3g` shows kernel
-time worth taking. Each rung: hypothesis → expected gain → land with
-its co-edit list → full gates → N-trial → ladder row → one commit.
+`page_verify` is a larger share of what remains — they are not
+automatically next. When superpages do land they stay L-tier and walk
+the D-0059 co-edit checklist (findings 24/25/27) in the same change.
+**`virtq_init` (finding 4):** discarded first program+verify, 850.5 µs
+= 4.0% of baseline 21.42 ms — does **not** clear 5% on its own; **not**
+bundled with `DRIVER_OK` (the live pass). Re-evaluate after bump.
+Other candidates, still data-driven: gate `ping_gateway` behind
+`not(fast-boot)` (diagnostics — gateway ARP and GARP stay in all
+profiles; needs its own decision entry since wire behavior changes);
+tick arming under fast-boot (legal only after T4.0b(c); needs the
+justfile `tick 3` co-edit, finding 27); E3g-tail work only if
+`syn_rx`→`E3g` shows kernel time worth taking. Each rung: hypothesis →
+expected gain → land with its co-edit list → full gates → N-trial →
+ladder row → one commit.
 
 - **Acceptance:** every candidate landed-with-row or declined-with-reason;
   the ladder closes when no remaining candidate clears the 5% bar (the

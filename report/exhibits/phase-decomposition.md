@@ -8,18 +8,18 @@ Pooled recorded trials from batches `20260817T041311Z-1` and `20260817T041311Z-2
 | stamp_a | overhead pair, first stamp | 45.7 µs | 44.5 µs | 700 ns | 43.5 µs | — | — (this is the baseline) | no — instrumentation |
 | stamp_b | overhead pair, second stamp (the floor) | 5.4 µs | 5.5 µs | 125 ns | 5.3 µs | — | — (this is the baseline) | no — instrumentation |
 | stvec | DBCN probe + CSR snapshot + trap install | 1.02 ms | 254.4 µs | 4.0 µs | 246.5 µs | — | — (this is the baseline) | yes — a trap handler |
-| frame_init | eager free-list link of remaining RAM (+ DTB check) | 36.78 ms | 7.20 ms | 107.9 µs | 7.05 ms | — | — (this is the baseline) | an allocator, not this O(n) link (D-0058 rung 1) |
+| frame_init | eager free-list link of remaining RAM (+ DTB check) | 36.78 ms | 7.20 ms | 107.9 µs | 7.05 ms | — | — (this is the baseline) | an allocator, not this O(n) link (bump/lazy next) |
 | task_init | fabricate four task frames (three Exited) | 3.10 ms | 587.2 µs | 6.6 µs | 572.1 µs | — | — (this is the baseline) | yes — U-mode task slots |
 | page_build | Sv39 identity map, 4 KiB leaves | 1.25 ms | 1.45 ms | 9.5 µs | 1.44 ms | — | — (this is the baseline) | yes — Sv39 |
 | page_verify | full second walk of the map (D-0043 paranoia) | 13.22 ms | 2.57 ms | 18.8 µs | 2.40 ms | — | — (this is the baseline) | no — paranoia; kept as its own line (D-0043) |
 | activate | `satp` write + `sfence.vma` | 299.8 µs | 100.9 µs | 2.8 µs | 97.8 µs | — | — (this is the baseline) | yes — paging on |
-| virtq_init | first virtqueue program+verify (wiped by later reset) | 6.99 ms | 850.5 µs | 8.7 µs | 828.9 µs | — | — (this is the baseline) | no — doubled with DRIVER_OK (finding 4) |
+| virtq_init | first virtqueue program+verify (wiped by later reset) | 6.99 ms | 850.5 µs | 8.7 µs | 828.9 µs | — | — (this is the baseline) | no — discarded first pass (finding 4); below 5% vs baseline |
 | DRIVER_OK | virtio-net reset, second program+verify, DRIVER_OK | 6.27 ms | 554.9 µs | 10.2 µs | 533.7 µs | — | — (this is the baseline) | yes — the NIC |
 | first_rx | gateway ARP reply arrived (slirp RTT, not kernel) | 3.38 ms | 313.7 µs | 7.8 µs | 305.2 µs | — | — (this is the baseline) | no — slirp RTT |
 | serving_ready | gateway MAC learned; earliest serve point | 897.5 µs | 362.4 µs | 7.7 µs | 352.7 µs | — | — (this is the baseline) | ARP wait; not kernel compute |
 | net_init_done | GARP + diagnostic `ping_gateway` done | 5.15 ms | 270.6 µs | 5.3 µs | 263.4 µs | — | — (this is the baseline) | no — ping is diagnostic |
 | heap_init | kernel heap init (idle in production images) | 26.3 µs | 25.2 µs | 425 ns | 24.4 µs | — | — (this is the baseline) | no — heap is idle (finding 11) |
-| accounting | `free_count()` walk of the free list | 6.93 ms | 4.79 ms | 494.3 µs | 4.73 ms | — | — (this is the baseline) | no — paranoia; O(1) is D-0060 |
+| accounting | `free_count()` walk of the free list | 6.93 ms | 4.79 ms | 494.3 µs | 4.73 ms | — | — (this is the baseline) | no — paranoia; subsumed by bump/lazy |
 | freeze | `FROZEN` store; safe profile also prints `free_count()` | 4.88 ms | 7.5 µs | 100 ns | 7.1 µs | — | — (this is the baseline) | the bool, not a second walk |
 | sret | first `sret` to U-mode | 227.2 µs | 19.8 µs | 325 ns | 19.0 µs | — | — (this is the baseline) | yes — U-mode |
 | syn_rx | client SYN arrived (external) | 1.24 ms | 283.9 µs | 6.3 µs | 273.9 µs | — | — (this is the baseline) | external arrival |

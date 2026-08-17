@@ -2097,28 +2097,51 @@ D-0011 onward are working decisions made under those constraints.
   draft (before/after medians, IQR, min) → one commit. **A rung is
   eligible only if its attributed projected gain is ≥ 5% of the current
   E2→E3g median**; below that it is declined-with-reason in the ladder
-  table. **Planned order (amended after T4.2 attribution):** rung 1
-  `frame_init` (bump-pointer / lazy free-list; the old "rung 3" candidate,
-  now first because the free-list build — not paging — is the dominant
-  kernel term), rung 2 O(1) accounting (D-0060; two `free_count()` walks
-  on the safe profile, not one), rung 3 `page_verify`. Superpages
-  (D-0059) are **re-evaluated** once `page_build`+`page_verify` is a
-  larger share of what remains — they are not next. Further residue,
-  still data-driven: `ping_gateway` gated out of fast-boot (needs its
-  own decision entry: wire behavior changes; ARP wait and GARP stay in
-  all profiles), tick arming under fast-boot (legal only after D-0056.3;
-  co-edits the `tick 3` gate), E3g-tail work only if `syn_rx`→`E3g`
-  shows kernel time worth the risk. No rung lands until the dedicated
-  host freezes a baseline (D-0055). The ladder closes when no remaining
-  candidate clears the bar — that closure is the floor declaration the
-  report cites.
-  **Declined now, recorded so the report can say why:** DBCN
-  buffer-write FID 0 (nothing prints on the measured path);
-  interrupt-driven networking (D-0040's boot-cost argument is a boot
-  benchmark's argument); Sstc under `-bios default` (unprobeable,
-  D-0018 — it exists only inside D-0061's variant). The T4.3b audit
-  cleanup (findings 33–35, 37–39) is not a rung: it lands after the
-  baseline freeze precisely because it must not move any number.
+  table. **Planned order (amended 2026-08-17 after the T4.3 freeze):**
+  next is bump-pointer / lazy free-list (`frame_init`; the pre-T4.2
+  "rung 3" candidate; T4.2 already moved it first because the free-list
+  build — not paging — is the dominant kernel term). That representation
+  **subsumes** D-0060. `free_count()` is expensive today because the
+  free list *is* the ~31k virgin frames; a bump records virgin remainder
+  as `(RAM_END − bump) / PAGE_SIZE`, and the intrusive list holds only
+  recycled frames (empty or tiny at freeze). Leaving the walk in place
+  after the change would be wrong, not free — it would count recycled
+  nodes only, and the frames-consumed assert would fire. Rewriting
+  `free_count()` to bump arithmetic is a co-edit of the bump rung, not a
+  second rung. D-0060 (allocated counter on the current intrusive list)
+  is **declined-by-subsumption**: it would collapse `accounting` and
+  leave `frame_init` at 7.20 ms; the bump does both. T4.4 records the
+  bump design (and the D-0019 amendment) in its own entry before code.
+  After bump: `page_verify`. Superpages (D-0059) are **re-evaluated**
+  once `page_build`+`page_verify` is a larger share of what remains —
+  they are not next.
+  **`virtq_init` candidate (finding 4):** the first program+verify pass,
+  wiped by `net::init`'s reset. Fast median 850.5 µs = 4.0% of baseline
+  E2→E3g 21.42 ms. The 5% bar is projected *gain*, not combined phase
+  size. It does **not** clear the bar on its own against this baseline.
+  It is **not** bundled with `DRIVER_OK` (554.9 µs, 3%): that sibling is
+  the live pass, structurally necessary; summing 4%+3% to manufacture 7%
+  would count work we are not removing. `fill_descriptors` stays, so
+  850.5 µs is a ceiling on the gain. Re-evaluate after bump — the bar
+  is 5% of the *current* median.
+  Further residue, still data-driven: `ping_gateway` gated out of
+  fast-boot (needs its own decision entry: wire behavior changes; ARP
+  wait and GARP stay in all profiles), tick arming under fast-boot
+  (legal only after D-0056.3; co-edits the `tick 3` gate), E3g-tail work
+  only if `syn_rx`→`E3g` shows kernel time worth the risk. No rung lands
+  until the dedicated host freezes a baseline (D-0055; that freeze is
+  `baseline-t4.3`). The ladder closes when no remaining candidate
+  clears the bar — that closure is the floor declaration the report
+  cites.
+  **Declined now, recorded so the report can say why:** D-0060
+  (subsumed by bump/lazy); DBCN buffer-write FID 0 (nothing prints on
+  the measured path); interrupt-driven networking (D-0040's boot-cost
+  argument is a boot benchmark's argument); Sstc under `-bios default`
+  (unprobeable, D-0018 — it exists only inside D-0061's variant).
+  `virtq_init` is declined-below-bar *against this baseline*, not
+  declined forever. The T4.3b audit cleanup (findings 33–35, 37–39) is
+  not a rung: it lands after the baseline freeze precisely because it
+  must not move any number.
 - **Alternatives considered:** batching rungs for fewer measurement
   cycles (rejected: un-attributable regressions; one rung, one row is
   the whole point). A time budget per rung (rejected: calendar-shaped;
@@ -2127,6 +2150,11 @@ D-0011 onward are working decisions made under those constraints.
   when correctness demands). Keeping the pre-T4.2 order (accounting,
   then superpages, then bump-hybrid) after attribution showed
   `frame_init` ~93 ms (rejected: the 5% bar would have been theater).
+  Doing D-0060 first, then bump (rejected 2026-08-17: bump subsumes
+  the walk; a counter on the current list is a smaller independent
+  rung that the larger representation change makes unnecessary).
+  Bundling `virtq_init` with `DRIVER_OK` to clear 5% (rejected: the
+  bar is gain; `DRIVER_OK` is not removable).
 - **Rationale:** the ladder's product is the before/after table, and the
   table is only evidence if every row shares the same frozen protocol.
   The 5% bar operationalizes "diminishing returns" so the open-ended
@@ -2135,12 +2163,13 @@ D-0011 onward are working decisions made under those constraints.
 - **Consequences:** the safe−fast per-phase delta (price of paranoia) is
   recomputed at every rung; the D-0043 promise that verification cost
   survives as its own line is kept by construction. Expected arc, stated
-  as an estimate and not a claim: rung 1 collapses the free-list build,
-  rung 2 collapses accounting (and the safe profile's second freeze
-  walk), then `page_verify` is next among kernel terms; superpages wait
-  until paging is a larger share of the remainder. After those, firmware
-  (~24 ms class) dominates the honest number and D-0061 is the next
-  candidate by the ladder's own rule.
+  as an estimate and not a claim: bump/lazy collapses `frame_init` and,
+  by the same representation, `accounting` (and the safe profile's
+  second freeze walk); then `page_verify` is next among kernel terms;
+  `virtq_init` is re-evaluated against the new denominator; superpages
+  wait until paging is a larger share of the remainder. After those,
+  firmware (~24 ms class) dominates the honest number and D-0061 is the
+  next candidate by the ladder's own rule.
 
 ## D-0059: 2 MiB superpages for the RAM interior (amends D-0026)
 - Date: 2026-08-16 — Status: accepted (re-evaluate after T4.4–T4.6
@@ -2201,16 +2230,18 @@ D-0011 onward are working decisions made under those constraints.
   superseded for the RAM interior and stands everywhere else.
 
 ## D-0060: O(1) frame accounting (rung 2)
-- Date: 2026-08-16 — Status: accepted (lands at T4.5; was rung 1 before
-  T4.2 reordered the ladder)
-- **Decision:** `alloc_frame` / `free_frame` maintain an allocated
-  counter; `free_count()` becomes `TOTAL − allocated`, O(1). The
-  `task::enter` frames-consumed assert keeps its exact semantics at
-  ~zero cost. The paranoia is not deleted — it is made free: the safe
-  build's `frame::self_test` gains a cross-check of the counter against
-  a full list walk, so counter drift cannot hide, and `stress`'s
-  restored-list assertion keeps a full walk on its own path (audit
-  finding 30) so the storm still verifies the actual list.
+- Date: 2026-08-16 — Status: declined-by-subsumption (2026-08-17; T4.4
+  bump/lazy). Was accepted as rung 1, then T4.2's rung 2; never landed.
+  The check is not deleted — T4.4's bump arithmetic is `free_count()`.
+- **Decision (original, not landed):** `alloc_frame` / `free_frame`
+  maintain an allocated counter; `free_count()` becomes
+  `TOTAL − allocated`, O(1). The `task::enter` frames-consumed assert
+  keeps its exact semantics at ~zero cost. The paranoia is not deleted —
+  it is made free: the safe build's `frame::self_test` gains a
+  cross-check of the counter against a full list walk, so counter drift
+  cannot hide, and `stress`'s restored-list assertion keeps a full walk
+  on its own path (audit finding 30) so the storm still verifies the
+  actual list.
 - **Alternatives considered:** deleting the accounting assert (rejected:
   it caught nothing yet, but it is exactly the boot-time invariant check
   this project keeps; the audit showed its cost, not its uselessness).
@@ -2230,8 +2261,10 @@ D-0011 onward are working decisions made under those constraints.
   finding 7's ~6 ms prediction is the before row. The safe profile's
   `freeze()` still evaluates `free_count()` as a `println!` argument
   (fast-boot compiles that print out) — a second full-list walk after
-  the accounting stamp. This rung therefore fixes **two** walks on the
-  safe profile, not one.
+  the accounting stamp. This design would have fixed **two** walks on
+  the safe profile, not one. **2026-08-17:** not landed. T4.4's bump
+  arithmetic is the same `free_count()` collapse without a counter on
+  the 31k-node list.
 
 ## D-0061: `-bios none` measurement variant (scoped amendment to D-0003)
 - Date: 2026-08-16 — Status: accepted (investigation; lands at T4.7 or
