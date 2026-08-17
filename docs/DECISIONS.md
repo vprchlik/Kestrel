@@ -2678,11 +2678,14 @@ D-0011 onward are working decisions made under those constraints.
   E0→E4 still uses the same client and slirp, so comparisons remain
   defined; Whimbrel's PHASE dump is a stated extra. A diagnostic that
   skipped the dump would falsify the occupancy hypothesis if E3w→E4
-  collapsed; that experiment is not this rung.
+  collapsed; that experiment is not this rung. Placement of the dump
+  so it cannot sit between publish and the client's first byte is
+  D-0068 — designed before the Linux baseline, not landed in the
+  superpage commit.
 
 ## D-0067: Per-batch result files (harness recommendation)
-- Date: 2026-08-17 — Status: accepted (design only; the bench host
-  implements harness write-path changes, not this tree)
+- Date: 2026-08-17 — Status: accepted (approved; design only — the
+  bench host implements the write path; spec in `results/README.md`)
 - **Decision:** recommend yes. `scripts/bench.py` currently
   `write_csv`s `results/runs.csv` and `results/phases.csv` in place
   each run. T4.4 overwrote the freeze rows; those rows live in tag
@@ -2727,10 +2730,77 @@ D-0011 onward are working decisions made under those constraints.
 - **Rationale:** the exhibit's contract is "never type the numbers".
   That contract is only as strong as being able to regenerate a
   ladder table from named inputs after the fifth rung.
-- **Consequences:** `scripts/report-exhibits.py` already documents
-  the two-source `git show` rule and fails closed if HEAD is not the
-  T4.4 batches. `results/README.md` stops claiming that
-  `results/runs.csv` *is* the freeze. No change to `scripts/bench.py`
-  in this commit.
+- **Consequences:** `results/README.md` is the bench-host spec:
+  directory layout, what stays at `results/{runs,phases}.csv`, and
+  the generator's `--baseline-tag` / `--after-batches` interface.
+  Until those files exist, the generator stays two `git show`
+  objects and does not grow argparse. No change to
+  `scripts/bench.py` in this tree.
+
+## D-0068: Do not dump PHASE between publish and the client's first byte
+- Date: 2026-08-17 — Status: accepted (design; lands after superpages,
+  before the Linux baseline; no kernel code in this change)
+- **Decision:** `print_after_response` must not run between publishing
+  the HTTP response and the client reading it. **Same-boot deferral
+  via a yield, then dump.** After first-HTTP `wait_tx` /
+  `E3g_doorbell`, do **not** print. Execute one `wfi` while ticks
+  remain armed, then `print_after_response` and `M3 UNIKERNEL OK`.
+  PHASE and the honest number stay on the same boot.
+  Do **not** spin waiting for FIN or for a timer in software: a
+  post-publish poll loop occupies TCG the same way the dump does
+  and would still delay hostfwd. `wfi` returns the vCPU to QEMU's
+  main loop so slirp/hostfwd can deliver the already-queued frame;
+  E4 happens during that halt; the dump runs after.
+- **Alternatives considered:**
+  1. **Gate the dump behind a feature so measured runs never print
+     PHASE**, reading the array another way (GDB, a second boot,
+     a later non-timing dump). Rejected for the comparison section.
+     Flagship E0→E4 and the E2→E3g decomposition would be different
+     boots. Composing firmware + guest + host remainder on one
+     trial would become a cross-trial construction — a
+     threats-to-validity line, and it is exactly the line we would
+     be trying to avoid when we tell a reader that 34 ms of E0→E4
+     is not "Whimbrel."
+  2. **Harness reads phases from a run that is not the timing
+     run.** Same split, plus a second boot per trial. Rejected for
+     the same reason; doubles batch time for a protocol that still
+     cannot compose one machine-state.
+  3. **Wait for peer FIN** (the bench client `close()`s after
+     `recv`, so FIN is strictly after E4). Valid *signal* that E4
+     has happened, but waiting for it by polling occupies TCG
+     *before* E4. FIN after a yield is optional confirmation, not
+     the primary mechanism. Also couples dump progress to client
+     close behavior on every HTTP gate (curl, persist).
+  4. **Moving the dump in the superpage commit.** Rejected: one
+     rung, no code beyond it.
+- **Rationale:** if the PHASE dump (DBCN, one `ecall` per byte)
+  runs after publish while TCG occupies the loop that pumps slirp,
+  E0→E4 measures Whimbrel's instrumentation, not Whimbrel. Linux
+  and Unikraft have no equivalent dump before their first byte
+  reaches the client. That biases the flagship cross-system metric
+  against us by tens of milliseconds. D-0066 named the remainder;
+  this entry is the fix, sequenced before the Linux row because a
+  methodology note is not enough once the comparison section would
+  otherwise attribute our DBCN to our kernel.
+  Stamps stay where they are: E3g at publish, E3g_doorbell after
+  notify. Only the *print* moves. `println_always` / DBCN is the
+  occupancy; `rdtime` stores are not.
+- **Consequences:** implementation is a later change, after the
+  superpage N-trial, before T4.8. Gates that wait for `M3
+  UNIKERNEL OK` or PHASE lines will see them up to one tick later;
+  E4 itself must not move later. If a subsequent rung removes tick
+  arming from fast-boot, this `wfi` is illegal (D-0056.3 / finding
+  13) and must be replaced with a wake that is not the timer — not
+  with a return to dumping on the measured path.
+  **Tradeoff if someone later chooses split-boot anyway:** the
+  phase decomposition and the honest E0→E4 number are not the same
+  machine-state and must be stated as a threats line.
+  **Threats general form (stands even before the dump moves):**
+  instrumentation on the guest can perturb host-observed edges
+  even when it runs *after* the guest-side stamp, because QEMU's
+  TCG and slirp share an execution loop. That is a property of
+  measuring inside this emulator, not unique to PHASE/DBCN.
+- Revisit trigger: the dump-move change itself; or a tick-removal
+  rung, which must replace the `wfi` first.
 
 

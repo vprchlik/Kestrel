@@ -1402,7 +1402,8 @@ accounting), D-0061 (`-bios none` charter; scoped amendment to D-0003),
 D-0062 (Linux baseline), D-0063 (Unikraft spike), D-0064 (report, claims
 discipline, convergence gate, audits, quizzes). Subsequent M4 entries:
 D-0065 (bump/lazy), D-0066 (E3w→E4 remainder), D-0067 (per-batch
-result files). The pre-M4 whole-tree
+result files), D-0068 (PHASE dump must not sit on publish→E4). The
+pre-M4 whole-tree
 audit is `docs/AUDIT-2026-08.md`; task text below cites its findings by
 number.
 
@@ -1644,11 +1645,11 @@ profiles; needs its own decision entry since wire behavior changes);
 tick arming under fast-boot (legal only after T4.0b(c); needs the
 justfile `tick 3` co-edit, finding 27); E3g-tail work only if
 `syn_rx`→`E3g` shows kernel time worth taking. E3w→E4 remainder
-(D-0066) is the largest term in honest E0→E4; dump placement that
-stops measuring our instrumentation as if it were Whimbrel is
-designed before the Linux baseline, not a 5%-bar kernel rung. Each
-rung: hypothesis → expected gain → land with its co-edit list → full
-gates → N-trial → ladder row → one commit.
+(D-0066) is the largest term in honest E0→E4; dump placement
+(D-0068: yield then dump, same boot) lands after the superpage
+N-trial and before the Linux baseline, not a 5%-bar kernel rung.
+Each rung: hypothesis → expected gain → land with its co-edit
+list → full gates → N-trial → ladder row → one commit.
 
 - **Acceptance:** every candidate landed-with-row or declined-with-reason;
   the ladder closes when no remaining candidate clears the 5% bar (the
@@ -1694,8 +1695,10 @@ Linux's decomposition comes from the instrumented run and is presented
 with the asymmetry stated (different instrument, measured on the logging
 config, quiet-vs-instrumented delta shown). Same QEMU binary, machine,
 single CPU, default 128 MiB, same netdev/hostfwd/filter-dump.
-E3w→E4 is diagnosed (D-0066) before this row so the honest number's
-largest term is not attributed to the guest.
+E3w→E4 dump placement (D-0068) lands before this row so the honest
+number is not Whimbrel's DBCN and the flagship comparison is not
+biased against us by tens of milliseconds. D-0066 named the
+remainder; D-0068 is the fix.
 
 - **Acceptance:** `just bench-linux` produces both configs' rows through
   the same harness; pcap shows the same handshake/response shape; the

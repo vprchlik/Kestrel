@@ -107,8 +107,9 @@ Unikraft, so the shared conduit does not by itself distort
 comparisons; Whimbrel additionally dumps the PHASE table over DBCN
 after publish (`print_after_response`), which occupies TCG on the
 same thread that pumps slirp and is a Whimbrel-only extra. That
-dump is a named candidate for shrinking E0→E4 without moving
-E2→E3g; it is not this rung.
+dump is designed to move off the publish→E4 path (D-0068, yield
+then dump, same boot) before the Linux baseline; it is not the
+superpage rung.
 
 Exhibit tables: [phase decomposition](exhibits/phase-decomposition.md)
 (D-0064 centerpiece columns) and [edges](exhibits/edges.md).
@@ -275,7 +276,8 @@ maintained in [threats-to-validity.md](threats-to-validity.md).
 10. **Instrumentation observer effect.** Stamp overhead is a generated
     row in [exhibits/edges.md](exhibits/edges.md) (5.5 µs on
     fast-boot). `print_after_response` is a second observer: DBCN
-    after E3g can delay E4 without moving E3g (D-0066).
+    after E3g can delay E4 without moving E3g (D-0066). Dump
+    placement is D-0068 (designed; not yet landed).
 11. **Host variance.** Dedicated native host, performance governor,
     SMT off, boost off, steal 0 on all recorded trials of both the
     freeze and T4.4, two interleaved batches that met max(2%, 200 µs).
@@ -291,6 +293,15 @@ maintained in [threats-to-validity.md](threats-to-validity.md).
 15. **Cache/TLB secondary effects.** Removing a ~125 MiB walk moves
     later phases a few percent without changing their code. Recorded
     in the T4.4 ladder row; not treated as a second rung.
+16. **Guest work after a guest-side stamp can still move a
+    host-observed edge.** QEMU's TCG and slirp share an execution
+    loop. Instrumentation that runs *after* E3g occupies TCG and
+    delays hostfwd, so E4 moves without E3g moving. This generalizes
+    beyond PHASE/DBCN (D-0068). Leaving the dump on the publish→E4
+    path biases the flagship cross-system metric against Whimbrel;
+    Linux and Unikraft have no equivalent dump. If measured runs
+    stopped printing PHASE, the decomposition and E0→E4 would come
+    from different boots — that would be its own line.
 
 ---
 
@@ -298,11 +309,11 @@ maintained in [threats-to-validity.md](threats-to-validity.md).
 
 Next: bench-host N-trial of the superpage rung (D-0059), then
 `virtq_init` as an active candidate (9% of T4.4 E2→E3g). D-0060 is
-declined-by-subsumption. E3w→E4 dump placement is designed before
-the Linux baseline (not a 5% kernel rung). `-bios none` (D-0061).
+declined-by-subsumption. E3w→E4 dump placement (D-0068) lands after
+superpages and before the Linux baseline. `-bios none` (D-0061).
 Linux row (D-0062). Unikraft spike (D-0063). T4.3b audit cleanup.
-Harness per-batch result files (D-0067) — spec for the bench host;
-this tree does not implement the write path.
+Harness per-batch result files (D-0067) — spec in
+`results/README.md`; the bench host implements the write path.
 
 ---
 

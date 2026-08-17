@@ -40,14 +40,76 @@ cannot become an exhibit. Machine-spec baseline header comes from
 `git show baseline-t4.3:results/baseline-summary.txt`; the T4.4 block
 comes from HEAD CSV fields, not from `results/summary.txt`.
 
-**Per-batch files (D-0067, recommended, not implemented here):**
-`results/batches/<batch_id>/{runs.csv,phases.csv,summary.txt}`, with
-the top-level files remaining the latest run. Without that, a
-five-rung ladder is git archaeology. The bench host implements the
-harness write path.
-
 Do not treat `results/summary.txt` as a report artifact; it is
 gitignored and may be a leftover from a local run.
+
+## Bench-host spec (D-0067) — implement there, not in this tree
+
+Approved. Do **not** change `scripts/bench.py` in this repository;
+the dedicated host owns the harness write path (D-0055). This
+section is the interface.
+
+### Directory layout
+
+```
+results/batches/<batch_id>/runs.csv
+results/batches/<batch_id>/phases.csv
+results/batches/<batch_id>/summary.txt
+results/runs.csv          # latest run only (overwrite, as today)
+results/phases.csv        # latest run only (overwrite, as today)
+results/summary.txt       # latest run only; stays gitignored
+results/baseline-summary.txt   # freeze-era machine spec; unchanged
+```
+
+`<batch_id>` is the existing UTC-stamp form (`20260817T052349Z-1`).
+A two-batch stability run produces two directories.
+
+At the end of each batch — and again at the end of a two-batch
+stability run — **copy** that batch's rows into
+`results/batches/<batch_id>/` *before* the next run can overwrite
+the top-level files. Do not append to the top-level CSVs.
+
+Track `results/batches/` in git (unlike `results/trials/`
+serial/pcap). The freeze tag `baseline-t4.3` remains the baseline
+pin; per-batch files are how later rungs accumulate without
+retagging and without `git show HEAD~N`.
+
+### What stays at `results/{runs,phases}.csv`
+
+Exactly what they are today: the **latest** run, overwritten in
+place. `just bench-summary` keeps reading them. They are not the
+ladder archive. After a superpage N-trial they will hold that
+trial's two batches; the T4.4 rows live in
+`results/batches/20260817T052349Z-{1,2}/` once copied, and the
+freeze rows remain in tag `baseline-t4.3`.
+
+Schema of those CSVs does not change (columns above). Per-batch
+copies are the same schema, one `batch_id` per directory.
+
+### Generator interface (once the files exist)
+
+```
+python3 scripts/report-exhibits.py \
+  --baseline-tag baseline-t4.3 \
+  --after-batches 20260817T052349Z-1,20260817T052349Z-2
+```
+
+- `--baseline-tag` (default `baseline-t4.3`): `git show
+  <tag>:results/{runs,phases}.csv` and
+  `<tag>:results/baseline-summary.txt`, same as today.
+- `--after-batches <id>,<id>`: read
+  `results/batches/<id>/{runs,phases}.csv` and concatenate. Two
+  ids, the stability pair. Fail closed on mixed `git_sha`, mixed
+  QEMU, dirty rows, recorded n≠60 per config, steal≠0 — the same
+  checks as today.
+
+Until those files exist, the generator stays two `git show`
+objects (`baseline-t4.3` vs `HEAD`) and does not grow argparse.
+Do not implement the flags against missing directories; a
+half-wired `--after-batches` that falls back to HEAD is fail-open.
+
+This pod does not run `just bench`. The bench host runs the
+superpage N-trial and is the first writer of `results/batches/`.
 
 ## `runs.csv` — one row per trial
 

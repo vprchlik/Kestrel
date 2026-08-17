@@ -114,7 +114,7 @@ publish; E3w = pcap timestamp of that frame (constructed on the E0
 timeline as first-connect plus the pcap-relative SYN/ACK→HTTP
 interval); E4 = first byte at the client. E4−E3w is the host-side
 remainder after the frame is in the filter-dump (D-0066), not a µs
-loopback.
+loopback. The PHASE dump must not run on that interval (D-0068).
 T3.12(a) measured the E2 offset as 0, so `_start` *is* the OpenSBI phase.
 Headline E2→E3g uses a client retrying before E0; `just test`'s
 curl-after-`HTTP READY` E3g is harness wait (D-0043).

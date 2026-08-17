@@ -21,7 +21,8 @@ item is mitigated-and-measured or stated.
 8. **Instrumentation observer effect.** Stamp overhead is a generated
    edges-exhibit row (~5.5 µs fast-boot). `print_after_response` dumps
    PHASE over DBCN after E3g and can delay E4 without moving E3g
-   (D-0066).
+   (D-0066). Placement so the dump cannot sit between publish and
+   the client's first byte is D-0068 (designed; not yet landed).
 9. **Host variance.** Report numbers are the dedicated Ubuntu 26.04
    host (7800X3D, 8 cores SMT off, boost off, performance governor,
    QEMU 10.2.1, steal 0). Freeze and T4.4 each ran two interleaved
@@ -50,3 +51,15 @@ item is mitigated-and-measured or stated.
 15. **Cache/TLB secondary effects.** Removing a ~125 MiB walk moves
     later phases a few percent without changing their code (T4.4
     `page_verify`, `E3g`).
+16. **Guest work after a guest-side stamp can still move a
+    host-observed edge.** QEMU's TCG and slirp share an execution
+    loop. Instrumentation that runs *after* E3g (the PHASE dump
+    today; any post-publish spin) occupies TCG and delays hostfwd
+    delivery, so E4 moves without E3g moving. This is a property of
+    measuring inside this emulator and generalizes beyond PHASE/DBCN
+    (D-0068). Linux and Unikraft will not have an equivalent dump
+    before their first byte reaches the client; leaving the dump
+    where it is biases the flagship cross-system metric against
+    Whimbrel. If measured runs ever stopped printing PHASE, the
+    decomposition and E0→E4 would come from different boots — that
+    would be its own line.
