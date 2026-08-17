@@ -271,6 +271,69 @@ def require_host_controls(ctrl: dict | None = None) -> dict:
     return ctrl
 
 
+def git_current_branch() -> str:
+    branch = subprocess.check_output(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=ROOT, text=True
+    ).strip()
+    if not branch or branch == "HEAD":
+        raise BenchFail(
+            "TEST FAIL: detached HEAD (no current branch to compare to origin)"
+        )
+    return branch
+
+
+def fetch_origin() -> None:
+    proc = subprocess.run(
+        ["git", "fetch", "origin"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        err = (proc.stderr or proc.stdout or "").strip() or (
+            f"exit {proc.returncode}"
+        )
+        raise BenchFail(f"TEST FAIL: git fetch origin failed: {err}")
+
+
+def origin_ref_sha(branch: str) -> str:
+    ref = f"origin/{branch}"
+    proc = subprocess.run(
+        ["git", "rev-parse", "--verify", ref],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        raise BenchFail(f"TEST FAIL: {ref} does not exist after fetch")
+    return proc.stdout.strip()
+
+
+def require_origin_sync(state: dict | None = None) -> dict:
+    """Fail closed if HEAD is not origin/<branch> after fetch.
+
+    `git_sha` in runs.csv is forensic; this is preventive. A failed
+    pull must not let a batch run on a stale or unpushed tree. Inject
+    `state` in selftest so the live fetch is not required there.
+    """
+    if state is None:
+        fetch_origin()
+        branch = git_current_branch()
+        head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
+        ).strip()
+        origin = origin_ref_sha(branch)
+        state = {"branch": branch, "head": head, "origin": origin}
+    head = state["head"]
+    origin = state["origin"]
+    branch = state["branch"]
+    if head != origin:
+        raise BenchFail(
+            f"TEST FAIL: HEAD {head} != origin/{branch} {origin}"
+        )
+    return state
+
+
 def recorded_schedule(
     configs: list[str], n: int, warmup: int, seed: int, batch_i: int
 ) -> list[tuple[str, int]]:
@@ -801,6 +864,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             "TEST FAIL: dirty working tree (refusing to produce a batch "
             "the summarizer would reject). Commit or pass --allow-dirty."
         )
+    require_origin_sync()
     host = host_meta()
     host.update(require_host_controls())
     qemu_cpu, client_cpu = pin_cpus()
@@ -1383,6 +1447,25 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
         if "virt mismatch" not in str(e):
             raise
         fired.append(f"virt mismatch: {e}")
+
+    require_origin_sync(
+        {"branch": "m4-evaluation", "head": "abc", "origin": "abc"}
+    )
+    fired.append("origin sync accepts HEAD == origin/<branch>")
+    try:
+        require_origin_sync(
+            {
+                "branch": "m4-evaluation",
+                "head": "aaa111",
+                "origin": "bbb222",
+            }
+        )
+        raise BenchFail("origin mismatch did not fire")
+    except BenchFail as e:
+        msg = str(e)
+        if "HEAD aaa111" not in msg or "origin/m4-evaluation bbb222" not in msg:
+            raise
+        fired.append(f"origin mismatch: {e}")
 
     sched_a = recorded_schedule(["a", "b"], 5, 3, 42, 1)
     sched_b = recorded_schedule(["a", "b"], 5, 3, 42, 1)
