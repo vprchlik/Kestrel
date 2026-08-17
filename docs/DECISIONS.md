@@ -1889,9 +1889,17 @@ D-0011 onward are working decisions made under those constraints.
   numbers are not obtainable here; the bench host has to be dedicated.
   **Dedicated host (after T4.1 diagnosis):** development and correctness
   gates run anywhere. Every report number comes from a dedicated Ubuntu
-  machine (native, performance governor, SMT off, steal 0) whose spec
-  block lives in the report. The cloud workspace is a pod on a KVM guest
-  with no cpufreq and cannot meet this entry's host controls.
+  machine whose spec block lives in the report (SETUP.md § dedicated
+  measurement host). Required, and **fail-closed** in `scripts/bench.py`
+  before a report-grade batch — missing evidence is a fail, not a skip:
+  `systemd-detect-virt` = `none`, cpufreq present, every online CPU on
+  the performance governor, SMT off, turbo off, steal 0 on every trial
+  in the batch. The original alternative that rejected turbo-off / SMT
+  surgery still holds for gates; it does not hold for report numbers.
+  T4.1 records steal and governor but does not yet enforce this gate;
+  the first dedicated-host baseline lands the asserts with that batch.
+  The cloud workspace is a pod on a KVM guest with no cpufreq and cannot
+  meet this entry's host controls.
   **Harness findings that survive the move:** (1) per-trial `/proc/stat`
   steal at USER_HZ=100 cannot resolve millisecond misses — steal=0 is
   necessary, not sufficient. (2) Interleaving configs and shuffling
@@ -1969,10 +1977,13 @@ D-0011 onward are working decisions made under those constraints.
   quoted against that floor. Phase deltas from `_start` through `E3g`
   must sum to E2→E3g within that floor (harness fail-closed, not a
   visual check). The audit's finding-10 cost inventory and finding-12
-  variance prediction are **pre-registered claims**: T4.2's first
+  variance prediction were **pre-registered claims**: T4.2's first
   attributed table is checked against both, and agreement or
   disagreement is recorded in the report draft — if they disagree, one
-  of them is wrong and that is a result, not an embarrassment.
+  of them is wrong and that is a result, not an embarrassment. Finding
+  12's disagreement is overtaken-by-fix (D-0056.3), not a wrong
+  mechanism; both that outcome and finding 10's item-by-item score go
+  in the report (`docs/AUDIT-2026-08.md`).
 - **Alternatives considered:** keeping the nine-stamp set and attributing
   by code reading alone (rejected: FREEZE already proved labels lie
   while gates stay green). Perf-style sampling under TCG (rejected:
@@ -2008,28 +2019,40 @@ D-0011 onward are working decisions made under those constraints.
     early client.
   - **Wrong class / mixed:** `task_init` is 0.89 ms, not µs; `virtq_init`
     first pass is 1.0 ms, not tens of µs; `stvec` (DBCN + CSR + install)
-    is 0.29 ms, not µs. `timer::init` rides inside `frame_init` (the
-    inventory's tick-trap cost is not its own line; fast-boot also skips
-    the tick-3 wait). `ping_gateway` is **not** ms under CLIENT_EARLY
-    fast-boot: `syn_rx` lands during the ARP/ping wait, so the diagnostic
-    RTT is overlapped (finding 6). HTTP READY's 11 DBCN ecalls are not a
-    visible E3g-tail line when the client is early — `established`→`E3g`
-    is 1.7 ms of serve, not console.
+    is 0.29 ms, not µs. Those three share a direction — predicted µs,
+    measured sub-ms — a systematic bias in the audit's cost estimates,
+    and an observation about pre-registration itself. `timer::init`
+    rides inside `frame_init` (the inventory's tick-trap cost is not its
+    own line; fast-boot also skips the tick-3 wait). `ping_gateway` is
+    **not** ms under CLIENT_EARLY fast-boot: `syn_rx` lands during the
+    ARP/ping wait, so the diagnostic RTT is overlapped (finding 6). HTTP
+    READY's 11 DBCN ecalls are not a visible E3g-tail line when the
+    client is early — `established`→`E3g` is 1.7 ms of serve, not
+    console.
   - **Finding 6 confirmed:** on CLIENT_EARLY, `syn_rx` and `established`
     fire before `serving_ready` / `net_init_done`. TCP was serving during
     the ping wait; `listen` was the wrong name twice.
-  - **Finding 12 refuted here** (already un-quantized by D-0056.3):
-    `first_rx` is 0.60 ms on this boot, not a 10 ms tick-wide IQR. The
-    prediction was about `wfi`; those waits spin now.
+  - **Finding 12 refuted here, overtaken by a fix:** `first_rx` is
+    0.60 ms on this boot, not a 10 ms tick-wide IQR. D-0056.3 already
+    removed `wfi` in `wait_gateway_arp` / `wait_ping_reply`, so T4.2
+    never saw the quantization the audit predicted. The mechanism was
+    real at `4660fab`; the prediction was not simply wrong. Report both.
   - **Safe-profile leftover:** without fast-boot, `freeze` is still 6.3 ms
     because `freeze()`'s `free_count()` println argument is evaluated —
     a second walk after `accounting`. Finding 7 called that out for
-    fast-boot only.
+    fast-boot only. Fast-boot compiles the print out (`println!` →
+    `print!` cfg), so only the accounting walk is on the measured path.
+    D-0060's O(1) `free_count` therefore collapses **two** walks on the
+    safe profile, not one.
   Debug paging is still opt-level=0 (page_build+verify 81 ms fast / 103 ms
   default on this boot), not the cost of paging, and must not migrate into
-  a results table (finding 20). Ladder order implied here: `frame_init`
-  first, then `accounting` / `page_verify`, then data-driven residue.
-  Magnitudes are this noisy KVM pod; the dedicated host re-measures.
+  a results table (finding 20). **Ladder order after this table:**
+  `frame_init` first (free-list build ~93 ms dwarfs everything; not
+  paging), then `accounting`, then `page_verify`. Superpages (D-0059)
+  re-evaluated once `page_build`+`page_verify` (3.6 ms combined on this
+  boot) is a larger share of what remains. Magnitudes are this noisy
+  KVM pod; the dedicated host re-measures. No rung starts until that
+  baseline exists (D-0055).
 
 ## D-0058: Optimization-ladder governance
 - Date: 2026-08-16 — Status: accepted
@@ -2039,14 +2062,21 @@ D-0011 onward are working decisions made under those constraints.
   draft (before/after medians, IQR, min) → one commit. **A rung is
   eligible only if its attributed projected gain is ≥ 5% of the current
   E2→E3g median**; below that it is declined-with-reason in the ladder
-  table. Planned order: rung 1 O(1) accounting (D-0060), rung 2
-  superpages (D-0059), then data-driven residue — bump-hybrid frame-list
-  init, `ping_gateway` gated out of fast-boot (needs its own decision
-  entry: wire behavior changes; ARP wait and GARP stay in all profiles),
-  tick arming under fast-boot (legal only after D-0056.3; co-edits the
-  `tick 3` gate), E3g-tail work only if `syn_rx`→`E3g` shows kernel time
-  worth the risk. The ladder closes when no remaining candidate clears
-  the bar — that closure is the floor declaration the report cites.
+  table. **Planned order (amended after T4.2 attribution):** rung 1
+  `frame_init` (bump-pointer / lazy free-list; the old "rung 3" candidate,
+  now first because the free-list build — not paging — is the dominant
+  kernel term), rung 2 O(1) accounting (D-0060; two `free_count()` walks
+  on the safe profile, not one), rung 3 `page_verify`. Superpages
+  (D-0059) are **re-evaluated** once `page_build`+`page_verify` is a
+  larger share of what remains — they are not next. Further residue,
+  still data-driven: `ping_gateway` gated out of fast-boot (needs its
+  own decision entry: wire behavior changes; ARP wait and GARP stay in
+  all profiles), tick arming under fast-boot (legal only after D-0056.3;
+  co-edits the `tick 3` gate), E3g-tail work only if `syn_rx`→`E3g`
+  shows kernel time worth the risk. No rung lands until the dedicated
+  host freezes a baseline (D-0055). The ladder closes when no remaining
+  candidate clears the bar — that closure is the floor declaration the
+  report cites.
   **Declined now, recorded so the report can say why:** DBCN
   buffer-write FID 0 (nothing prints on the measured path);
   interrupt-driven networking (D-0040's boot-cost argument is a boot
@@ -2059,20 +2089,27 @@ D-0011 onward are working decisions made under those constraints.
   the whole point). A time budget per rung (rejected: calendar-shaped;
   the 5% bar is the returns-shaped equivalent). Optimizing the safe
   profile too (rejected: the safe build is the control; it changes only
-  when correctness demands).
+  when correctness demands). Keeping the pre-T4.2 order (accounting,
+  then superpages, then bump-hybrid) after attribution showed
+  `frame_init` ~93 ms (rejected: the 5% bar would have been theater).
 - **Rationale:** the ladder's product is the before/after table, and the
   table is only evidence if every row shares the same frozen protocol.
   The 5% bar operationalizes "diminishing returns" so the open-ended
-  runway cannot become an unfinished ladder.
+  runway cannot become an unfinished ladder. Attribution is allowed to
+  reorder the plan; that is what T4.2 was for.
 - **Consequences:** the safe−fast per-phase delta (price of paranoia) is
   recomputed at every rung; the D-0043 promise that verification cost
   survives as its own line is kept by construction. Expected arc, stated
-  as an estimate and not a claim: rungs 1–2 collapse the accounting and
-  page-build/verify deltas, after which firmware (~24 ms class) dominates
-  the honest number and D-0061 is the next rung by the ladder's own rule.
+  as an estimate and not a claim: rung 1 collapses the free-list build,
+  rung 2 collapses accounting (and the safe profile's second freeze
+  walk), then `page_verify` is next among kernel terms; superpages wait
+  until paging is a larger share of the remainder. After those, firmware
+  (~24 ms class) dominates the honest number and D-0061 is the next
+  candidate by the ladder's own rule.
 
 ## D-0059: 2 MiB superpages for the RAM interior (amends D-0026)
-- Date: 2026-08-16 — Status: accepted (rung 2; lands at T4.5)
+- Date: 2026-08-16 — Status: accepted (re-evaluate after T4.4–T4.6
+  `page_verify`; not next)
 - **Decision:** the identity map goes mixed-granularity. 4 KiB leaves
   stay for everything the map distinguishes at 4 KiB grain: kernel image
   W^X regions, guard holes, user sections, task-slot stacks and break
@@ -2097,11 +2134,15 @@ D-0011 onward are working decisions made under those constraints.
   price-of-paranoia finding instead of deleting it).
 - **Rationale:** D-0026 said revisit "only with an explicit alignment
   check on the leaf PPN" — this entry is that revisit, with the check in
-  both the mapper and the verifier. The attributed table (D-0057) is
-  expected to show page_build + page_verify as the dominant kernel term;
-  leaf count drops from ~32.6k to a few hundred, and verification cost
-  scales down with it — measured twice, before and after, which is
-  itself a result about what verification costs are made of.
+  both the mapper and the verifier. Pre-T4.2, page_build + page_verify
+  were expected to be the dominant kernel term. T4.2 showed they are
+  3.6 ms combined on the KVM-pod boot, behind `frame_init` (~93 ms) and
+  `accounting` (~5 ms) — so this rung waits until those two have landed
+  (or been declined) and paging is a larger share of what remains.
+  When it does land, leaf count drops from ~32.6k to a few hundred, and
+  verification cost scales down with it — measured twice, before and
+  after, which is itself a result about what verification costs are
+  made of.
 - **Consequences — the co-edit checklist (audit findings 24/25/27); every
   item is walked in the same change or the rung does not merge:**
   1. `src/task.rs` frames-consumed assert: `tables != 67` and the
@@ -2124,8 +2165,9 @@ D-0011 onward are working decisions made under those constraints.
 - Revisit trigger: none — after this lands, D-0026's 4-KiB-only rule is
   superseded for the RAM interior and stands everywhere else.
 
-## D-0060: O(1) frame accounting (rung 1)
-- Date: 2026-08-16 — Status: accepted (lands at T4.4)
+## D-0060: O(1) frame accounting (rung 2)
+- Date: 2026-08-16 — Status: accepted (lands at T4.5; was rung 1 before
+  T4.2 reordered the ladder)
 - **Decision:** `alloc_frame` / `free_frame` maintain an allocated
   counter; `free_count()` becomes `TOTAL − allocated`, O(1). The
   `task::enter` frames-consumed assert keeps its exact semantics at
@@ -2150,7 +2192,11 @@ D-0011 onward are working decisions made under those constraints.
   integrity (the counter is bookkeeping, not a walk); integrity evidence
   lives in the safe build's cross-check and the stress storm. The
   freeze-adjacent `accounting` phase delta should collapse to ~µs;
-  finding 7's ~6 ms prediction is the before row.
+  finding 7's ~6 ms prediction is the before row. The safe profile's
+  `freeze()` still evaluates `free_count()` as a `println!` argument
+  (fast-boot compiles that print out) — a second full-list walk after
+  the accounting stamp. This rung therefore fixes **two** walks on the
+  safe profile, not one.
 
 ## D-0061: `-bios none` measurement variant (scoped amendment to D-0003)
 - Date: 2026-08-16 — Status: accepted (investigation; lands at T4.7 or

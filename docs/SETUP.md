@@ -1,25 +1,44 @@
 # SETUP — local development environment
 
 Target host: Linux (Debian/Ubuntu commands shown; anything that can run QEMU
-and rustup works — macOS notes at the bottom). Everything here is also
+and rustup works — macOS notes at the bottom). Everything in §1–§2 is also
 automated in `scripts/install.sh`, which `.cursor/environment.json` uses to
-provision cloud agents — if you change one, change both.
+provision cloud agents — if you change one, change both. The dedicated
+measurement host in §7 is **not** what install.sh provisions; report-grade
+numbers never come from a cloud agent (D-0055).
 
 ## 1. Host packages
 
 ```bash
 sudo apt-get update
+# RISC-V QEMU: Ubuntu 26.04 split it out of qemu-system-misc into
+# qemu-system-riscv. 24.04/22.04 still ship qemu-system-riscv64 from
+# qemu-system-misc. Prefer the new package when the archive has it.
+if apt-cache show qemu-system-riscv >/dev/null 2>&1; then
+    QEMU_PKG=qemu-system-riscv
+else
+    QEMU_PKG=qemu-system-misc
+fi
 sudo apt-get install -y \
-    qemu-system-misc \        # provides qemu-system-riscv64 (the whole "hardware")
+    "$QEMU_PKG" \             # provides qemu-system-riscv64 (the whole "hardware")
     gdb-multiarch \           # GDB built with riscv64 support (Debian/Ubuntu naming)
     build-essential \         # linker/binutils/make for build scripts and C-adjacent tooling
     tshark \                  # pcap assertions in the M3+ net harness (filter-dump captures)
     curl git
 ```
 
+**Package split:** on Ubuntu 26.04 (`resolute`), `qemu-system-riscv64` lives
+in `qemu-system-riscv` ("QEMU full system emulation binaries (riscv)").
+Installing only `qemu-system-misc` on that release does **not** put the
+binary on PATH. Ubuntu 24.04 and 22.04 still ship it from
+`qemu-system-misc`; the `apt-cache show` test above picks the right
+package so an older host keeps working. After install,
+`command -v qemu-system-riscv64` must succeed.
+
 Version note: any QEMU ≥ 7.x is fine (Ubuntu 22.04+ ships qemu ≥ 6.2 which
 also works). The exact version in use gets recorded in the M4 report for
-reproducibility: `qemu-system-riscv64 --version`.
+reproducibility: `qemu-system-riscv64 --version` plus the binary hash the
+bench harness records.
 
 M3 note: from T3.1 every QEMU invocation (`just run`, `just test`,
 `just panic`, `just debug`, and `scripts/boot-test.sh`) carries
@@ -82,7 +101,9 @@ just test    # boots it headless, asserts on kernel marker
 ```
 
 Expected: `TEST PASS: found "M3 UNIKERNEL OK"` and exit 0. `just test-panic`
-exits 1; `just test-hang` exits 2.
+exits 1; `just test-hang` exits 2. `just run-http` boots the persist image;
+`curl -v http://127.0.0.1:8080/` from another terminal should get HTTP 200
+and body `whimbrel`.
 
 **3c. Debug loop:** `just debug` in one terminal (QEMU frozen, GDB stub on
 :1234), `just gdb` in another — you should land at a `(gdb)` prompt showing
@@ -121,4 +142,77 @@ CI/benchmarks (M4) should still run on Linux for comparability.
 
 `.cursor/environment.json` runs `scripts/install.sh` to provision the same
 toolchain in a fresh VM, so background agents can build and boot-test. Keep
-that script in lockstep with this document.
+that script in lockstep with §1–§2 of this document. Cloud agents are
+**not** the bench host (D-0055): they may be KVM guests with no cpufreq.
+Gates run there; report numbers do not.
+
+## 7. Dedicated measurement host (D-0055)
+
+Development and `just test` run anywhere QEMU works. **Every number in the
+M4 report** comes from one dedicated Ubuntu machine that meets the checks
+below. T4.2 stamps from a KVM pod are ladder-ordering only.
+
+### What the machine must be
+
+| Check | Passes when | How to verify by hand |
+|---|---|---|
+| Not a VM | `systemd-detect-virt` prints `none` | `systemd-detect-virt`; any other string (kvm, qemu, microsoft, …) or a missing binary is a fail |
+| cpufreq present | `cpu0` has a scaling governor file | `test -f /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor` |
+| performance governor | every **online** CPU is `performance` | `cat /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor` — no `schedutil` / `powersave` / mixed |
+| SMT off | no sibling threads | `/sys/devices/system/cpu/smt/control` is `off`, or `smt/active` is `0`; if those nodes are absent, each `thread_siblings_list` is a single CPU |
+| turbo off | the frequency-boost knob is disabled | Intel: `/sys/devices/system/cpu/intel_pstate/no_turbo` is `1`. AMD: `/sys/devices/system/cpu/cpufreq/boost` is `0`. Neither interface present → fail (cannot prove turbo is off) |
+| steal 0 across a batch | every trial in the batch, warmup included, has `steal_ticks=0` | harness `/proc/stat` column; a single nonzero tick fails the batch |
+
+Missing evidence is a fail, not a skip. `governor=unavailable` is a fail
+on this host, not a recorded curiosity.
+
+### What persists across reboot
+
+| Check | Persists? |
+|---|---|
+| `systemd-detect-virt` = none | Yes — property of the machine |
+| cpufreq present | Yes — kernel + CPU, given the same kernel config |
+| steal = 0 | Yes on native hardware (no hypervisor steal). Still asserted every batch: it is the proof we are still that machine |
+| performance governor | **No**, if only written to sysfs this boot. Persists if a systemd service, `cpupower`, or kernel cmdline (`cpufreq.default_governor=performance`) sets it |
+| SMT off | **No** for a sysfs write to `smt/control`. Persists if BIOS disables SMT or the cmdline has `nosmt` |
+| turbo off | **No** for a sysfs write (`intel_pstate/no_turbo` or `cpufreq/boost`). Persists with cmdline `intel_pstate=no_turbo` (Intel) or the distro equivalent for AMD |
+
+A machine that passed last week can fail this week because the governor
+or turbo knob reset. Re-verify after every reboot; do not assume.
+
+### What `scripts/bench.py` must assert (fail closed)
+
+The T4.1 harness **records** governor and per-trial steal but does not
+yet refuse a batch when they are wrong. Before the first report-grade
+batch, `just bench` / `scripts/bench.py` **must** check the table above
+and abort with `TEST FAIL` if any check fails — including "file missing",
+"command missing", and "mixed governors". It does not warn and continue.
+Steal is checked after the batch (any trial with `steal_ticks != 0`
+fails) as well as recorded. The stability criterion is unchanged
+(two interleaved 30-trial batches, max(2%, 200 µs)); these host checks
+are additional and do not widen it.
+
+A `--allow-dirty` style override for these host checks does **not**
+exist for report-grade runs. Gates (`just test`) do not run this gate.
+
+### Machine-spec block (report methodology)
+
+Record once per host, and re-record if any field changes, in the report's
+methodology section (not typed from memory — copy from the batch header
+the harness writes):
+
+```
+nproc:                 <os.cpu_count()>
+cpu_model:             </proc/cpuinfo "model name">
+host_kernel:           <uname -r>
+systemd-detect-virt:   none
+cpufreq:               present
+governor:              performance (all online CPUs)
+smt:                   off
+turbo:                 off (<which sysfs node and value>)
+qemu_version:          <first line of qemu-system-riscv64 --version>
+qemu_hash:             <sha256 of that binary>
+steal_ticks:           0 on every trial of the batch
+```
+
+`taskset` pins (QEMU vs client cores) stay as D-0055 already requires.

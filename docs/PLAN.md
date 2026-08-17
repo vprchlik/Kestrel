@@ -1406,10 +1406,12 @@ number.
 
 **Standing structural rules for the milestone:**
 - **Methodology freezes before any optimization.** No rung lands until the
-  harness produces a stable baseline table (stability is numeric, D-0055).
-  Every before/after claim cites the frozen baseline CSV at a recorded git
-  SHA. Pre-baseline corrections (T4.0b) and instrumentation (T4.2) are
-  exempt from the no-optimization rule but not from the full gate list.
+  harness produces a stable baseline table (stability is numeric, D-0055)
+  on the dedicated Ubuntu host in SETUP.md. T4.2 KVM-pod stamps are
+  ladder-ordering only, not report numbers. Every before/after claim
+  cites the frozen baseline CSV at a recorded git SHA. Pre-baseline
+  corrections (T4.0b) and instrumentation (T4.2) are exempt from the
+  no-optimization rule but not from the full gate list.
 - **Draft-early.** The report skeleton is written with real numbers as soon
   as the baseline table exists; all later work edits the draft. Exhibit
   tables are generated from CSV by script, never typed, so prose cannot
@@ -1559,12 +1561,16 @@ phase lists and `phase.rs` N/NAMES move in the same commit.
   measured stamp overhead; `PHASE` output parses in the T4.1 harness;
   the finding-10 inventory and finding-12 prediction are checked against
   the first attributed table and the agreement or disagreement is
-  recorded in the draft.
+  recorded (finding 12: overtaken-by-fix, D-0056.3; finding 10: see
+  D-0057). Ladder order after attribution: `frame_init`, then
+  `accounting`, then `page_verify`; superpages re-evaluated later.
+  Magnitudes are not report-grade.
 
 ### T4.3 — Baseline freeze + report skeleton (draft-early) — M
-Full N-trial protocol on safe and fast configs; CSVs (or their
-regeneration recipe + summary) committed; baseline SHA recorded in
-D-0055. `report/` skeleton written: all section headers, the
+Full N-trial protocol on the dedicated host (SETUP.md), safe and fast
+configs; CSVs (or their regeneration recipe + summary) committed;
+baseline SHA recorded in D-0055. Waits on that host — this pod cannot
+produce the freeze. `report/` skeleton written: all section headers, the
 phase-decomposition exhibit generated from real CSV, the safe−fast
 per-phase delta as the first price-of-paranoia line, threats-to-validity
 seeded, and a **"numbers that must be regenerated" appendix stub seeded
@@ -1587,49 +1593,47 @@ the before is captured; none of these affect measurement.
 - **Acceptance:** zero warnings on all builds; full gate list green;
   N-trial spot-check shows no phase moved beyond noise.
 
-### T4.4 — Rung 1: O(1) frame accounting — S
+### T4.4 — Rung 1: `frame_init` free-list build — M
+T4.2 attribution (ladder-ordering only, this KVM pod) showed
+`frame_init` at ~93 ms, dwarfing every other kernel term: the eager
+free-list link in `frame::init`, not paging. The bump-pointer / lazy
+free-list candidate that D-0058 parked as residue is now first (finding
+10 already named a bump high-water mark as O(1)). Design is recorded in
+its own decision entry before code. Interacts with finding 30 (`stress`
+restored-list). **Does not start** until the dedicated-host baseline
+exists (D-0055).
+
+- **Acceptance:** gates green; N-trial rerun shows the `frame_init`
+  delta collapsed; ladder row 1 filled in the draft with before/after.
+
+### T4.5 — Rung 2: O(1) frame accounting — S
 Allocated-count maintained in `alloc_frame`/`free_frame`; `free_count()`
 becomes arithmetic; the `task::enter` accounting assert keeps its exact
 semantics at ~zero cost (D-0060). The safe build's `frame::self_test`
 cross-checks the counter against a full list walk so drift cannot hide;
 `stress`'s restored-list assertion keeps a full walk on its own path
-(finding 30).
+(finding 30). The safe profile's `freeze()` println still evaluates
+`free_count()` — a second walk; this rung fixes both.
 
-- **Acceptance:** gates green; N-trial rerun shows the `accounting` delta
-  collapsed; ladder row 1 filled in the draft with before/after.
+- **Acceptance:** gates green; N-trial rerun shows the `accounting`
+  delta collapsed (and safe `freeze` no longer walks); ladder row 2
+  filled in the draft with before/after.
 
-### T4.5 — Rung 2: 2 MiB superpages for the RAM map — L
-Amends D-0026 under its own revisit clause (D-0059). Mixed granularity:
-4 KiB leaves for everything the current map distinguishes at 4 KiB grain
-(kernel image W^X regions, guard holes, user sections, task slots, virtio
-window); 2 MiB level-1 leaves for the aligned interior of the big R+W RAM
-range; 4 KiB fragments to alignment. `map_2m` panics on misaligned VA/PA.
-The verifier gains a per-region *expected leaf level*: RAM-interior
-probes must resolve at L1 with aligned PPN, everything else at L0 — the
-wrong level is a panic, not a pass. The cliff-specific `require_leaf`
-probes (post-`satp` PC, `__trap_entry`, live `sp`) stay 4 KiB and
-untouched. **The D-0059 co-edit checklist (audit findings 24/25/27) is
-walked item by item in the same change** — the `tables_used` assert, the
-walker's D-0026 panics, `require_leaf`/`assert_range` level checks, the
-virtq pool verification, the D-0036/D-0039 prose, and the justfile
-probe-format greps — so no constant surfaces as a mystery gate failure.
-
-- **Acceptance:** all gates green including fault-probe siblings;
-  `info mem` cross-check documented in DEBUGGING.md; N-trial rerun;
-  ladder row 2 filled (expected: the dominant share of the page-build +
-  verify deltas).
-
-### T4.6 — Rung 3+: data-driven residue — M per rung
+### T4.6 — Rung 3+: `page_verify`, then data-driven residue — M per rung
 Only rungs whose *attributed* projected gain ≥ 5% of the current E2→E3g
-median (D-0058). Candidates, decided on T4.2/T4.3 data: bump-hybrid frame
-free-list init (if `frame_init` dominates its delta; interacts with
-finding 30); gate `ping_gateway` behind `not(fast-boot)` (diagnostics —
-gateway ARP and GARP stay in all profiles; needs its own decision entry
-since wire behavior changes); tick arming under fast-boot (legal only
-after T4.0b(c); needs the justfile `tick 3` co-edit, finding 27); E3g-tail
-work only if `syn_rx`→`E3g` shows kernel time worth taking. Each rung:
-hypothesis → expected gain → land with its co-edit list → full gates →
-N-trial → ladder row → one commit.
+median (D-0058). Next after accounting: `page_verify`. Superpages
+(D-0059 / the old T4.5) are **re-evaluated** once `page_build` +
+`page_verify` (3.6 ms combined on the T4.2 KVM boot) is a larger share
+of what remains — they are not automatically next. When superpages do
+land they stay L-tier and walk the D-0059 co-edit checklist (findings
+24/25/27) in the same change. Other candidates,
+still data-driven: gate `ping_gateway` behind `not(fast-boot)`
+(diagnostics — gateway ARP and GARP stay in all profiles; needs its own
+decision entry since wire behavior changes); tick arming under
+fast-boot (legal only after T4.0b(c); needs the justfile `tick 3`
+co-edit, finding 27); E3g-tail work only if `syn_rx`→`E3g` shows kernel
+time worth taking. Each rung: hypothesis → expected gain → land with
+its co-edit list → full gates → N-trial → ladder row → one commit.
 
 - **Acceptance:** every candidate landed-with-row or declined-with-reason;
   the ladder closes when no remaining candidate clears the 5% bar (the
@@ -1760,7 +1764,8 @@ convergence gate below is fully checked.
   line, not "perfect"; if it cannot be met, investigating why is
   methodology work with a finding at the end, not an excuse to lower it.
 - **TCG variance swamps sub-ms rungs.** The 5% bar and min-alongside-
-  median exist for this; audit finding 12's prediction is the first test.
+  median exist for this; audit finding 12's prediction was the first
+  test and was overtaken by D-0056.3 before T4.2 measured.
 - **Superpage silent-wrong.** The D-0026 failure mode is made a panic by
   the level-aware verifier; the D-0059 co-edit checklist prevents the
   mystery-gate-failure version.
