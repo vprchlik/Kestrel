@@ -120,14 +120,18 @@ the control; it is not the flagship number.
 
 ### Ladder
 
-*(no rung has landed. Dispositions below are plan, not measurements.)*
+Bump/lazy (D-0065) is in the tree; the before/after cells wait on the
+dedicated-host N-trial against `baseline-t4.3`. Pre-registered
+projection: `frame_init` 7.20 ms → < 100 µs; `accounting` 4.79 ms →
+< 20 µs; fast E2→E3g 21.42 ms → ~9.5 ms; safe `freeze` 4.88 ms →
+< 50 µs.
 
 | rung | hypothesis | E2→E3g after | Δ vs `baseline-t4.3` | disposition |
 |---|---|---|---|---|
-| bump / lazy free-list | stop linking ~31k virgin frames; `free_count()` becomes bump arithmetic | — | — | planned next; subsumes D-0060 |
+| bump / lazy free-list | stop linking ~31k virgin frames; `free_count()` is bump arithmetic | — (awaiting N-trial) | — | landed in tree (D-0065); subsumes D-0060 |
 | D-0060 allocated counter | `free_count = TOTAL − allocated` on the current list | — | — | declined-by-subsumption |
-| `page_verify` | keep the pass; shrink or speed the walk | — | — | planned after bump |
-| `virtq_init` skip discarded program+verify | first pass wiped by `net::init` reset; `fill_descriptors` stays | — | — | candidate; 850.5 µs = 4.0% of 21.42 ms, does not clear 5% on its own; not bundled with `DRIVER_OK`; re-evaluate after bump |
+| `page_verify` | keep the pass; shrink or speed the walk | — | — | planned after this N-trial |
+| `virtq_init` skip discarded program+verify | first pass wiped by `net::init` reset; `fill_descriptors` stays | — | — | candidate; 850.5 µs = 4.0% of 21.42 ms, does not clear 5% on its own; not bundled with `DRIVER_OK`; re-evaluate after this N-trial |
 
 ### Cross-system
 
@@ -179,10 +183,9 @@ maintained in [threats-to-validity.md](threats-to-validity.md).
 
 ## Future work
 
-*(stub)* Next planned: bump/lazy free-list (D-0058). D-0060 is
-declined-by-subsumption. No rung until the bump design entry exists.
-`-bios none` (D-0061). Linux row (D-0062). Unikraft spike (D-0063).
-T4.3b audit cleanup after the freeze, not before.
+*(stub)* Next after the T4.4 N-trial: `page_verify`. D-0060 is
+declined-by-subsumption. `-bios none` (D-0061). Linux row (D-0062).
+Unikraft spike (D-0063). T4.3b audit cleanup.
 
 ---
 

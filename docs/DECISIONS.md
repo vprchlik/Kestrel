@@ -357,12 +357,14 @@ D-0011 onward are working decisions made under those constraints.
   mechanism: re-arming is the acknowledgement.
 
 ## D-0019: Map all of RAM R+W once; keep the intrusive frame free list
-- Date: 2026-08-13 — Status: accepted
+- Date: 2026-08-13 — Status: accepted (amended by D-0065: virgin frames
+  are a bump pointer; the intrusive list holds recycled frames only)
 - **Decision:** the kernel address space identity-maps all of RAM except
   OpenSBI's region and the D-0016 guard page: `.text` R+X, `.rodata` R,
-  everything else R+W, A+D set on every leaf. The frame allocator stores each
-  free frame's successor in that frame's own first 8 bytes, so its total
-  metadata is one head pointer in `.bss`.
+  everything else R+W, A+D set on every leaf. Recycled free frames store
+  the next-free pointer in the frame's first 8 bytes (D-0019's original
+  list). After D-0065, virgin frames are a bump pointer; `.bss` metadata
+  is bump, head, recycled count, and total — not a 31k-node list.
 - **Alternatives considered:** mapping only allocated frames, with a bitmap
   instead of an intrusive list (rejected: it reintroduces a genuine recursion
   — mapping a page requires allocating a table frame, which requires mapping
@@ -474,7 +476,8 @@ D-0011 onward are working decisions made under those constraints.
   active address space inherits the same requirement.
 
 ## D-0023: Hardcode RAM end, validate the DTB header, treat the DTB as clobberable
-- Date: 2026-08-13 — Status: accepted (refines D-0012)
+- Date: 2026-08-13 — Status: accepted (refines D-0012; D-0065: init no
+  longer writes next-pointers through the blob — clobber is at alloc)
 - **Decision:** `RAM_END = 0x8800_0000` stays a named constant (D-0012). At
   boot, before the frame allocator is initialized, read two big-endian `u32`s
   from the DTB pointer in `a1`: the magic (`0xd00dfeed`) and `totalsize`. If
@@ -498,7 +501,8 @@ D-0011 onward are working decisions made under those constraints.
   loudly with the numbers needed to diagnose.
 - **Consequences:** **ordering constraint** — the sanity check must run before
   allocator init, because afterwards the blob may be handed out as frames and
-  the check would read heap. Written here so that nobody in M3 wonders why the
+  the check would read heap (D-0065: not at init — at alloc, if the bump
+  reaches those PAs). Written here so that nobody in M3 wonders why the
   device tree turned into allocated memory. The `justfile` must continue never
   passing `-m`.
 
@@ -605,11 +609,12 @@ D-0011 onward are working decisions made under those constraints.
   `try_alloc` / `insert_coalesced` and panics on re-entry
   (`heap re-entered: size={} align={}`). That is a detector, not a
   critical-section lock — it does not clear `sstatus.SIE`. Frames have
-  **no** detector. `alloc_frame` reads `HEAD`, copies the next pointer,
-  stores `HEAD`, then zeros 4 KiB; `free_frame` writes the old head into
-  the frame and then stores `HEAD`. A nested `alloc_frame` between the
-  read and the store double-allocates the same PA or drops a list node;
-  an interrupt between `free_frame`'s two stores corrupts the LIFO list.
+  **no** detector. After D-0065, `alloc_frame` either pops `HEAD` or
+  advances `BUMP`, then zeros 4 KiB; `free_frame` writes the old head
+  into the frame and then stores `HEAD`. A nested `alloc_frame` between
+  the read and the store double-allocates the same PA or double-issues
+  the same bump; an interrupt between `free_frame`'s two stores corrupts
+  the recycled LIFO list. D-0036's freeze still covers both mutations.
   Both paths are silent. Hardware already clears `SIE` on trap entry, so
   the handler itself is not re-interruptible; the race is the interrupted
   *caller* sitting in the middle of a list mutation when the handler
@@ -2230,9 +2235,12 @@ D-0011 onward are working decisions made under those constraints.
   superseded for the RAM interior and stands everywhere else.
 
 ## D-0060: O(1) frame accounting (rung 2)
-- Date: 2026-08-16 — Status: declined-by-subsumption (2026-08-17; T4.4
-  bump/lazy). Was accepted as rung 1, then T4.2's rung 2; never landed.
-  The check is not deleted — T4.4's bump arithmetic is `free_count()`.
+- Date: 2026-08-16 — Status: declined-by-subsumption (2026-08-17; D-0065).
+  Pre-T4.2 numbering put this first and bump as "rung 3"; T4.2 attribution
+  superseded that order (bump first) but still listed this as a separate
+  next rung. Never landed. The check is not deleted — D-0065's bump
+  arithmetic *is* `free_count()`. A counter on the intrusive list would
+  have fixed `accounting` while leaving `frame_init`.
 - **Decision (original, not landed):** `alloc_frame` / `free_frame`
   maintain an allocated counter; `free_count()` becomes
   `TOTAL − allocated`, O(1). The `task::enter` frames-consumed assert
@@ -2463,4 +2471,79 @@ D-0011 onward are working decisions made under those constraints.
   fairness; Unikraft pin; instrumentation observer effect; host
   variance; E3w fidelity; reservation vs working set per D-0030) is
   maintained in the draft from day one.
+
+## D-0065: Bump-pointer / lazy free list (T4.4; amends D-0019)
+- Date: 2026-08-17 — Status: accepted
+- **Decision:** `frame::init` no longer links `[__heap_end, RAM_END)` into
+  an intrusive list. Virgin frames are a bump pointer `BUMP`, starting
+  at `__heap_end`. The intrusive list (`HEAD`) holds only frames that
+  were allocated and then freed. `alloc_frame` pops `HEAD` if nonempty
+  (preserves LIFO for `FRAME OK` / the storm), else hands out `BUMP` and
+  advances it. `free_count()` is `(RAM_END − BUMP) / PAGE_SIZE + RECYCLED`
+  — arithmetic, no walk. `frame::freeze()` is unchanged: one bool store,
+  then `alloc_frame` / `free_frame` panic printing the request. D-0036's
+  two reasons (trap path does not allocate; after `sret` no kernel code
+  runs with `SIE=1`) do not depend on how free frames are represented
+  and still hold. D-0060 (allocated counter on the old 31k-node list) is
+  declined-by-subsumption: this representation *is* the accounting.
+- **Alternatives considered:** D-0060 first, then bump (rejected: a
+  counter on the current list collapses `accounting` and leaves
+  `frame_init` at 7.20 ms; bump does both). Bump-only with no recycled
+  list (rejected: `self_test` and `stress` free frames; LIFO would
+  break). Walking `HEAD` for `free_count()` after the change (rejected:
+  that counts recycled nodes only, and the frames-consumed assert fires
+  on correct code). Bitmap (still rejected, D-0019).
+- **Rationale:** T4.3 freeze: `frame_init` 7.20 ms (34%) and
+  `accounting` 4.79 ms (22%) are two walks of ~31k frames. The list
+  existed because every virgin frame was a node. Stop building the
+  nodes and both walks go away. Pre-T4.2 numbering (accounting as rung
+  1, bump as rung 3) was superseded by the attribution data; T4.2 put
+  bump first but still listed D-0060 as a separate next rung.
+- **Consequences — projected gain, pre-registered against
+  `baseline-t4.3` (pooled n=60) before the bench-host rerun:**
+  - `frame_init` 7.20 ms → **< 100 µs** (expected ~10–50 µs). The stamp
+    includes `check_dtb` (two header loads) plus init (a handful of
+    stores). Falsified if the median stays ≥ 1 ms (the walk is still
+    there) or if it exceeds 100 µs without a named leftover.
+  - `accounting` 4.79 ms → **< 20 µs** (expected ~5–15 µs, freeze-class).
+    Falsified if the median stays ≥ 1 ms.
+  - fast E2→E3g 21.42 ms → **~9.5 ms** (21.42 − 7.20 − 4.79, plus a
+    few tens of µs of leftover). Falsified if still > 15 ms or if a
+    third phase vanishes that this hypothesis does not name.
+  - safe `freeze` 4.88 ms → **< 50 µs** (the println still evaluates
+    `free_count()`, now arithmetic). Not the flagship number; same
+    rewrite.
+- **Consequences — co-edit checklist (D-0059-shaped; every item walked
+  in this change or the rung does not merge):**
+  1. `page::tables_used()` / the 67 derivation (`src/page.rs`) —
+     **unchanged.** Leaf count does not move.
+  2. `task::enter` `held = total − free`, `tables != 67`,
+     `held != tables + leftover` — **unchanged.** Arithmetic
+     `free_count` keeps `held` equal to frames actually handed out
+     (67 fast / 69 default).
+  3. D-0036's "69 = 67 tables + 2 leftovers" and D-0039's
+     `tables_used is 67` — **unchanged.** Freeze still pins those
+     frames.
+  4. `just test-stress` `assert_restored` — **meaning changes,
+     check stays.** It compared free-list *length*; the 31k list is
+     gone. It now compares *available* frames (`free_count`, virgin
+     remainder + recycled) and walks the recycled list against
+     `RECYCLED` so counter drift cannot hide (finding 30).
+  5. `frame-exhaust-selftest` — **still panics `out of frames
+     (total N)`.** Exhaustion is bump-at-`RAM_END` with an empty
+     recycled list, not a drained 31k list. `justfile` still greps
+     `^frames [0-9]+ heap_start=` against that N.
+  6. `frames frozen: free=` grep — **unchanged.** Freeze still
+     prints it.
+  7. D-0023: header check still before init; init no longer writes
+     through the DTB. Those PAs are clobbered if and when bump
+     reaches them (not on the measured path: ~67 frames from
+     `__heap_end`, DTB at `0x87e0_0000`).
+  8. D-0028: mutation is now bump-or-`HEAD`; freeze still covers it.
+  Superpage items (D-0059 #3–5, #7–8: `walk`/`assert_range`/
+  `require_leaf`, virtq L0, probe-format greps, DEBUGGING
+  superpage note) — **N/A.**
+- Revisit trigger: none for the representation. Superpages (D-0059)
+  still wait until `page_verify` is a larger share of what remains.
+
 

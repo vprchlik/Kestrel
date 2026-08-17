@@ -1602,9 +1602,10 @@ lazy free-list candidate (finding 10) is first. It **subsumes** D-0060:
 `free_count()` is a walk of the ~31k-node list the bump stops building;
 the co-edit is rewriting `free_count()` to bump arithmetic (walking
 `HEAD` after the change would count recycled frames only and is wrong).
-Design — including the D-0019 amendment and finding 30 (`stress`
-restored-list) — is recorded in its own decision entry before code.
-**Does not start** until that entry exists.
+Design is D-0065 (amends D-0019; freeze unchanged, D-0036).
+**Landed in tree; N-trial is the dedicated-host rerun against
+`baseline-t4.3`.** Pre-registered projection (D-0065): `frame_init`
+< 100 µs, `accounting` < 20 µs, fast E2→E3g ~9.5 ms.
 
 - **Acceptance:** gates green; N-trial rerun shows `frame_init` and
   `accounting` both collapsed (and safe `freeze` no longer walks);

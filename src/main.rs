@@ -165,7 +165,8 @@ extern "C" fn kmain(_hartid: usize, dtb_pa: usize) -> ! {
             }
         }
         // D-0023: header check before init. After this the DTB at
-        // 0x87e00000 is clobberable — it lies inside the free-list range.
+        // 0x87e00000 is clobberable — it lies in the bump range (D-0065);
+        // init does not write through it.
         frame::check_dtb(dtb_pa);
         frame::init();
         crate::phase::stamp(crate::phase::FRAME_INIT);

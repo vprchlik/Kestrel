@@ -576,7 +576,7 @@ pub fn enter(id: usize) -> ! {
     // the split must still hold.
     {
         let total = crate::frame::total_frames();
-        let free = crate::frame::free_count();
+        let free = crate::frame::free_count(); // D-0065: bump arithmetic
         let tables = crate::page::tables_used();
         let held = total - free;
         let leftover = if cfg!(feature = "fast-boot") { 0 } else { 2 };

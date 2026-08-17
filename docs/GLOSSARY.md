@@ -52,14 +52,16 @@ can satisfy the request. Combined with coalescing adjacent frees (D-0027)
 it is the K&R allocator: after `Vec` growth the old buffers merge into one
 hole rather than a staircase of unusable sizes.
 
-**frame.** A 4 KiB physical page. The frame allocator's intrusive free list
-owns `[__heap_end, RAM_END)`; the heap's variable-size blocks live in the
-1 MiB carve-out below that and never come from this list (D-0024).
+**frame.** A 4 KiB physical page. The frame allocator owns
+`[__heap_end, RAM_END)`: a bump for virgin frames and an intrusive list
+of recycled frames (D-0065, amending D-0019). The heap's variable-size
+blocks live in the 1 MiB carve-out below that and never come from this
+pool (D-0024).
 
 **frame freeze.** `frame::freeze()` immediately before the first `sret` to U
 (D-0036). After it, `alloc_frame` / `free_frame` panic printing the request.
-The 67 frames already gone are 65 page tables plus the two `FRAME OK`
-self-test leftovers.
+The 69 frames already gone are 67 page tables plus the two `FRAME OK`
+self-test leftovers (D-0036).
 
 **GARP (gratuitous ARP).** An ARP request with `spa = tpa` equal to our IP,
 Ethernet-broadcast. We send one after the gateway cache is filled (D-0054)
