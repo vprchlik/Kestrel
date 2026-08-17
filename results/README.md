@@ -40,7 +40,11 @@ price-of-paranoia contrast; it is supposed to differ.
 | `qemu_hash` | SHA-256 of the QEMU binary |
 | `host_kernel` | `uname -r` |
 | `cpu_model` | `/proc/cpuinfo` model name |
-| `governor` | `scaling_governor`, or `unavailable` |
+| `governor` | `scaling_governor`, or `unavailable`. Asserted `performance` at batch start. |
+| `smt_control` | `/sys/devices/system/cpu/smt/control`, or `unavailable`. Asserted `off`. |
+| `cpufreq_boost` | `/sys/devices/system/cpu/cpufreq/boost`, or `unavailable`. Asserted `0`. |
+| `virt` | `systemd-detect-virt` stdout, or `unavailable`. Asserted `none`. |
+| `steal_start_ticks` | `/proc/stat` aggregate steal at batch start. Asserted `0`. Copied onto every row. Distinct from per-trial `steal_ticks`. |
 | `loadavg_1m` | 1-minute load average at batch start (copied onto each row) |
 | `qemu_cpu` | `taskset` core for QEMU |
 | `client_cpu` | `taskset` core for the client (must differ) |

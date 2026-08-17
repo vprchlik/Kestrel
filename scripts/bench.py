@@ -46,6 +46,10 @@ RUNS_FIELDS = [
     "host_kernel",
     "cpu_model",
     "governor",
+    "smt_control",
+    "cpufreq_boost",
+    "virt",
+    "steal_start_ticks",
     "loadavg_1m",
     "qemu_cpu",
     "client_cpu",
@@ -138,10 +142,6 @@ def host_meta() -> dict:
             if line.lower().startswith("model name"):
                 cpu = line.split(":", 1)[1].strip()
                 break
-    gov = "unavailable"
-    gov_path = Path("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor")
-    if gov_path.is_file():
-        gov = gov_path.read_text().strip() or "unavailable"
     loadavg = Path("/proc/loadavg").read_text().split()[0]
     qemu = os.environ.get("QEMU", "qemu-system-riscv64")
     qpath = shutil.which(qemu)
@@ -151,7 +151,6 @@ def host_meta() -> dict:
     return {
         "host_kernel": kernel,
         "cpu_model": cpu,
-        "governor": gov,
         "loadavg_1m": loadavg,
         "qemu_version": ver,
         "qemu_hash": sha256_file(Path(qpath)),
@@ -206,6 +205,70 @@ def steal_ticks_to_ns(ticks: int) -> int:
     if hz <= 0:
         raise BenchFail("TEST FAIL: SC_CLK_TCK is not positive")
     return int(ticks) * 1_000_000_000 // int(hz)
+
+
+def read_sysfs(path: Path) -> str:
+    """Missing or unreadable sysfs is `unavailable`, never a silent skip."""
+    if not path.is_file():
+        return "unavailable"
+    try:
+        text = path.read_text().strip()
+    except OSError:
+        return "unavailable"
+    return text if text else "unavailable"
+
+
+def detect_virt() -> str:
+    exe = shutil.which("systemd-detect-virt")
+    if not exe:
+        return "unavailable"
+    proc = subprocess.run([exe], capture_output=True, text=True)
+    text = (proc.stdout or "").strip()
+    return text if text else "unavailable"
+
+
+def host_controls() -> dict:
+    """Snapshot of the five dedicated-host controls (D-0055 / SETUP.md §7)."""
+    return {
+        "governor": read_sysfs(
+            Path("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor")
+        ),
+        "smt_control": read_sysfs(Path("/sys/devices/system/cpu/smt/control")),
+        "cpufreq_boost": read_sysfs(
+            Path("/sys/devices/system/cpu/cpufreq/boost")
+        ),
+        "virt": detect_virt(),
+        "steal_start_ticks": read_steal_ticks(),
+    }
+
+
+# Governor / SMT / boost are volatile (sysfs; power-profiles-daemon can
+# flip the governor from a desktop menu). Virt and steal are the
+# dedicated-host predicates. Missing sysfs is `unavailable`, not a pass.
+HOST_CONTROL_WANT = {
+    "governor": "performance",
+    "smt_control": "off",
+    "cpufreq_boost": "0",
+    "virt": "none",
+    "steal_start_ticks": 0,
+}
+
+
+def require_host_controls(ctrl: dict | None = None) -> dict:
+    """Fail closed if a dedicated-host control is not in force.
+
+    Names the failing control in the message. Call at batch start; do
+    not call from `selftest` against the live machine (cloud agents
+    must still exercise the other fail-closed checks).
+    """
+    ctrl = host_controls() if ctrl is None else ctrl
+    for key, want in HOST_CONTROL_WANT.items():
+        got = ctrl[key]
+        if got != want:
+            raise BenchFail(
+                f"TEST FAIL: host control {key}={got!r} (want {want!r})"
+            )
+    return ctrl
 
 
 def recorded_schedule(
@@ -449,6 +512,20 @@ def assert_aggregatable(runs: list[dict], *, allow_dirty: bool = False) -> None:
         raise BenchFail(
             f"TEST FAIL: git SHA mismatch in batch: {sorted(shas)}"
         )
+    for field in (
+        "governor",
+        "smt_control",
+        "cpufreq_boost",
+        "virt",
+        "steal_start_ticks",
+    ):
+        if field not in recorded[0]:
+            continue
+        vals = {r[field] for r in recorded}
+        if len(vals) != 1:
+            raise BenchFail(
+                f"TEST FAIL: {field} mismatch in batch: {sorted(vals)}"
+            )
 
 
 def metric_table(runs: list[dict], phases: list[dict]) -> dict[str, list[float]]:
@@ -725,6 +802,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             "the summarizer would reject). Commit or pass --allow-dirty."
         )
     host = host_meta()
+    host.update(require_host_controls())
     qemu_cpu, client_cpu = pin_cpus()
     n = args.n
     warmup = args.warmup
@@ -807,6 +885,10 @@ def cmd_run(args: argparse.Namespace) -> int:
                 "host_kernel": host["host_kernel"],
                 "cpu_model": host["cpu_model"],
                 "governor": host["governor"],
+                "smt_control": host["smt_control"],
+                "cpufreq_boost": host["cpufreq_boost"],
+                "virt": host["virt"],
+                "steal_start_ticks": host["steal_start_ticks"],
                 "loadavg_1m": host["loadavg_1m"],
                 "qemu_cpu": qemu_cpu,
                 "client_cpu": client_cpu,
@@ -997,7 +1079,12 @@ def cmd_summarize(args: argparse.Namespace) -> int:
         f"git_sha={runs[0]['git_sha']} dirty={runs[0]['dirty']}",
         f"host_kernel={runs[0]['host_kernel']}",
         f"cpu_model={runs[0]['cpu_model']}",
-        f"governor={runs[0]['governor']} loadavg_1m={runs[0]['loadavg_1m']}",
+        f"governor={runs[0]['governor']} "
+        f"smt_control={runs[0].get('smt_control', 'absent')} "
+        f"cpufreq_boost={runs[0].get('cpufreq_boost', 'absent')} "
+        f"virt={runs[0].get('virt', 'absent')} "
+        f"steal_start_ticks={runs[0].get('steal_start_ticks', 'absent')} "
+        f"loadavg_1m={runs[0]['loadavg_1m']}",
         f"client_granularity_ns={runs[0]['client_granularity_ns']}",
         "",
     ]
@@ -1105,7 +1192,11 @@ def _write_fixture_runs(path: Path, rows: list[dict]) -> None:
         "qemu_hash": "h",
         "host_kernel": "6.12",
         "cpu_model": "test",
-        "governor": "unavailable",
+        "governor": "performance",
+        "smt_control": "off",
+        "cpufreq_boost": "0",
+        "virt": "none",
+        "steal_start_ticks": 0,
         "loadavg_1m": "0.00",
         "qemu_cpu": 2,
         "client_cpu": 3,
@@ -1250,6 +1341,48 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
     if live < 0:
         raise BenchFail("live steal ticks negative")
     fired.append(f"live /proc/stat steal ticks={live}")
+
+    good_ctrl = {
+        "governor": "performance",
+        "smt_control": "off",
+        "cpufreq_boost": "0",
+        "virt": "none",
+        "steal_start_ticks": 0,
+    }
+    require_host_controls(good_ctrl)
+    fired.append("host controls accept a dedicated-host snapshot")
+    for key, bad in (
+        ("governor", "powersave"),
+        ("smt_control", "on"),
+        ("cpufreq_boost", "1"),
+        ("virt", "kvm"),
+        ("steal_start_ticks", 1),
+        ("governor", "unavailable"),
+    ):
+        try:
+            require_host_controls({**good_ctrl, key: bad})
+            raise BenchFail(f"host control {key}={bad!r} did not fire")
+        except BenchFail as e:
+            want = f"host control {key}="
+            if want not in str(e):
+                raise
+            fired.append(f"host control {key}={bad!r}: {e}")
+
+    ctrl_mis = tmp / "ctrl-runs.csv"
+    _write_fixture_runs(
+        ctrl_mis,
+        [
+            {"trial": 1, "virt": "none"},
+            {"trial": 2, "virt": "kvm"},
+        ],
+    )
+    try:
+        assert_aggregatable(read_csv(ctrl_mis))
+        raise BenchFail("virt mismatch did not fire")
+    except BenchFail as e:
+        if "virt mismatch" not in str(e):
+            raise
+        fired.append(f"virt mismatch: {e}")
 
     sched_a = recorded_schedule(["a", "b"], 5, 3, 42, 1)
     sched_b = recorded_schedule(["a", "b"], 5, 3, 42, 1)

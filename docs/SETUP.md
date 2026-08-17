@@ -151,7 +151,10 @@ Gates run there; report numbers do not.
 
 Development and `just test` run anywhere QEMU works. **Every number in the
 M4 report** comes from one dedicated Ubuntu machine that meets the checks
-below. T4.2 stamps from a KVM pod are ladder-ordering only.
+below. T4.2 stamps from a KVM pod are ladder-ordering only. On Ubuntu
+26.04+ two extra host steps are required before pcap asserts or
+`just bench-whimbrel` will pass: the QEMU package split in §1, and the
+tshark AppArmor override in this section.
 
 ### What the machine must be
 
@@ -172,27 +175,49 @@ boost off, QEMU 10.2.1, steal 0) is the source of the turbo-off numbers
 in D-0055. Copy the harness machine-spec block into the report, not this
 sentence.
 
+**QEMU package split** is in §1: on 26.04 `qemu-system-riscv64` lives in
+`qemu-system-riscv`, not `qemu-system-misc`. `install.sh` and the
+`apt-cache show` test in §1 pick the right package; `command -v
+qemu-system-riscv64` must succeed after install.
+
 ### Required 26.04+ step: tshark AppArmor override
 
 Ubuntu 26.04 ships an **enforcing** AppArmor profile for `/usr/bin/tshark`
-that denies reads of pcaps under `$HOME`. The harness writes
-`whimbrel.pcap` in the repo; a clone under `$HOME` therefore fails every
-pcap assert after a green build and boot:
+that can read pcaps under `/tmp` (the `user-tmp` abstraction) but not
+under a home-directory clone. The harness writes `whimbrel.pcap` in the
+repo and `results/trials/.../qemu.pcap` under the same tree; a clone
+under `$HOME` therefore fails every pcap assert after a green build and
+boot:
 
 ```
-tshark: You don't have permission to read the file
+TEST FAIL: tshark could not read whimbrel.pcap (status=3)
+tshark: You don't have permission to read the file "whimbrel.pcap".
 ```
 
-The same binary reads a copy of that pcap in `/tmp` fine — that is the
-diagnostic, not the fix. Do not relocate the capture; QEMU and the
-asserts agree on a tree-local `whimbrel.pcap`.
+`dmesg` / journal: `apparmor="DENIED" profile="tshark" name="…/whimbrel.pcap"`.
+The file itself is world-readable; Python can open it. The same binary
+reads a copy of that pcap in `/tmp` fine — that is the diagnostic, not
+the fix. Do not relocate the capture; QEMU and the asserts agree on a
+tree-local path.
 
-A **local** AppArmor override (host config, not this tree) is required
-on 26.04+ before `just test` or `just bench` can pass. Confirm a deny
-in the audit log (`apparmor="DENIED"` … `profile=…tshark` … the pcap
-path), install the override, reload the profile, and re-run `just test`
-until the pcap asserts pass. Older Ubuntu that never confined tshark
-does not need this step.
+Add a **local** override, read-only, scoped to this clone — not a `$HOME`
+grant. Host config, not this tree. `/etc/apparmor.d/tshark` already has
+`include if exists <local/tshark>`. Older Ubuntu that never confined
+tshark does not need this step.
+
+```bash
+# Substitute the clone path if it is not /home/victor/src/Whimbrel.
+sudo tee /etc/apparmor.d/local/tshark >/dev/null <<'EOF'
+# Whimbrel bench host (Ubuntu 26.04+): tshark -r on filter-dump pcaps.
+owner /home/victor/src/Whimbrel/**.pcap r,
+owner /home/victor/src/Whimbrel/**.pcapng r,
+EOF
+sudo apparmor_parser -r /etc/apparmor.d/tshark
+tshark -r whimbrel.pcap -c 1   # from the repo root; must print a frame, not a permission error
+```
+
+`owner` matches the QEMU-written capture (same uid as the harness). A
+package upgrade of `tshark` does not clobber `local/tshark`.
 
 ### Measurement shell
 
@@ -211,30 +236,44 @@ See DEBUGGING.md §7.
 | `systemd-detect-virt` = none | Yes — property of the machine |
 | cpufreq present | Yes — kernel + CPU, given the same kernel config |
 | steal = 0 | Yes on native hardware (no hypervisor steal). Still asserted every batch: it is the proof we are still that machine |
-| performance governor | **No**, if only written to sysfs this boot. Persists if a systemd service, `cpupower`, or kernel cmdline (`cpufreq.default_governor=performance`) sets it |
+| performance governor | **No.** `power-profiles-daemon` may store `Profile=performance`, but a desktop power-menu click flips it back to Balanced. A sysfs write this boot does not survive reboot unless a service or cmdline (`cpufreq.default_governor=performance`) sets it |
 | SMT off | **No** for a sysfs write to `smt/control`. Persists if BIOS disables SMT or the cmdline has `nosmt` |
 | turbo off | **No** for a sysfs write (`intel_pstate/no_turbo` or `cpufreq/boost`). Persists with cmdline `intel_pstate=no_turbo` (Intel) or the distro equivalent for AMD |
 
-A machine that passed last week can fail this week because the governor
-or turbo knob reset. Re-verify after every reboot; do not assume.
+Treat governor, SMT, and boost as volatile. Re-apply before a batch
+(AMD `amd-pstate-epp` host shown; Intel uses `intel_pstate/no_turbo`
+instead of `cpufreq/boost`):
 
-### What `scripts/bench.py` must assert (fail closed)
+```bash
+powerprofilesctl set performance
+sudo bash -c 'echo off > /sys/devices/system/cpu/smt/control; echo 0 > /sys/devices/system/cpu/cpufreq/boost'
+```
 
-`just bench` / `scripts/bench.py` **must** check the table above and
-abort with `TEST FAIL` if any check fails — including "file missing",
-"command missing", and "mixed governors". Missing evidence is a fail,
-not a skip. Steal is checked after the batch (any trial with
-`steal_ticks != 0` fails) as well as recorded. The five host-control
-fields (virt, cpufreq/governor, SMT, boost, steal) are also recorded
-on every `runs.csv` row. The stability criterion is unchanged (two
-interleaved 30-trial batches, max(2%, 200 µs)); these host checks are
-additional and do not widen it.
+On this AMD host, `powerprofilesctl set performance` also sets
+`energy_performance_preference=performance`. Re-verify after every
+reboot; do not assume.
 
-Those asserts are landing from the dedicated-host tree. Do not
-implement them in this workspace — a carry-over diff is the source.
+### What `scripts/bench.py` asserts (fail closed)
 
-A `--allow-dirty` style override for these host checks does **not**
-exist for report-grade runs. Gates (`just test`) do not run this gate.
+At batch start the harness aborts with
+`TEST FAIL: host control <name>=… (want …)` unless all five hold.
+Missing sysfs is `unavailable`, not a pass. No `--allow-dirty`-style
+override exists for these checks. Gates (`just test`) do not run this
+gate.
+
+| Control | Want |
+|---|---|
+| `governor` (`cpu0` `scaling_governor`) | `performance` |
+| `smt_control` | `off` |
+| `cpufreq_boost` | `0` |
+| `virt` (`systemd-detect-virt`) | `none` |
+| `steal_start_ticks` (`/proc/stat` at batch start) | `0` |
+
+All five are copied onto every `runs.csv` row so a violating batch is
+identifiable after the fact. Per-trial `steal_ticks` is still recorded
+separately. The stability criterion is unchanged (two interleaved
+30-trial batches, max(2%, 200 µs)); these host checks are additional
+and do not widen it.
 
 ### Machine-spec block (report methodology)
 
