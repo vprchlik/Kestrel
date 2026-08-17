@@ -1899,15 +1899,15 @@ D-0011 onward are working decisions made under those constraints.
   trial in the batch. The original alternative that rejected turbo-off
   still holds for gates and for any machine that is not this host; it
   does not hold for report numbers.
-  **Turbo-off override (dedicated host):** boost off costs ~20% peak
+  **Turbo-off override (dedicated host):** boost off costs ~17% peak
   clock on the provisioned 7800X3D (4.2 GHz vs 5.05 GHz), so absolute
   numbers are larger — TCG is host-bound. Boost-state and thermal
   variance are removed, which is what the stability criterion measures.
   Every compared system runs on this same host under the same boost-off
   policy, so comparisons are unaffected; only the absolute floor moves.
-  Host-control asserts (virt / governor / SMT / boost /
-  steal, fail-closed, all five recorded in `runs.csv`) land from the
-  dedicated-host tree; do not implement them here.
+  Host-control asserts (virt / governor / SMT / boost / steal,
+  fail-closed, all five recorded in `runs.csv`) landed from the
+  dedicated-host tree (`acb226c`).
   The cloud workspace is a pod on a KVM guest with no cpufreq and cannot
   meet this entry's host controls.
   **Harness findings that survive the move:** (1) per-trial `/proc/stat`
@@ -1916,6 +1916,31 @@ D-0011 onward are working decisions made under those constraints.
   recorded trials fixed a batch-order confound that had looked like a
   guest-internal shift (release-default E2→E3g 98.5 → 105.6 ms under
   sequential blocks; the same contrast passed once trials were mixed).
+  **T4.3 freeze (report-grade baseline):** the stability criterion
+  passed on both configs on the dedicated host — the first data that
+  counts. Tag `baseline-t4.3` (freeze commit `bce55a2` that holds the
+  CSVs). Measured kernel git SHA
+  `35861f30861844e50b4d50a87e67cc96844a14ef`.
+  Batches `20260817T041311Z-1` and `20260817T041311Z-2`. N=30 recorded
+  + 3 warmup per config per batch, two interleaved batches, steal 0
+  on all 120 recorded trials. CSVs: `results/runs.csv`,
+  `results/phases.csv`, `results/baseline-summary.txt`. Machine-spec
+  block, verbatim from the harness summary header:
+
+  ```
+  qemu_version=QEMU emulator version 10.2.1 (Debian 1:10.2.1+ds-1ubuntu3.2)
+  qemu_hash=89a99b20357ac92b2c6a533fe79d6fab6b507784858299f7109651f2d524d274
+  git_sha=35861f30861844e50b4d50a87e67cc96844a14ef dirty=0
+  host_kernel=7.0.0-29-generic
+  cpu_model=AMD Ryzen 7 7800X3D 8-Core Processor
+  governor=performance smt_control=off cpufreq_boost=0 virt=none steal_start_ticks=0 loadavg_1m=0.66
+  client_granularity_ns=1000092
+  shuffle_seed=1786939992244069771
+  stamp_overhead_ns=5500 (floor max(that, 100 ns); not a stability metric)
+  ```
+
+  **Every subsequent before/after claim cites this baseline.** The
+  KVM-pod T4.1/T4.2 numbers remain ladder-ordering and diagnosis only.
 
 ## D-0056: Pre-baseline corrections (T4.0b)
 - Date: 2026-08-16 — Status: accepted

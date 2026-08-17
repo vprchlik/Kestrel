@@ -741,6 +741,11 @@ bench-fp-ab:
 bench-summary:
     bash scripts/bench.sh summarize --stability
 
+# T4.3: regenerate report exhibits from the frozen baseline CSVs.
+# Fails closed if the files are not the D-0055 freeze batches.
+report-exhibits:
+    python3 scripts/report-exhibits.py
+
 # Disassemble the kernel (extra flags as one quoted arg).
 objdump flags="-d": build
     cargo objdump -- {{flags}}

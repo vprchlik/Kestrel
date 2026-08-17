@@ -24,6 +24,13 @@ The stability criterion still compares **two interleaved batches**
 arms inside one batch. Within-batch default vs fast-boot is the
 price-of-paranoia contrast; it is supposed to differ.
 
+**T4.3 freeze:** the committed `results/runs.csv`, `results/phases.csv`,
+and `results/baseline-summary.txt` *are* the baseline (tag
+`baseline-t4.3`; measured kernel `35861f3`; batches
+`20260817T041311Z-1` / `-2`). Do not overwrite them with a later
+`just bench`. Report exhibits are generated from these files
+(`just report-exhibits`), never typed.
+
 ## `runs.csv` — one row per trial
 
 | column | meaning |
