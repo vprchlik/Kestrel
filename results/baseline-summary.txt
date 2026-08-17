@@ -1,0 +1,227 @@
+# bench summary (D-0055): n / median / IQR / min / max; warmup excluded
+qemu_version=QEMU emulator version 10.2.1 (Debian 1:10.2.1+ds-1ubuntu3.2)
+qemu_hash=89a99b20357ac92b2c6a533fe79d6fab6b507784858299f7109651f2d524d274
+git_sha=35861f30861844e50b4d50a87e67cc96844a14ef dirty=0
+host_kernel=7.0.0-29-generic
+cpu_model=AMD Ryzen 7 7800X3D 8-Core Processor
+governor=performance smt_control=off cpufreq_boost=0 virt=none steal_start_ticks=0 loadavg_1m=0.66
+client_granularity_ns=1000092
+shuffle_seed=1786939992244069771
+stamp_overhead_ns=5500 (floor max(that, 100 ns); not a stability metric)
+
+## whimbrel release-default batch=20260817T041311Z-1 n_recorded=30
+metric                                  n         median            IQR            min            max
+e0_to_e3w_ns                           30       39307510         307631       38432179       40760600
+e0_to_e4_ns                            30      140674370        1227605      139352088      143527105
+e0_to_first_connect_ns                 30       18569954         288941       17882179       18990174
+e2_to_e3g_ns                           30       94833750        1298200       93903100       97761800
+phase_DRIVER_OK_delta_ns               30        6274300          70350        6123400        6497900
+phase_DRIVER_OK_since_e2_ns            30       69003400        1030325       68318800       70790000
+phase_E3g_delta_ns                     30        1952750          21850        1914000        2121300
+phase_E3g_doorbell_delta_ns            30         388400           6025         377900         406700
+phase_E3g_doorbell_since_e2_ns         30       95221650        1304875       94291200       98139700
+phase_E3g_since_e2_ns                  30       94833750        1298200       93903100       97761800
+phase__start_delta_ns                  30              0              0              0              0
+phase__start_since_e2_ns               30              0              0              0              0
+phase_accounting_delta_ns              30        6933850          62925        6850700        7583000
+phase_accounting_since_e2_ns           30       87797000        1193025       86703500       89949600
+phase_activate_delta_ns                30         299400           7600         289400         308900
+phase_activate_since_e2_ns             30       55785150        1072175       55113900       57458100
+phase_established_delta_ns             30         779150          12500         761400        3496300
+phase_established_since_e2_ns          30       74678300        1201125       73698500       76858500
+phase_first_rx_delta_ns                30        3375900          42750        3321900        4809300
+phase_first_rx_since_e2_ns             30       72466150        1076700       71663900       74175300
+phase_frame_init_delta_ns              30       36807950        1107700       36345600       38368700
+phase_frame_init_since_e2_ns           30       37875050        1109650       37417100       39443400
+phase_freeze_delta_ns                  30        4884950          71375        4797400        5664800
+phase_freeze_since_e2_ns               30       92658750        1339150       91580200       95583600
+phase_heap_init_delta_ns               30          26300            400          25700          29200
+phase_heap_init_since_e2_ns            30       80862550        1134500       79743000       83020900
+phase_net_init_done_delta_ns           30        5148900          82050        5048800        5923500
+phase_net_init_done_since_e2_ns        30       80836250        1134200       79716900       82993700
+phase_page_build_delta_ns              30        1252750          34925        1209800        1290000
+phase_page_build_since_e2_ns           30       42240150        1080725       41722100       43809900
+phase_page_verify_delta_ns             30       13199200         122975       13061000       13423600
+phase_page_verify_since_e2_ns          30       55485000        1068250       54817500       57162500
+phase_serving_ready_delta_ns           30         897550          11975         878700         915500
+phase_serving_ready_since_e2_ns        30       75571100        1204275       74589900       77774000
+phase_sret_delta_ns                    30         227350           4925         221900         256000
+phase_sret_since_e2_ns                 30       92884800        1343375       91802900       95807100
+phase_stamp_a_delta_ns                 30          45600            500          45300          51700
+phase_stamp_a_since_e2_ns              30          45600            500          45300          51700
+phase_stamp_b_delta_ns                 30           5400            100           5200           5900
+phase_stamp_b_since_e2_ns              30          51050            575          50700          57100
+phase_stvec_delta_ns                   30        1018050           6450        1001000        1028800
+phase_stvec_since_e2_ns                30        1069300           6850        1051700        1085900
+phase_syn_rx_delta_ns                  30        1235350          19500        1210100        1277800
+phase_syn_rx_since_e2_ns               30       73686050        1077475       72925200       75413600
+phase_task_init_delta_ns               30        3105100          30125        3055200        3149600
+phase_task_init_since_e2_ns            30       40982200        1085650       40498100       42593000
+phase_virtq_init_delta_ns              30        6985900          79750        6794300        7090200
+phase_virtq_init_since_e2_ns           30       62761450        1065000       61914100       64501700
+
+## whimbrel release-fast-boot batch=20260817T041311Z-1 n_recorded=30
+metric                                  n         median            IQR            min            max
+e0_to_e3w_ns                           30       25866645         431120       25160953       26483252
+e0_to_e4_ns                            30       67203890         555064       66617164       68130046
+e0_to_first_connect_ns                 30       18646328         312469       17984181       19079252
+e2_to_e3g_ns                           30       21504350         551250       21269900       22335100
+phase_DRIVER_OK_delta_ns               30         554850           9075         533700         567400
+phase_DRIVER_OK_since_e2_ns            30       13652550         192950       13535600       13953600
+phase_E3g_delta_ns                     30        1422550         178925        1225200        1474300
+phase_E3g_doorbell_delta_ns            30          86600           3800          81700          93000
+phase_E3g_doorbell_since_e2_ns         30       21591800         553875       21353400       22422900
+phase_E3g_since_e2_ns                  30       21504350         551250       21269900       22335100
+phase__start_delta_ns                  30              0              0              0              0
+phase__start_since_e2_ns               30              0              0              0              0
+phase_accounting_delta_ns              30        4800700         555975        4743400        5650600
+phase_accounting_since_e2_ns           30       20040050         735000       19823900       21061700
+phase_activate_delta_ns                30         101000           2625          98800         109200
+phase_activate_since_e2_ns             30       12245150         177325       12135800       12538200
+phase_established_delta_ns             30         272800           7150         266900         281400
+phase_established_since_e2_ns          30       14516050         208225       14406400       14835100
+phase_first_rx_delta_ns                30         314300           7250         307700         321600
+phase_first_rx_since_e2_ns             30       13962700         199300       13852200       14270200
+phase_frame_init_delta_ns              30        7212250         123425        7103000        7528500
+phase_frame_init_since_e2_ns           30        7516400         119225        7406800        7834000
+phase_freeze_delta_ns                  30           7500            175           7200           9800
+phase_freeze_since_e2_ns               30       20048000         734925       19831400       21069800
+phase_heap_init_delta_ns               30          25200            450          24600          32400
+phase_heap_init_since_e2_ns            30       15176400         220325       15069100       15504900
+phase_net_init_done_delta_ns           30         271900           4625         263400         280500
+phase_net_init_done_since_e2_ns        30       15150850         219725       15044400       15479400
+phase_page_build_delta_ns              30        1450850           6550        1435400        1468700
+phase_page_build_since_e2_ns           30        9557900         127275        9448000        9862500
+phase_page_verify_delta_ns             30        2571400          22500        2535800        2820900
+phase_page_verify_since_e2_ns          30       12142250         177600       12036500       12430400
+phase_serving_ready_delta_ns           30         363950           7975         352700         372000
+phase_serving_ready_since_e2_ns        30       14876600         213800       14773700       15201400
+phase_sret_delta_ns                    30          19750            400          19000          23900
+phase_sret_since_e2_ns                 30       20069450         734525       19851300       21089800
+phase_stamp_a_delta_ns                 30          44550            650          43900          49800
+phase_stamp_a_since_e2_ns              30          44550            650          43900          49800
+phase_stamp_b_delta_ns                 30           5500            100           5400           5700
+phase_stamp_b_since_e2_ns              30          50000            775          49300          55400
+phase_stvec_delta_ns                   30         254400           4150         252000         263300
+phase_stvec_since_e2_ns                30         304700           5475         301900         316800
+phase_syn_rx_delta_ns                  30         284100           6875         274600         298600
+phase_syn_rx_since_e2_ns               30       14241550         206050       14136200       14561000
+phase_task_init_delta_ns               30         588900           6050         581100         599900
+phase_task_init_since_e2_ns            30        8105250         121375        7996600        8419400
+phase_virtq_init_delta_ns              30         851400           8000         834800         875000
+phase_virtq_init_since_e2_ns           30       13099050         186950       12986700       13391500
+
+## whimbrel release-default batch=20260817T041311Z-2 n_recorded=30
+metric                                  n         median            IQR            min            max
+e0_to_e3w_ns                           30       39446522         432320       39032123       41137476
+e0_to_e4_ns                            30      140628428        1086304      139614585      142494733
+e0_to_first_connect_ns                 30       18705290         184486       18465601       19069654
+e2_to_e3g_ns                           30       94913050        1297875       93878300       96836900
+phase_DRIVER_OK_delta_ns               30        6274150         102700        6203300        6448000
+phase_DRIVER_OK_since_e2_ns            30       68945950        1182950       68412000       70116000
+phase_E3g_delta_ns                     30        1945600         146225        1899100        2136400
+phase_E3g_doorbell_delta_ns            30         388800          10100         375200         402100
+phase_E3g_doorbell_since_e2_ns         30       95295000        1293900       94265600       97227300
+phase_E3g_since_e2_ns                  30       94913050        1297875       93878300       96836900
+phase__start_delta_ns                  30              0              0              0              0
+phase__start_since_e2_ns               30              0              0              0              0
+phase_accounting_delta_ns              30        6935950          95875        6878300        7813500
+phase_accounting_since_e2_ns           30       87746100        1206875       86762700       89173900
+phase_activate_delta_ns                30         300100           9425         293500         307900
+phase_activate_since_e2_ns             30       55649950        1092050       55201700       56883300
+phase_established_delta_ns             30         777800           6575         762600         788100
+phase_established_since_e2_ns          30       74370050        1155375       73798300       75538400
+phase_first_rx_delta_ns                30        3374600          37750        3321900        3410800
+phase_first_rx_since_e2_ns             30       72344350        1174825       71759200       73483500
+phase_frame_init_delta_ns              30       36584050        1063675       36301800       38081600
+phase_frame_init_since_e2_ns           30       37661100        1062875       37372200       39139900
+phase_freeze_delta_ns                  30        4874100          46850        4812800        5895000
+phase_freeze_since_e2_ns               30       92764950        1356900       91575500       94664700
+phase_heap_init_delta_ns               30          26300            375          25800          26800
+phase_heap_init_since_e2_ns            30       80518400        1162200       79848800       81676300
+phase_net_init_done_delta_ns           30        5147400          61025        5086600        5249100
+phase_net_init_done_since_e2_ns        30       80492400        1162400       79822600       81649500
+phase_page_build_delta_ns              30        1246300          38675        1210500        1269100
+phase_page_build_since_e2_ns           30       42018600        1065125       41700700       43455200
+phase_page_verify_delta_ns             30       13240950         125050       13094500       13392300
+phase_page_verify_since_e2_ns          30       55346900        1103075       54896800       56582600
+phase_serving_ready_delta_ns           30         897550          10000         885000         906000
+phase_serving_ready_since_e2_ns        30       75272700        1144475       74689900       76443000
+phase_sret_delta_ns                    30         227050           3725         221100         254400
+phase_sret_since_e2_ns                 30       92988500        1355400       91802400       94889700
+phase_stamp_a_delta_ns                 30          45700            550          44900          49600
+phase_stamp_a_since_e2_ns              30          45700            550          44900          49600
+phase_stamp_b_delta_ns                 30           5400            100           5300           9000
+phase_stamp_b_since_e2_ns              30          51200            575          50200          55700
+phase_stvec_delta_ns                   30        1019200           9725        1006300        1030100
+phase_stvec_since_e2_ns                30        1070400          10425        1056800        1084700
+phase_syn_rx_delta_ns                  30        1236750          28125        1219600        1272100
+phase_syn_rx_since_e2_ns               30       73584050        1159250       73023700       74750300
+phase_task_init_delta_ns               30        3096400          26250        3049700        3148400
+phase_task_init_since_e2_ns            30       40778650        1032175       40475900       42238900
+phase_virtq_init_delta_ns              30        6992900          75475        6772200        7109300
+phase_virtq_init_since_e2_ns           30       62657050        1190250       62015500       63834400
+
+## whimbrel release-fast-boot batch=20260817T041311Z-2 n_recorded=30
+metric                                  n         median            IQR            min            max
+e0_to_e3w_ns                           30       25790638         330177       25317897       26403317
+e0_to_e4_ns                            30       66958942         397309       66278754       68597991
+e0_to_first_connect_ns                 30       18701929         214814       18275061       19100242
+e2_to_e3g_ns                           30       21384350         124850       21116300       22858800
+phase_DRIVER_OK_delta_ns               30         554800          10525         539700         565200
+phase_DRIVER_OK_since_e2_ns            30       13621050          79550       13419000       14453100
+phase_E3g_delta_ns                     30        1427450          31750        1241000        1449400
+phase_E3g_doorbell_delta_ns            30          86400           3675          79300          93200
+phase_E3g_doorbell_since_e2_ns         30       21475250         127625       21198200       22946300
+phase_E3g_since_e2_ns                  30       21384350         124850       21116300       22858800
+phase__start_delta_ns                  30              0              0              0              0
+phase__start_since_e2_ns               30              0              0              0              0
+phase_accounting_delta_ns              30        4780250          58875        4728200        5593200
+phase_accounting_since_e2_ns           30       19930500         152650       19676100       21585800
+phase_activate_delta_ns                30         100700           2700          97800         106000
+phase_activate_since_e2_ns             30       12215700          68225       12036000       13039000
+phase_established_delta_ns             30         271850           4475         266200         280600
+phase_established_since_e2_ns          30       14493250          91200       14282100       15333300
+phase_first_rx_delta_ns                30         313550           7875         305200         321700
+phase_first_rx_since_e2_ns             30       13932350          86150       13731700       14774800
+phase_frame_init_delta_ns              30        7197550          60175        7054100        8037700
+phase_frame_init_since_e2_ns           30        7501550          58575        7364600        8342100
+phase_freeze_delta_ns                  30           7500            100           7100           9800
+phase_freeze_since_e2_ns               30       19938050         152650       19685900       21594100
+phase_heap_init_delta_ns               30          25200            475          24400          26500
+phase_heap_init_since_e2_ns            30       15157850          95925       14934500       15992600
+phase_net_init_done_delta_ns           30         269450           3275         265400         279200
+phase_net_init_done_since_e2_ns        30       15132550          95450       14909500       15967500
+phase_page_build_delta_ns              30        1443850           8925        1436800        1610600
+phase_page_build_since_e2_ns           30        9535050          79075        9388000       10540600
+phase_page_verify_delta_ns             30        2572050          12075        2400600        2627500
+phase_page_verify_since_e2_ns          30       12113500          68900       11936000       12941200
+phase_serving_ready_delta_ns           30         360100           7175         353200         371200
+phase_serving_ready_since_e2_ns        30       14857750          91625       14641800       15696900
+phase_sret_delta_ns                    30          19800            300          19100          24400
+phase_sret_since_e2_ns                 30       19958050         152350       19707200       21616700
+phase_stamp_a_delta_ns                 30          44500            600          43500          45200
+phase_stamp_a_since_e2_ns              30          44500            600          43500          45200
+phase_stamp_b_delta_ns                 30           5500             75           5300           5800
+phase_stamp_b_since_e2_ns              30          50050            675          48800          50900
+phase_stvec_delta_ns                   30         254750           4175         246500         263900
+phase_stvec_since_e2_ns                30         304750           3950         295300         314000
+phase_syn_rx_delta_ns                  30         283450           6150         273900         294500
+phase_syn_rx_since_e2_ns               30       14220250          89200       14012100       15059200
+phase_task_init_delta_ns               30         585000           6350         572100         597400
+phase_task_init_since_e2_ns            30        8088850          67250        7945900        8930000
+phase_virtq_init_delta_ns              30         849900          10175         828900         880800
+phase_virtq_init_since_e2_ns           30       13062150          76775       12873400       13891500
+
+## steal vs latency (recorded trials; not a stability metric)
+SC_CLK_TCK=100 steal_tick=10000000 ns n=120 nonzero=0 median_steal_ticks=0 max_steal_ticks=0
+spearman(steal_ticks, e0_to_e4_ns): undefined (constant or n<3)
+spearman(steal_ticks, e0_to_first_connect_ns): undefined (constant or n<3)
+spearman(steal_ticks, e2_to_e3g_ns): undefined (constant or n<3)
+slow-quartile e0_to_e4 n=30 mean_steal_ticks=0.000; rest n=90 mean_steal_ticks=0.000
+steal was 0 on every recorded trial. USER_HZ=100 cannot resolve host interference below 10.0 ms/tick, so a sub-tick median shift cannot be confirmed or denied by this column.
+
+## stability (two interleaved batches, metrics ≥ 1 ms; not within-batch arm comparison)
+release-default: 20260817T041311Z-1 vs 20260817T041311Z-2 PASS
+release-fast-boot: 20260817T041311Z-1 vs 20260817T041311Z-2 PASS
+
