@@ -24,12 +24,30 @@ The stability criterion still compares **two interleaved batches**
 arms inside one batch. Within-batch default vs fast-boot is the
 price-of-paranoia contrast; it is supposed to differ.
 
-**T4.3 freeze:** the committed `results/runs.csv`, `results/phases.csv`,
-and `results/baseline-summary.txt` *are* the baseline (tag
-`baseline-t4.3`; measured kernel `35861f3`; batches
-`20260817T041311Z-1` / `-2`). Do not overwrite them with a later
-`just bench`. Report exhibits are generated from these files
-(`just report-exhibits`), never typed.
+**The top-level CSVs are the latest run, overwritten, not appended.**
+`just bench` replaces `results/runs.csv` and `results/phases.csv`.
+T4.4's committed files are batches `20260817T052349Z-1` / `-2`
+(measured kernel `83ca9f9`). The T4.3 freeze rows are **not** in those
+files; they live in tag `baseline-t4.3` (commit `bce55a2`, measured
+kernel `35861f3`, batches `20260817T041311Z-1` / `-2`).
+
+**Exhibit generator (two git objects):** `just report-exhibits` runs
+`scripts/report-exhibits.py`, which `git show`s
+`baseline-t4.3:results/{runs,phases}.csv` for the safe/fast/IQR/min
+columns and `HEAD:results/{runs,phases}.csv` for after-ladder and Δ.
+It does not read the working tree, so a local `just bench` leftover
+cannot become an exhibit. Machine-spec baseline header comes from
+`git show baseline-t4.3:results/baseline-summary.txt`; the T4.4 block
+comes from HEAD CSV fields, not from `results/summary.txt`.
+
+**Per-batch files (D-0067, recommended, not implemented here):**
+`results/batches/<batch_id>/{runs.csv,phases.csv,summary.txt}`, with
+the top-level files remaining the latest run. Without that, a
+five-rung ladder is git archaeology. The bench host implements the
+harness write path.
+
+Do not treat `results/summary.txt` as a report artifact; it is
+gitignored and may be a leftover from a local run.
 
 ## `runs.csv` — one row per trial
 

@@ -742,8 +742,10 @@ bench-fp-ab:
 bench-summary:
     bash scripts/bench.sh summarize --stability
 
-# T4.3: regenerate report exhibits from the frozen baseline CSVs.
-# Fails closed if the files are not the D-0055 freeze batches.
+# T4.3 / T4.4: regenerate report exhibits from two git objects.
+# Baseline columns: tag baseline-t4.3. After-ladder / Δ: HEAD.
+# Fails closed if those objects are not the freeze / T4.4 batches.
+# Working-tree CSVs are not read (D-0067).
 report-exhibits:
     python3 scripts/report-exhibits.py
 

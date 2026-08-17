@@ -110,7 +110,11 @@ from a task (cause 2) therefore dumps in firmware, not in our handler
 **measurement edges (E0–E4).** Named timestamps for boot-to-first-HTTP-byte
 (D-0043): E0 = host clock at QEMU exec; E1 = machine start (`mtime` ≈ 0);
 E2 = kernel entry (`rdtime` at `_start`); E3g = `rdtime` at response-TX
-publish; E3w = pcap timestamp of that frame; E4 = first byte at the client.
+publish; E3w = pcap timestamp of that frame (constructed on the E0
+timeline as first-connect plus the pcap-relative SYN/ACK→HTTP
+interval); E4 = first byte at the client. E4−E3w is the host-side
+remainder after the frame is in the filter-dump (D-0066), not a µs
+loopback.
 T3.12(a) measured the E2 offset as 0, so `_start` *is* the OpenSBI phase.
 Headline E2→E3g uses a client retrying before E0; `just test`'s
 curl-after-`HTTP READY` E3g is harness wait (D-0043).

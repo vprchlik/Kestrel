@@ -1400,7 +1400,9 @@ harness architecture), D-0056 (pre-baseline corrections), D-0057
 governance), D-0059 (2 MiB superpages; amends D-0026), D-0060 (O(1) frame
 accounting), D-0061 (`-bios none` charter; scoped amendment to D-0003),
 D-0062 (Linux baseline), D-0063 (Unikraft spike), D-0064 (report, claims
-discipline, convergence gate, audits, quizzes). The pre-M4 whole-tree
+discipline, convergence gate, audits, quizzes). Subsequent M4 entries:
+D-0065 (bump/lazy), D-0066 (E3w→E4 remainder), D-0067 (per-batch
+result files). The pre-M4 whole-tree
 audit is `docs/AUDIT-2026-08.md`; task text below cites its findings by
 number.
 
@@ -1416,7 +1418,8 @@ number.
 - **Draft-early.** The report skeleton is written with real numbers as soon
   as the baseline table exists; all later work edits the draft. Exhibit
   tables are generated from CSV by script, never typed, so prose cannot
-  drift from data.
+  drift from data. After T4.4 the generator reads the freeze from tag
+  `baseline-t4.3` and the after-ladder from `HEAD` (D-0067).
 - **Convergence gate.** M4 is done when the checklist at the end of this
   section is fully checked — an open-ended timeline must not become an
   unfinished one.
@@ -1603,9 +1606,12 @@ lazy free-list candidate (finding 10) is first. It **subsumes** D-0060:
 the co-edit is rewriting `free_count()` to bump arithmetic (walking
 `HEAD` after the change would count recycled frames only and is wrong).
 Design is D-0065 (amends D-0019; freeze unchanged, D-0036).
-**Landed in tree; N-trial is the dedicated-host rerun against
-`baseline-t4.3`.** Pre-registered projection (D-0065): `frame_init`
-< 100 µs, `accounting` < 20 µs, fast E2→E3g ~9.5 ms.
+**Landed T4.4** on the dedicated host: batches `20260817T052349Z-1` /
+`-2`, git_sha `83ca9f99`, stability PASS both configs. Fast E2→E3g
+21.42 → 9.17 ms (−57%), beating the ~9.5 ms projection. Leftover
+bounds missed (`frame_init` 141 µs, `accounting` 25 µs, safe freeze
+100 µs) while every ≥ 1 ms falsification line held. D-0060 recorded
+declined-by-subsumption.
 
 - **Acceptance:** gates green; N-trial rerun shows `frame_init` and
   `accounting` both collapsed (and safe `freeze` no longer walks);
@@ -1618,22 +1624,27 @@ fix. Do not start this task.
 
 - **Acceptance:** ladder row disposition `declined-by-subsumption`.
 
-### T4.6 — `page_verify`, then data-driven residue — M per rung
+### T4.6 — Superpages, then `virtq_init`, then data-driven residue — M per rung
 Only rungs whose *attributed* projected gain ≥ 5% of the current E2→E3g
-median (D-0058). Next after bump: `page_verify`. Superpages
-(D-0059 / the old T4.5) are **re-evaluated** once `page_build` +
-`page_verify` is a larger share of what remains — they are not
-automatically next. When superpages do land they stay L-tier and walk
-the D-0059 co-edit checklist (findings 24/25/27) in the same change.
-**`virtq_init` (finding 4):** discarded first program+verify, 850.5 µs
-= 4.0% of baseline 21.42 ms — does **not** clear 5% on its own; **not**
-bundled with `DRIVER_OK` (the live pass). Re-evaluate after bump.
+median (D-0058). **Next is 2 MiB superpages (D-0059).** T4.4 left
+`page_build` + `page_verify` = 3.84 ms = 42% of 9.17 ms, which is the
+re-evaluation condition. Projection is pre-registered in D-0059 as
+ranges (not optimistic bounds): paging 0.15–0.70 ms, E2→E3g 5.5–8.0 ms.
+**No kernel code until that projection is signed off.** When it lands
+it stays L-tier and walks the D-0059 co-edit checklist (findings
+24/25/27) in the same change, including grain-aware `map_range` /
+`assert_range`.
+**`virtq_init` (finding 4):** discarded first program+verify, 845.4 µs
+= 9% of T4.4 9.17 ms — **active candidate**, sequenced after
+superpages; **not** bundled with `DRIVER_OK`. Against the freeze it
+was 4.0% of 21.42 ms and did not clear 5%.
 Other candidates, still data-driven: gate `ping_gateway` behind
 `not(fast-boot)` (diagnostics — gateway ARP and GARP stay in all
 profiles; needs its own decision entry since wire behavior changes);
 tick arming under fast-boot (legal only after T4.0b(c); needs the
 justfile `tick 3` co-edit, finding 27); E3g-tail work only if
-`syn_rx`→`E3g` shows kernel time worth taking. Each rung: hypothesis →
+`syn_rx`→`E3g` shows kernel time worth taking; E3w→E4 remainder
+(D-0066) is methodology, not a kernel rung. Each rung: hypothesis →
 expected gain → land with its co-edit list → full gates → N-trial →
 ladder row → one commit.
 
@@ -1681,6 +1692,8 @@ Linux's decomposition comes from the instrumented run and is presented
 with the asymmetry stated (different instrument, measured on the logging
 config, quiet-vs-instrumented delta shown). Same QEMU binary, machine,
 single CPU, default 128 MiB, same netdev/hostfwd/filter-dump.
+E3w→E4 is diagnosed (D-0066) before this row so the honest number's
+largest term is not attributed to the guest.
 
 - **Acceptance:** `just bench-linux` produces both configs' rows through
   the same harness; pcap shows the same handshake/response shape; the

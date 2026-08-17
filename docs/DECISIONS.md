@@ -548,7 +548,8 @@ D-0011 onward are working decisions made under those constraints.
   up in practice.
 
 ## D-0026: Map every region with 4 KiB leaves; no superpages
-- Date: 2026-08-13 — Status: accepted
+- Date: 2026-08-13 — Status: accepted (D-0059 is the recorded revisit;
+  4 KiB-only stands until that rung lands)
 - **Decision:** the M1 kernel address space is built entirely from 4 KiB
   (level-0) leaves. No 2 MiB or 1 GiB superpage leaves.
 - **Alternatives considered:** 1 GiB leaves for the RAM window (rejected: a
@@ -1325,7 +1326,9 @@ D-0011 onward are working decisions made under those constraints.
   no guest cooperation required); E2→E3g decomposed by phase at 100 ns
   `rdtime` resolution is the floor number, available for Whimbrel only
   (stated, not hidden). Divergences are reported where they occur:
-  E3w−E3g prices virtio+slirp transit, E4−E3w the host loopback, E0→E1
+  E3w−E3g prices virtio+slirp transit, E4−E3w the host-side remainder
+  after the HTTP frame is in the filter-dump (D-0066: not a µs
+  loopback; tens of milliseconds on this host), E0→E1
   QEMU init shared by all systems. The client runs a tight (~1 ms)
   connect-retry loop started before E0; boot-to-ready (E0 → first
   successful connect) is reported alongside. **The E2 assumption is
@@ -2117,18 +2120,19 @@ D-0011 onward are working decisions made under those constraints.
   is **declined-by-subsumption**: it would collapse `accounting` and
   leave `frame_init` at 7.20 ms; the bump does both. T4.4 records the
   bump design (and the D-0019 amendment) in its own entry before code.
-  After bump: `page_verify`. Superpages (D-0059) are **re-evaluated**
-  once `page_build`+`page_verify` is a larger share of what remains —
-  they are not next.
+  After bump: superpages (D-0059) if `page_build`+`page_verify` clears
+  the 5% bar against the new denominator — T4.4 measured 3.84 ms = 42%
+  of 9.17 ms, so they are next. `page_verify` as a delete-the-pass rung
+  stays rejected (D-0043).
   **`virtq_init` candidate (finding 4):** the first program+verify pass,
-  wiped by `net::init`'s reset. Fast median 850.5 µs = 4.0% of baseline
-  E2→E3g 21.42 ms. The 5% bar is projected *gain*, not combined phase
-  size. It does **not** clear the bar on its own against this baseline.
-  It is **not** bundled with `DRIVER_OK` (554.9 µs, 3%): that sibling is
-  the live pass, structurally necessary; summing 4%+3% to manufacture 7%
-  would count work we are not removing. `fill_descriptors` stays, so
-  850.5 µs is a ceiling on the gain. Re-evaluate after bump — the bar
-  is 5% of the *current* median.
+  wiped by `net::init`'s reset. Against the freeze it was 850.5 µs =
+  4.0% of 21.42 ms and did **not** clear 5%. After T4.4 it is 845.4 µs
+  = 9% of 9.17 ms (5% bar 458 µs) and is an **active candidate**,
+  sequenced after superpages. It is **not** bundled with `DRIVER_OK`
+  (545.5 µs): that sibling is the live pass, structurally necessary;
+  summing to manufacture a larger percentage would count work we are
+  not removing. `fill_descriptors` stays, so 845.4 µs is a ceiling on
+  the gain. The bar is 5% of the *current* median.
   Further residue, still data-driven: `ping_gateway` gated out of
   fast-boot (needs its own decision entry: wire behavior changes; ARP
   wait and GARP stay in all profiles), tick arming under fast-boot
@@ -2143,10 +2147,10 @@ D-0011 onward are working decisions made under those constraints.
   the measured path); interrupt-driven networking (D-0040's boot-cost
   argument is a boot benchmark's argument); Sstc under `-bios default`
   (unprobeable, D-0018 — it exists only inside D-0061's variant).
-  `virtq_init` is declined-below-bar *against this baseline*, not
-  declined forever. The T4.3b audit cleanup (findings 33–35, 37–39) is
-  not a rung: it lands after the baseline freeze precisely because it
-  must not move any number.
+  `virtq_init` was declined-below-bar *against the freeze*; T4.4
+  re-evaluated it above the bar. The T4.3b audit cleanup (findings
+  33–35, 37–39) is not a rung: it lands after the baseline freeze
+  precisely because it must not move any number.
 - **Alternatives considered:** batching rungs for fewer measurement
   cycles (rejected: un-attributable regressions; one rung, one row is
   the whole point). A time budget per rung (rejected: calendar-shaped;
@@ -2168,17 +2172,17 @@ D-0011 onward are working decisions made under those constraints.
 - **Consequences:** the safe−fast per-phase delta (price of paranoia) is
   recomputed at every rung; the D-0043 promise that verification cost
   survives as its own line is kept by construction. Expected arc, stated
-  as an estimate and not a claim: bump/lazy collapses `frame_init` and,
+  as an estimate and not a claim: bump/lazy collapsed `frame_init` and,
   by the same representation, `accounting` (and the safe profile's
-  second freeze walk); then `page_verify` is next among kernel terms;
-  `virtq_init` is re-evaluated against the new denominator; superpages
-  wait until paging is a larger share of the remainder. After those,
-  firmware (~24 ms class) dominates the honest number and D-0061 is the
-  next candidate by the ladder's own rule.
+  second freeze walk); paging is now 42% of the remainder so superpages
+  are next; `virtq_init` cleared the bar against the new denominator
+  and follows. After those, firmware (~24 ms class) and the E3w→E4
+  host-side remainder (D-0066) dominate the honest number; D-0061 is
+  the firmware candidate by the ladder's own rule.
 
 ## D-0059: 2 MiB superpages for the RAM interior (amends D-0026)
-- Date: 2026-08-16 — Status: accepted (re-evaluate after T4.4–T4.6
-  `page_verify`; not next)
+- Date: 2026-08-16 — Status: accepted (next rung after T4.4; projection
+  pre-registered 2026-08-17 as ranges; **no kernel code until sign-off**)
 - **Decision:** the identity map goes mixed-granularity. 4 KiB leaves
   stay for everything the map distinguishes at 4 KiB grain: kernel image
   W^X regions, guard holes, user sections, task-slot stacks and break
@@ -2193,6 +2197,13 @@ D-0011 onward are working decisions made under those constraints.
   panic, not a pass. The cliff-specific `require_leaf` probes
   (post-`satp` PC, `__trap_entry`, live `sp`) stay in 4 KiB regions and
   do not change.
+  **Load-bearing (named failed co-edit, not a mysterious half-gain):**
+  `map_range` and `assert_range` currently step `PAGE_SIZE` (`src/page.rs`
+  `:187-195`, `:515-555`). They must step by the leaf grain they just
+  installed. A mapper that plants L1 leaves while the verifier still
+  walks every 4 KiB VA still does ~32k iterations (only shorter); that
+  is not the intended rung. Virtio `require_identity_rw*` stays L0
+  because the pool lives in `.bss`.
 - **Alternatives considered:** 1 GiB leaves (still rejected, D-0026's
   original reason: one PTE would span OpenSBI, guards, and every W^X
   boundary). Keeping 4 KiB everywhere and only fixing the walk cost with
@@ -2204,35 +2215,64 @@ D-0011 onward are working decisions made under those constraints.
 - **Rationale:** D-0026 said revisit "only with an explicit alignment
   check on the leaf PPN" — this entry is that revisit, with the check in
   both the mapper and the verifier. Pre-T4.2, page_build + page_verify
-  were expected to be the dominant kernel term. T4.2 showed they are
-  3.6 ms combined on the KVM-pod boot, behind `frame_init` (~93 ms) and
-  `accounting` (~5 ms) — so this rung waits until those two have landed
-  (or been declined) and paging is a larger share of what remains.
-  When it does land, leaf count drops from ~32.6k to a few hundred, and
-  verification cost scales down with it — measured twice, before and
-  after, which is itself a result about what verification costs are
-  made of.
+  were expected to be the dominant kernel term. T4.2 showed they sat
+  behind `frame_init` and `accounting`. T4.4 collapsed those two; the
+  pair is now 3.84 ms = 42% of fast E2→E3g 9.17 ms, which is the
+  re-evaluation condition this entry set. Leaf count drops from ~32k
+  to a few hundred, and verification cost scales down with it —
+  measured twice, before and after, which is itself a result about
+  what verification costs are made of.
+- **Consequences — projected gain, pre-registered 2026-08-17 against
+  T4.4 (`HEAD` batches `20260817T052349Z-*`, n=60) before any kernel
+  edit. Ranges, not optimistic bounds: T4.4 leftover point estimates
+  were ~40% optimistic (D-0065 outcome; audit finding 10 is the first
+  data point on the same bias).**
+  Leaf-count estimate from T4.4 exhaust `total=31823` → `__heap_end` ≈
+  `0x803B1000`: 62 × 2 MiB leaves on `0x80400000..0x88000000`; ~520
+  4 KiB leaves for `0x80200000..0x80400000` (W^X, guards, user/task,
+  heap, alignment fragment) plus eight virtio-mmio pages;
+  `tables_used` 67 → 5–8 (root + RAM L1 + one L0 for
+  `0x80200000..0x80400000` + MMIO L1 + MMIO L0, with slack for an
+  extra fragment table).
+  - `page_verify` 2.39 ms → **80–400 µs** if grain-correct. **1.5–2.2 ms**
+    if `assert_range` still steps 4 KiB against L1 leaves (failed
+    co-edit; walk count did not shrink). Falsified if the median stays
+    **≥ 1.0 ms** (the walk did not shrink) or drops **< 30 µs** (a
+    third thing vanished).
+  - `page_build` 1.45 ms → **50–300 µs**. Falsified if **≥ 0.8 ms**.
+  - Combined paging 3.84 ms → **0.15–0.70 ms**. Fast E2→E3g 9.17 ms →
+    **5.5–8.0 ms** (arithmetic remainder if only paging moves is
+    ~5.5–6.0 ms; the registered range leaves room for the documented
+    estimate bias and for cache/TLB secondaries of the kind T4.4
+    showed). Falsified if still **> 8.5 ms**, or if a phase this
+    hypothesis does not name vanishes.
+  - `tables_used` 67 → **5–8**. Falsified if still 67.
 - **Consequences — the co-edit checklist (audit findings 24/25/27); every
   item is walked in the same change or the rung does not merge:**
   1. `src/task.rs` frames-consumed assert: `tables != 67` and the
      leftover split (finding 24) — recompute and update deliberately.
-  2. `src/page.rs` doc comment deriving 67 (`:113-119` at `4660fab`).
+     `held = tables + leftover` still holds; the 67 is what moves.
+  2. `src/page.rs` doc comment deriving 67 (`:113-119`).
   3. `walk()`'s superpage panic citing D-0026 (`:356-361`) — becomes the
-     level-aware acceptance path.
-  4. `assert_range` `level == 0` (`:526`) and `require_leaf` L0-only
-     (`:720`) — per-region expected level.
+     level-aware acceptance path. Wrong level remains a panic.
+  4. `map_range` 4 KiB stepping (`:187-195`) and `assert_range`
+     `level == 0` plus 4 KiB stepping (`:515-555`) — per-region expected
+     level **and** grain. `require_leaf` L0-only (`:720`) stays L0 for
+     the cliff probes (those VAs remain 4 KiB regions).
   5. `virtq` pool verification through `require_identity_rw*`
      (`src/virtq.rs:305-341,359`) — the pool lives in `.bss` (4 KiB
      region) and must still verify at L0.
   6. D-0036's "69 frames (67 tables + 2)" amendment and D-0039's
      "tables_used is 67" consequence — prose updated with the new
      derivation.
-  7. justfile probe-format greps (`:87-94`) if the printed row format
-     grows a level column (finding 27).
+  7. justfile probe-format greps (`:92-97`) if the printed row format
+     grows a level column (finding 27). Prefer keeping the virtio lo/hi
+     row format so those greps do not move.
   8. DEBUGGING.md gains the superpage first-response note (`info mem`
      cross-check; misaligned-superpage signature).
 - Revisit trigger: none — after this lands, D-0026's 4-KiB-only rule is
-  superseded for the RAM interior and stands everywhere else.
+  superseded for the RAM interior and stands everywhere else. No kernel
+  code until this projection is signed off.
 
 ## D-0060: O(1) frame accounting (rung 2)
 - Date: 2026-08-16 — Status: declined-by-subsumption (2026-08-17; D-0065).
@@ -2463,13 +2503,16 @@ D-0011 onward are working decisions made under those constraints.
   predictions citable from `docs/AUDIT-2026-08.md`, a scoped second
   audit — are what let it claim floor-finding instead of benchmarketing.
 - **Consequences:** `report/` lives in-repo; markdown source plus a
-  table-generation script over `results/*.csv`; `just bench`
+  table-generation script that `git show`s freeze CSVs from tag
+  `baseline-t4.3` and after-ladder CSVs from `HEAD` (D-0067 — the
+  harness overwrites `results/*.csv` per run); `just bench`
   regenerating every cited number is the acceptance test; the
   threats-to-validity list opened at T4.0 (TCG ≠ hardware; slirp as
   peer; client granularity measured; single hart and fixed RAM;
   debug-era history killed by the regeneration rule; Linux-tuning
   fairness; Unikraft pin; instrumentation observer effect; host
-  variance; E3w fidelity; reservation vs working set per D-0030) is
+  variance; E3w fidelity; E3w→E4 host remainder per D-0066;
+  reservation vs working set per D-0030) is
   maintained in the draft from day one.
 
 ## D-0065: Bump-pointer / lazy free list (T4.4; amends D-0019)
@@ -2543,7 +2586,121 @@ D-0011 onward are working decisions made under those constraints.
   Superpage items (D-0059 #3–5, #7–8: `walk`/`assert_range`/
   `require_leaf`, virtq L0, probe-format greps, DEBUGGING
   superpage note) — **N/A.**
+- **Consequences — measured T4.4 (dedicated host, batches
+  `20260817T052349Z-1`/`-2`, git_sha `83ca9f99`, n=60, steal 0,
+  stability PASS both configs):**
+  | metric | predicted | actual | verdict |
+  |---|---|---|---|
+  | fast `frame_init` | < 100 µs | 141.2 µs | bound missed; ≥ 1 ms falsify held |
+  | fast `accounting` | < 20 µs | 24.9 µs | bound missed; ≥ 1 ms falsify held |
+  | fast E2→E3g | ~9.5 ms | 9.17 ms | beat the projection |
+  | safe `freeze` | < 50 µs | 100.0 µs | bound missed; collapsed from 4.88 ms |
+  Mechanism and magnitude were correct. Point estimates on the three
+  leftover bounds were ~40% optimistic. Pair with audit finding 10
+  (`task_init` / `virtq_init` / `stvec` predicted µs, measured sub-ms):
+  two data points, same direction. Unnamed phases that moved without
+  vanishing (`page_verify` 2.57 → 2.39 ms, `E3g` 1.42 → 1.24 ms) are a
+  cache/TLB secondary of not touching ~125 MiB to link 31k nodes, not
+  a falsification.
 - Revisit trigger: none for the representation. Superpages (D-0059)
-  still wait until `page_verify` is a larger share of what remains.
+  are next: `page_build` + `page_verify` = 3.84 ms = 42% of 9.17 ms.
+
+## D-0066: E3w→E4 is a host-side remainder, not an E4 stamp artifact
+- Date: 2026-08-17 — Status: accepted
+- **Decision:** after T4.4, fast E3w→E4 is 33.87 ms (IQR 432 µs, both
+  batches, n=60) — the largest single term in honest E0→E4 (54.52 ms).
+  E0→E3w is 20.74 ms (the HTTP frame in the filter-dump); E4 is 54.52 ms
+  (first nonempty `recv` at the client). This is **not** an artifact of
+  how the harness stamps E4: `scripts/bench-client.py` uses the 1 ms
+  cadence for connect-retry only; after `connect()` it `sendall`s the
+  GET and blocks in `recv` with a 2 s timeout; `first_byte_mono_ns` is
+  that first nonempty chunk. It is **not** guest kernel compute: E2→E3g
+  is already 9.17 ms and E3g is the publish. E3w is constructed as
+  first-connect plus the pcap-relative SYN/ACK→HTTP interval (D-0043:
+  filter-dump wall ≠ Python realtime), so E4−E3w is the time from that
+  constructed "HTTP on the netdev" to Python `recv`.
+  The interval is tens of milliseconds, not a µs loopback. D-0043's
+  original "E4−E3w the host loopback" understated a structural term.
+  It is also not a single fixed timer: freeze fast was 41.24 ms; T4.4
+  fast is 33.87 ms; T4.4 safe is 94.46 ms. Safe vs fast scaling
+  implicates QEMU occupancy after publish — TCG and slirp share a
+  loop, and Whimbrel's next act after E3g is `print_after_response`
+  (DBCN, one `ecall` per byte, `println_always`). That dump cannot
+  move E3g or the filter-dump timestamp; it can delay hostfwd delivery
+  to the client. The shared conduit (QEMU user-net + the same client)
+  applies to Linux and Unikraft equally; the PHASE dump is
+  Whimbrel-only extra occupancy on E0→E4. May be reducible later
+  (defer or slim the dump; TAP / passt; `TCP_NODELAY` on hostfwd) but
+  that is not a 5%-bar kernel rung and is not this change.
+- **Alternatives considered:** treating E4−E3w as client-cadence
+  quantization (rejected: cadence does not run after connect). Treating
+  it as slirp-only wire delay identical across configs (rejected: safe
+  94 ms vs fast 34 ms). Moving `print_after_response` in this revision
+  (rejected: that is a harness/observer experiment, pre-registered
+  only as a reduction candidate; no code until someone signs it off as
+  its own change).
+- **Rationale:** the honest number is E0→E4. Once kernel terms drop,
+  a 34 ms host-side remainder that used to hide behind 21 ms of guest
+  work becomes the thing a reader will ask about. Naming it before the
+  Linux baseline keeps the comparison section from attributing it to
+  the guest.
+- **Consequences:** methodology and threats cite this entry. Cross-system
+  E0→E4 still uses the same client and slirp, so comparisons remain
+  defined; Whimbrel's PHASE dump is a stated extra. A diagnostic that
+  skipped the dump would falsify the occupancy hypothesis if E3w→E4
+  collapsed; that experiment is not this rung.
+
+## D-0067: Per-batch result files (harness recommendation)
+- Date: 2026-08-17 — Status: accepted (design only; the bench host
+  implements harness write-path changes, not this tree)
+- **Decision:** recommend yes. `scripts/bench.py` currently
+  `write_csv`s `results/runs.csv` and `results/phases.csv` in place
+  each run. T4.4 overwrote the freeze rows; those rows live in tag
+  `baseline-t4.3` (commit `bce55a2`). The exhibit generator now
+  sources baseline columns from that tag and after-ladder columns
+  from `HEAD` via `git show`, and does **not** read the working tree.
+  That unblocks a two-rung table. A five-rung ladder would otherwise
+  be archaeology across five commits to regenerate one exhibit.
+  Recommended layout, implemented on the bench host:
+
+  ```
+  results/batches/<batch_id>/runs.csv
+  results/batches/<batch_id>/phases.csv
+  results/batches/<batch_id>/summary.txt
+  results/runs.csv       # latest run only (overwrite, as today)
+  results/phases.csv
+  results/summary.txt
+  ```
+
+  At the end of each batch (and at the end of a two-batch stability
+  run), copy the rows for that `batch_id` into
+  `results/batches/<batch_id>/` *before* the next run can overwrite
+  the top-level files. Top-level CSVs stay the latest run so
+  `just bench-summary` does not change. Track `results/batches/` in
+  git (unlike `results/trials/` serial/pcap). The freeze tag remains
+  the baseline pin; batches are how later rungs accumulate without
+  retagging.
+  Exhibit generator, once those files exist: keep `--baseline-tag`
+  (default `baseline-t4.3`) and add `--after-batches <id>,<id>` that
+  reads `results/batches/<id>/{runs,phases}.csv` and concatenates.
+  Until then, `--after` is `HEAD` via `git show`. Fail closed on
+  mixed `git_sha`, mixed QEMU, dirty rows, n≠60, steal≠0 — same
+  checks as today.
+- **Alternatives considered:** append-only `results/runs.csv`
+  (rejected: the summarizer and stability check assume one SHA and
+  two batches; appending a third rung silently mixes denominators
+  unless every consumer grows a filter). Relying on git history
+  forever (rejected: `git show HEAD~N:results/runs.csv` is how we
+  got here, and it does not scale). This agent implementing the
+  write path (rejected: D-0055's harness lives on the bench host;
+  this pod is not that host).
+- **Rationale:** the exhibit's contract is "never type the numbers".
+  That contract is only as strong as being able to regenerate a
+  ladder table from named inputs after the fifth rung.
+- **Consequences:** `scripts/report-exhibits.py` already documents
+  the two-source `git show` rule and fails closed if HEAD is not the
+  T4.4 batches. `results/README.md` stops claiming that
+  `results/runs.csv` *is* the freeze. No change to `scripts/bench.py`
+  in this commit.
 
 

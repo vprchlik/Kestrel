@@ -1,5 +1,7 @@
-# T4.3 freeze CSVs are tracked in this directory. Live benches must not
-# overwrite them; write a new dated directory instead.
+# Latest-run CSVs (runs.csv, phases.csv) are tracked at HEAD for the
+# current rung. The T4.3 freeze lives in tag baseline-t4.3. Once D-0067
+# lands on the bench host, results/batches/<batch_id>/ is the history
+# that does not require git archaeology.
 /summary.txt
 smoke/
 pcaps/
