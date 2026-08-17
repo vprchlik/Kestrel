@@ -449,6 +449,16 @@ no trap; the first channel that can name the bug is the one to read.
     symbols (`.utext must follow boot stack`) is the same bug with the
     opposite fold. `core::hint::black_box` on the address keeps the
     comparison as a runtime load. Debug `opt-level=0` never hits this.
+15. **HTTP 200 then silence before `M3 UNIKERNEL OK` / PHASE (D-0068).**
+    After first-HTTP `wait_tx` the kernel `wfi`s so QEMU can deliver the
+    frame before DBCN occupies TCG. Wake source is the next tick
+    (`sie.STIE` plus a future deadline). If a later rung drops tick
+    arming, `timer::assert_ticks_armed` panics with finding 13 rather
+    than hanging. If that assert is gone and STIE is clear, the symptom
+    is: client has the body, serial has no PHASE dump, QEMU idle.
+    First response: gdb Ctrl-C, `$pc` on `wfi` in `timer::yield_once`,
+    `info registers sie` (STIE = bit 5). Do not "fix" it by moving the
+    dump back onto the publish→E4 path.
 
 ## 5. QEMU monitor — inspect a hung machine *without* GDB
 

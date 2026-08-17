@@ -753,6 +753,10 @@ fn tx_tcp_seg(
     }
     wait_tx(base, "TCP seg");
     if first_http {
+        // D-0068: yield so slirp/hostfwd can deliver before DBCN occupies
+        // TCG. Stamps already stored; only the print moves. `yield_once`
+        // asserts ticks are armed (finding 13) rather than assuming it.
+        timer::yield_once();
         crate::phase::print_after_response();
         crate::println_always!("M3 UNIKERNEL OK");
     }

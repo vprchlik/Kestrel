@@ -1641,9 +1641,12 @@ bar (322 µs). Only `virtq_init` (842 µs = 13%) is a real remaining
 E2→E3g *candidate* (discarded first pass). The other six are the
 HTTP byte, D-0043 paranoia, necessary task slots, the live NIC
 pass, leftover page_build, and ARP wait. Ladder is **not** closed
-(one candidate still clears). Next *action* is D-0068 then the
-Linux baseline: E0→E4 is 51.67 ms, virtq_init is ~0.8 ms of that
-(1.6%). Do not take virtq_init next.
+(one candidate still clears). D-0068 dump placement has landed in
+tree (same-boot yield then dump; ticks-armed assert). Next *action*
+is the dedicated-host N-trial of that yield, then the Linux
+baseline: E0→E4 is 51.67 ms on the T4.6 batches (dump still on the
+path in those CSVs), virtq_init is ~0.8 ms of that (1.6%). Do not
+take virtq_init next.
 **`virtq_init` (finding 4):** remains eligible at 13% of 6.43 ms;
 **not** bundled with `DRIVER_OK`. Ceiling on the gain: skip the
 discarded pass, keep `fill_descriptors`.
@@ -1697,10 +1700,11 @@ Linux's decomposition comes from the instrumented run and is presented
 with the asymmetry stated (different instrument, measured on the logging
 config, quiet-vs-instrumented delta shown). Same QEMU binary, machine,
 single CPU, default 128 MiB, same netdev/hostfwd/filter-dump.
-E3w→E4 dump placement (D-0068) lands before this row so the honest
+E3w→E4 dump placement (D-0068) has landed in tree so the honest
 number is not Whimbrel's DBCN and the flagship comparison is not
 biased against us by tens of milliseconds. D-0066 named the
-remainder; D-0068 is the fix.
+remainder; D-0068 is the fix. The dedicated-host N-trial fills the
+correction magnitude in threats item 16 before this row is filled.
 
 - **Acceptance:** `just bench-linux` produces both configs' rows through
   the same harness; pcap shows the same handshake/response shape; the

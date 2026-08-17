@@ -2148,10 +2148,11 @@ D-0011 onward are working decisions made under those constraints.
   percentage would count work we are not removing. `fill_descriptors`
   stays, so 842 µs is a ceiling on the gain. The bar is 5% of the
   *current* median. Sequencing after T4.6: D-0068 (dump placement)
-  then the Linux baseline take the honest number and the comparison
-  section; virtq_init stays recorded-eligible, not the next action
-  (see D-0069 / the T4.6 ladder read). The floor is **not** declared:
-  one candidate still clears 5% of E2→E3g.
+  landed in tree; the dedicated-host N-trial then the Linux baseline
+  take the honest number and the comparison section; virtq_init stays
+  recorded-eligible, not the next action (see D-0069 / the T4.6
+  ladder read). The floor is **not** declared: one candidate still
+  clears 5% of E2→E3g.
   Further residue, still data-driven: `ping_gateway` gated out of
   fast-boot (needs its own decision entry: wire behavior changes; ARP
   wait and GARP stay in all profiles), tick arming under fast-boot
@@ -2198,7 +2199,8 @@ D-0011 onward are working decisions made under those constraints.
   E2→E3g (842 µs / 6.43 ms). After T4.6 the honest number is
   dominated by firmware (~24 ms class) and E3w→E4 (D-0066 / D-0068);
   D-0061 is the firmware candidate by the ladder's own rule. The
-  next *action* is D-0068, not another E2→E3g rung.
+  next *action* after D-0068's N-trial is the Linux baseline, not
+  another E2→E3g rung.
 
 ## D-0059: 2 MiB superpages for the RAM interior (amends D-0026)
 - Date: 2026-08-16 — Status: accepted (measured 2026-08-17; batches
@@ -2583,7 +2585,8 @@ D-0011 onward are working decisions made under those constraints.
   fairness; Unikraft pin; instrumentation observer effect; host
   variance; E3w fidelity; E3w→E4 host remainder per D-0066;
   reservation vs working set per D-0030; estimate bias per D-0069;
-  TCG-trace secondaries) is
+  TCG-trace secondaries as a matched pair under item 16; D-0068
+  dump occupancy and its measured correction) is
   maintained in the draft from day one.
 
 ## D-0065: Bump-pointer / lazy free list (T4.4; amends D-0019)
@@ -2723,8 +2726,8 @@ D-0011 onward are working decisions made under those constraints.
   skipped the dump would falsify the occupancy hypothesis if E3w→E4
   collapsed; that experiment is not this rung. Placement of the dump
   so it cannot sit between publish and the client's first byte is
-  D-0068 — designed before the Linux baseline, not landed in the
-  superpage commit.
+  D-0068 — landed in tree after the superpage N-trial; the
+  dedicated-host N-trial of the yield records the correction.
 
 ## D-0067: Per-batch result files (harness recommendation)
 - Date: 2026-08-17 — Status: accepted (approved; design only — the
@@ -2781,19 +2784,26 @@ D-0011 onward are working decisions made under those constraints.
   `scripts/bench.py` in this tree.
 
 ## D-0068: Do not dump PHASE between publish and the client's first byte
-- Date: 2026-08-17 — Status: accepted (design; lands after superpages,
-  before the Linux baseline; no kernel code in this change)
+- Date: 2026-08-17 — Status: accepted (landed in tree; dedicated-host
+  N-trial records the E0→E4 correction)
 - **Decision:** `print_after_response` must not run between publishing
   the HTTP response and the client reading it. **Same-boot deferral
   via a yield, then dump.** After first-HTTP `wait_tx` /
-  `E3g_doorbell`, do **not** print. Execute one `wfi` while ticks
-  remain armed, then `print_after_response` and `M3 UNIKERNEL OK`.
-  PHASE and the honest number stay on the same boot.
+  `E3g_doorbell`, do **not** print. `timer::yield_once` asserts
+  `sie.STIE` (finding 13), re-arms a future deadline, executes one
+  `wfi`, then `print_after_response` and `M3 UNIKERNEL OK`. PHASE
+  and the honest number stay on the same boot.
   Do **not** spin waiting for FIN or for a timer in software: a
   post-publish poll loop occupies TCG the same way the dump does
   and would still delay hostfwd. `wfi` returns the vCPU to QEMU's
   main loop so slirp/hostfwd can deliver the already-queued frame;
   E4 happens during that halt; the dump runs after.
+  Do **not** set `sstatus.SIE` around the `wfi`: the call is from
+  the trap handler, hardware already cleared SIE, and setting it
+  reopens D-0036. `wfi` wakes when `sip.STIP` becomes pending even
+  if the interrupt is not taken. Re-arm is load-bearing: a leftover
+  STIP (tick during this syscall, not taken because SIE is 0) would
+  make `wfi` a no-op and leave the dump on the publish→E4 path.
 - **Alternatives considered:**
   1. **Gate the dump behind a feature so measured runs never print
      PHASE**, reading the array another way (GDB, a second boot,
@@ -2816,6 +2826,9 @@ D-0011 onward are working decisions made under those constraints.
      close behavior on every HTTP gate (curl, persist).
   4. **Moving the dump in the superpage commit.** Rejected: one
      rung, no code beyond it.
+  5. **Assume ticks are still armed** (rejected: finding 13. A
+     later rung that drops tick arming would hang the HTTP path
+     with no panic. Assert `sie.STIE` and fail loudly).
 - **Rationale:** if the PHASE dump (DBCN, one `ecall` per byte)
   runs after publish while TCG occupies the loop that pumps slirp,
   E0→E4 measures Whimbrel's instrumentation, not Whimbrel. Linux
@@ -2828,23 +2841,30 @@ D-0011 onward are working decisions made under those constraints.
   Stamps stay where they are: E3g at publish, E3g_doorbell after
   notify. Only the *print* moves. `println_always` / DBCN is the
   occupancy; `rdtime` stores are not.
-- **Consequences:** implementation is a later change, after the
-  superpage N-trial (done T4.6), before T4.8. Gates that wait for `M3
-  UNIKERNEL OK` or PHASE lines will see them up to one tick later;
-  E4 itself must not move later. If a subsequent rung removes tick
-  arming from fast-boot, this `wfi` is illegal (D-0056.3 / finding
-  13) and must be replaced with a wake that is not the timer — not
-  with a return to dumping on the measured path.
+- **Consequences:** `src/timer.rs` owns `assert_ticks_armed` /
+  `yield_once`; `src/net.rs` calls them after first-HTTP `wait_tx`.
+  Gates that wait for `M3 UNIKERNEL OK` or PHASE lines see them up
+  to one tick later; E4 itself must not move later. If a subsequent
+  rung removes tick arming from fast-boot, this `wfi` is illegal
+  (D-0056.3 / finding 13) and must be replaced with a wake that is
+  not the timer — not with a return to dumping on the measured
+  path. The dedicated-host N-trial records how far E0→E4 and
+  E3w→E4 move; that magnitude is a threats-to-validity entry
+  regardless of sign (report/draft item 16). Until that CSV exists
+  the draft states the claim and does not invent a KVM-pod delta.
   **Tradeoff if someone later chooses split-boot anyway:** the
   phase decomposition and the honest E0→E4 number are not the same
   machine-state and must be stated as a threats line.
-  **Threats general form (stands even before the dump moves):**
-  instrumentation on the guest can perturb host-observed edges
-  even when it runs *after* the guest-side stamp, because QEMU's
-  TCG and slirp share an execution loop. That is a property of
-  measuring inside this emulator, not unique to PHASE/DBCN.
-- Revisit trigger: the dump-move change itself; or a tick-removal
-  rung, which must replace the `wfi` first.
+  **Threats general form:** instrumentation on the guest can
+  perturb host-observed edges even when it runs *after* the
+  guest-side stamp, because QEMU's TCG and slirp share an
+  execution loop. That is a property of measuring inside this
+  emulator, not unique to PHASE/DBCN. The T4.4/T4.6 TCG
+  secondaries are the same threat with the opposite surface
+  (shared cache/translation state, not occupancy).
+- Revisit trigger: the dedicated-host N-trial (fill the correction
+  magnitude); or a tick-removal rung, which must replace the `wfi`
+  first.
 
 ## D-0069: Pre-registration underestimates small-phase costs
 - Date: 2026-08-17 — Status: accepted (finding; three data points)
@@ -2888,7 +2908,9 @@ D-0011 onward are working decisions made under those constraints.
   range" is the expected miss and only the falsify-if line is
   load-bearing. Threats item 14 is this finding, not a note.
   It does not change the 5% bar (that bar is measured, not
-  estimated).
+  estimated). The report's methodology section states this as
+  prose (the transferable lesson about emulated systems), not
+  only as this entry or as threats item 14.
 - Revisit trigger: a fourth pre-registered small-phase range
   that lands *low* would break the sign and reopen this.
 

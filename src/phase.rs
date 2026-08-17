@@ -1,9 +1,11 @@
 //! Boot-to-first-HTTP-byte phase timestamps (D-0043 / D-0057).
 //!
 //! Owns the static `rdtime` array stamped along the attributed boot
-//! path. Printed once, after the response is on the wire — DBCN is one
-//! `ecall` per byte, so printing on the measured path would move E3g by
-//! milliseconds. Without this module M4 has no floor number.
+//! path. Printed once, after the response is on the wire *and* after a
+//! `wfi` so DBCN does not occupy TCG on the publish→E4 path (D-0068).
+//! DBCN is one `ecall` per byte; printing between publish and the
+//! client's first byte would measure instrumentation, not Whimbrel.
+//! Without this module M4 has no floor number.
 //!
 //! `NAMES` is the kernel's list. The three justfile HTTP gates share
 //! one `phase_names` variable (finding 26). The T4.1 harness parses
@@ -90,8 +92,8 @@ pub fn get(i: usize) -> usize {
     unsafe { PHASE_STAMPS[i] }
 }
 
-/// Once, after the HTTP response TX completes. Always prints (fast-boot
-/// compiles out ordinary `println!`).
+/// Once, after the HTTP response TX completes and D-0068's yield
+/// returns. Always prints (fast-boot compiles out ordinary `println!`).
 pub fn print_after_response() {
     if unsafe { PRINTED } {
         return;

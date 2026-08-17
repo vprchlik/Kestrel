@@ -114,7 +114,9 @@ publish; E3w = pcap timestamp of that frame (constructed on the E0
 timeline as first-connect plus the pcap-relative SYN/ACK→HTTP
 interval); E4 = first byte at the client. E4−E3w is the host-side
 remainder after the frame is in the filter-dump (D-0066), not a µs
-loopback. The PHASE dump must not run on that interval (D-0068).
+loopback. The PHASE dump yields once after `wait_tx`, then prints
+(D-0068); it must not run on the publish→E4 interval. Before that
+yield, E0→E4 measured instrumentation, not Whimbrel.
 T3.12(a) measured the E2 offset as 0, so `_start` *is* the OpenSBI phase.
 Headline E2→E3g uses a client retrying before E0; `just test`'s
 curl-after-`HTTP READY` E3g is harness wait (D-0043).
@@ -305,3 +307,6 @@ R+W. The identity map enforces this at page granularity (D-0019).
 until an interrupt arrives — the polite form of an idle loop, and what our
 parked hart executes. With `sie.STIE` set it wakes every 10 ms; that is not
 quiescence. QEMU actually idles the host CPU on it, unlike a spin loop.
+D-0068 uses one `wfi` after first-HTTP `wait_tx` so slirp can deliver
+before DBCN occupies TCG. That `wfi` asserts `sie.STIE` first (finding 13):
+with ticks not armed and nothing pending, `wfi` never returns.

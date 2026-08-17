@@ -4,6 +4,10 @@
 //! (`arm`). Trap dispatch calls `on_interrupt`; without this module there
 //! are no timer interrupts and `sip.STIP` can never be acknowledged from
 //! S-mode. M4's Sstc comparison replaces the body of `arm`, nothing else.
+//! D-0068's post-publish `wfi` lives here because it is illegal unless
+//! ticks are armed (finding 13).
+
+use core::arch::asm;
 
 use crate::csr;
 use crate::println;
@@ -46,6 +50,31 @@ pub fn init() {
 /// in the future.
 pub fn arm() {
     sbi::set_timer(csr::time::read().wrapping_add(unsafe { PERIOD_NOW }));
+}
+
+/// Finding 13 / D-0056.3: a `wfi` with `sie.STIE` clear and nothing else
+/// pending never returns. D-0068's yield is that `wfi`. A later rung that
+/// drops tick arming must fail here instead of hanging the HTTP path.
+pub fn assert_ticks_armed() {
+    if csr::sie::read() & csr::sie::STIE == 0 {
+        panic!("finding 13: ticks not armed (sie.STIE=0); D-0068 wfi would hang");
+    }
+}
+
+/// Halt until the next pending interrupt so QEMU's main loop can deliver
+/// an already-queued frame before DBCN occupies TCG (D-0068).
+///
+/// Called from the trap handler (`sstatus.SIE` is 0). Do not set SIE:
+/// that reopens D-0036. `wfi` wakes when `sip.STIP` becomes pending even
+/// if the interrupt is not taken. Re-arm first: a leftover STIP (a tick
+/// that arrived during this syscall, not taken because SIE is 0) would
+/// make `wfi` a no-op and leave the dump on the publish→E4 path.
+pub fn yield_once() {
+    assert_ticks_armed();
+    arm();
+    unsafe {
+        asm!("wfi", options(nomem, nostack, preserves_flags));
+    }
 }
 
 /// Next `arm` uses this many `rdtime` ticks. Re-arms immediately so the new

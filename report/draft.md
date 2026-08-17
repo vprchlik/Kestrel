@@ -29,7 +29,8 @@ had been two walks of the frame free list; T4.4 collapsed those;
 T4.6 mixed-granularity paging took the next 42%. Safe vs fast is
 still a large factor. Cross-system rows (Linux, Unikraft) are empty
 until T4.8/T4.9. The largest single term in the honest E0→E4
-number is host-side (E3w→E4; D-0066); dump placement is D-0068.
+number is host-side (E3w→E4; D-0066); dump placement is D-0068
+(landed; dedicated-host N-trial records the correction).
 
 ---
 
@@ -106,12 +107,63 @@ read, plus any QEMU occupancy after the guest has already published
 (D-0066). It is the largest term in honest E0→E4 after T4.4. The
 same QEMU user-net and the same client are used for Linux and
 Unikraft, so the shared conduit does not by itself distort
-comparisons; Whimbrel additionally dumps the PHASE table over DBCN
-after publish (`print_after_response`), which occupies TCG on the
-same thread that pumps slirp and is a Whimbrel-only extra. That
-dump is designed to move off the publish→E4 path (D-0068, yield
-then dump, same boot) before the Linux baseline; it is not the
-superpage rung.
+comparisons.
+
+**Linear scaling is the wrong model for small phases.**
+Pre-registered phase projections in this project have a systematic
+bias: they treat cost as linear in operation count. That model is
+right when N is large enough that per-call work amortizes, and wrong
+as soon as a rung reduces N enough for the fixed component to
+dominate. T4.4's `page_verify` ran at about 75 ns per leaf over about
+32k 4 KiB leaves. Linear extrapolation to T4.6's ~580 mixed-granularity
+leaves predicted ~40 µs. The registered range was already 2–10× that
+(80–400 µs) and still undershot: measured 731 µs, about 1.3 µs/leaf,
+roughly 17× the linear number. The extra is not a slower walk. It is
+the cost that does not scale down with N — software-walk decode,
+level and grain asserts, TCG trace warmup. Finding 10 was the same
+error in miniature (µs on paper, sub-ms on the stamp table). T4.4
+leftover bounds (~40% optimistic) were the second data point. T4.6
+paging was the third. Three-for-three, all in the same direction.
+
+This is a transferable lesson about optimizing emulated systems, not
+a note about our paging arithmetic. Any rung that reduces an
+operation count will disappoint relative to a linear projection,
+because the fixed per-call cost becomes the dominant term once N
+drops. Headline E2→E3g ranges that pad for this bias have held;
+unpadded phase ranges have not. Future phase projections either pad
+more than a linear remainder or treat "over range" as the expected
+miss and keep only the falsify-if line load-bearing. The 5%
+eligibility bar is measured, not estimated, and is unaffected
+(D-0069).
+
+**The apparatus and the system share state.** Measuring inside an
+emulator means TCG's data cache, its instruction-translation cache,
+and the main loop that pumps slirp are host state that guest work
+writes as a side effect of existing. T4.4 and T4.6 are a matched
+pair. After T4.4 stopped linking ~31k free-list nodes (~125 MiB),
+later phases ran against a warmer data cache and TLB: `page_verify`
+−7%, `E3g` −13%. After T4.6 deleted the 32k-iteration verify loop,
+`freeze` — which the rung does not call — went 7.3 → 12.2 µs (+67%)
+because the next instructions met a colder TCG translation cache.
+Same cause, opposite signs. Both deltas are sub-instrumentation-noise
+in absolute terms (stamp overhead is ~5.5 µs on fast-boot; the
+`freeze` extra is ~5 µs). They are not second hypotheses and not
+co-edit misses. Together they illustrate threats item 16.
+
+The occupancy case of the same threat is the PHASE dump. Until
+D-0068, `print_after_response` ran immediately after first-HTTP
+`wait_tx`. E3g had already been stored; E4 had not. DBCN is one
+`ecall` per byte, so the dump occupied TCG on the same thread that
+pumps slirp/hostfwd. **E0→E4 before this fix was measuring
+Whimbrel's instrumentation, not Whimbrel.** Linux and Unikraft have
+no equivalent dump before their first byte. The mechanism is
+same-boot: after `wait_tx` / `E3g_doorbell`, `timer::yield_once`
+asserts ticks are armed (finding 13), re-arms a future deadline so
+a leftover `sip.STIP` cannot make `wfi` a no-op, executes one `wfi`,
+then prints PHASE and `M3 UNIKERNEL OK`. Stamps do not move. The
+dedicated-host N-trial records how far E0→E4 and E3w→E4 move; that
+magnitude is a threats-to-validity entry regardless of which
+direction it moves. This draft does not cite a KVM-pod delta.
 
 Exhibit tables: [phase decomposition](exhibits/phase-decomposition.md)
 (D-0064 centerpiece columns) and [edges](exhibits/edges.md).
@@ -179,11 +231,8 @@ fast E0→E4 67.05 → 54.52 ms; safe E2→E3g 94.88 → 78.25 ms.
 
 Two unnamed phases moved without vanishing, so they do not falsify.
 `page_verify` 2.57 → 2.39 ms (−7%). `E3g` 1.42 → 1.24 ms (−13% in
-the pooled CSV; not the same 7%). The removed `frame_init` was
-touching ~125 MiB to link ~31k nodes (`total_frames` = 31823 × 4 KiB).
-Subsequent phases now run against a warmer cache and TLB. That is a
-secondary effect of the rung, recorded in the ladder row, not a
-second hypothesis.
+the pooled CSV; not the same 7%). That movement is the warm-cache
+half of the matched TCG pair in Methodology, not a second hypothesis.
 
 ### T4.6 prediction outcome
 
@@ -208,26 +257,30 @@ Headline edges: fast E2→E3g 9.17 → 6.43 ms (−30%); cumulative from
 Arithmetic remainder if only paging moved: 9.17 − 2.72 = 6.45 ms;
 actual 6.43 ms.
 
-`freeze` 7.3 → 12.2 µs (+67%) in a rung that does not touch
-`freeze()`. Cause: TCG/I-cache secondary of deleting the
-32k-iteration verify loop (D-0059). Opposite sign from T4.4's
-data-cache warming. Extra ~5 µs is stamp-overhead class. Named in
-the ladder row; not a rung.
+`freeze` 7.3 → 12.2 µs is the cold-translation half of the matched
+TCG pair in Methodology. Linear-vs-measured `page_verify` (~40 µs
+extrapolated, 731 µs measured, ~75 ns/leaf over ~32k becoming
+~1.3 µs/leaf over ~580) is the D-0069 worked example there.
 
-Linear extrapolation of `page_verify` was ~40 µs; the registered
-range was already 2–10× that and still undershot at 731 µs
-(~18× linear). Per-leaf cost went from ~75 ns over ~32k leaves to
-~1.3 µs over ~580. Fixed per-call overhead and a colder TCG trace
-do not scale down with the count (D-0069).
+### Matched TCG secondaries (T4.4 and T4.6)
+
+Present them together. T4.4 made later phases faster: warm data
+cache and TLB after not touching ~125 MiB. T4.6 made `freeze`
+slower: cold instruction translation after the hot loop's removal.
+Same cause, opposite signs, both sub-instrumentation-noise in
+absolute terms. Together they illustrate threats item 16 —
+measuring inside an emulator means the measurement apparatus and
+the measured system share state. Named in the ladder rows; not
+rungs.
 
 ### Ladder
 
 | rung | hypothesis | E2→E3g after | Δ vs `baseline-t4.3` | disposition |
 |---|---|---|---|---|
-| bump / lazy free-list | stop linking ~31k virgin frames; `free_count()` is bump arithmetic | 9.17 ms | −12.25 ms (−57%) | landed T4.4 (D-0065); batches `20260817T052349Z-1`/`-2`; subsumes D-0060. Secondary: `page_verify` −7%, `E3g` −13% from a warmer cache/TLB after the ~125 MiB link disappeared |
+| bump / lazy free-list | stop linking ~31k virgin frames; `free_count()` is bump arithmetic | 9.17 ms | −12.25 ms (−57%) | landed T4.4 (D-0065); batches `20260817T052349Z-1`/`-2`; subsumes D-0060. Secondary: later phases faster (warm data cache; matched pair) |
 | D-0060 allocated counter | `free_count = TOTAL − allocated` on the current list | — | — | declined-by-subsumption |
-| 2 MiB superpages (D-0059) | mixed-granularity identity map; level-aware verifier; grain-aware `assert_range` | 6.43 ms | −15.00 ms (−70% vs freeze); −2.74 ms (−30% vs T4.4) | **landed T4.6**; batches `20260817T061753Z-1`/`-2`; `tables_used`=5; paging 3.84 → 1.12 ms. Phase ranges over (D-0069); E2→E3g in range. Secondary: `freeze` 7.3→12.2 µs, TCG trace, not a walk |
-| `virtq_init` skip discarded program+verify | first pass wiped by `net::init` reset; `fill_descriptors` stays | — | 842 µs = 13% of 6.43 ms; 5% bar is 322 µs | **eligible, not next.** Ceiling on the gain. D-0068 then Linux take the honest number |
+| 2 MiB superpages (D-0059) | mixed-granularity identity map; level-aware verifier; grain-aware `assert_range` | 6.43 ms | −15.00 ms (−70% vs freeze); −2.74 ms (−30% vs T4.4) | **landed T4.6**; batches `20260817T061753Z-1`/`-2`; `tables_used`=5; paging 3.84 → 1.12 ms. Phase ranges over (D-0069); E2→E3g in range. Secondary: `freeze` slower (cold I-translation; matched pair) |
+| `virtq_init` skip discarded program+verify | first pass wiped by `net::init` reset; `fill_descriptors` stays | — | 842 µs = 13% of 6.43 ms; 5% bar is 322 µs | **eligible, not next.** Ceiling on the gain. D-0068 N-trial then Linux take the honest number |
 
 ### Superpage outcome (D-0059; T4.6)
 
@@ -258,11 +311,12 @@ rungs:
 | `serving_ready` 6% | ARP wait; not kernel compute |
 
 By D-0058's letter the ladder is not closed: `virtq_init` still
-clears 5% of E2→E3g. By the report's claim, D-0068 is next.
-E0→E4 is 51.67 ms; skipping the discarded virtqueue pass is
-~0.8 ms of that (1.6%). Dump placement is tens of milliseconds
-and unblocks an unbiased Linux row. virtq_init stays
-recorded-eligible. The floor is not declared.
+clears 5% of E2→E3g. By the report's claim, D-0068 was next and
+has landed in tree; the dedicated-host N-trial records the E0→E4
+correction, then Linux. E0→E4 is 51.67 ms on the T4.6 batches
+(dump still on the publish→E4 path in those CSVs); skipping the
+discarded virtqueue pass is ~0.8 ms of that (1.6%). virtq_init
+stays recorded-eligible. The floor is not declared.
 
 Leaf-count estimate from T4.4 exhaust `total=31823` → `__heap_end`
 ≈ `0x803B1000`: 62 × 2 MiB leaves on `0x80400000..0x88000000`;
@@ -294,7 +348,8 @@ move); DEBUGGING.md superpage first-response note.
 E0→E4. Whimbrel's row is [exhibits/edges.md](exhibits/edges.md).
 Linux and Unikraft cells stay empty until those tasks land. E3w→E4
 is investigated before the Linux baseline (D-0066) so that section
-does not treat 34 ms of host-side remainder as guest work.
+does not treat tens of milliseconds of host-side remainder —
+including, before D-0068, Whimbrel's own PHASE dump — as guest work.
 
 ---
 
@@ -330,8 +385,11 @@ maintained in [threats-to-validity.md](threats-to-validity.md).
 10. **Instrumentation observer effect.** Stamp overhead is a generated
     row in [exhibits/edges.md](exhibits/edges.md) (5.5 µs on
     fast-boot). `print_after_response` is a second observer: DBCN
-    after E3g can delay E4 without moving E3g (D-0066). Dump
-    placement is D-0068 (designed; not yet landed).
+    after E3g delayed E4 without moving E3g (D-0066). Before D-0068,
+    E0→E4 measured that dump — Whimbrel's instrumentation, not
+    Whimbrel. The dump now yields first (same boot). The
+    dedicated-host N-trial records the correction to E0→E4 /
+    E3w→E4; that magnitude is a validity line regardless of sign.
 11. **Host variance.** Dedicated native host, performance governor,
     SMT off, boost off, steal 0 on all recorded trials of the freeze,
     T4.4, and T4.6, two interleaved batches that met max(2%, 200 µs).
@@ -341,38 +399,47 @@ maintained in [threats-to-validity.md](threats-to-validity.md).
     first-connect plus the pcap-relative SYN/ACK→HTTP interval.
     E3w→E4 therefore inherits that construction (D-0066).
 13. **Reservation vs working set** (D-0030).
-14. **Estimate bias (D-0069).** Three-for-three, all optimistic
-    (predicted too fast): finding 10 (µs predicted, sub-ms measured),
-    T4.4 leftover bounds (~40%), T4.6 both paging phases over range.
-    We scale as if cost were linear in operation count; fixed
-    per-call overhead and TCG-trace warmup do not scale down with N.
-    Headline E2→E3g ranges that pad for this have held; unpadded
-    phase ranges have not.
-15. **Cache/TLB / TCG-trace secondary effects.** Removing a ~125 MiB
-    walk *warmed* later phases a few percent (T4.4 `page_verify`,
-    `E3g`). Deleting a 32k-iteration `walk()` loop *cooled* the next
-    few instructions (`freeze` 7.3 → 12.2 µs at T4.6). Same class,
-    opposite sign; named in the ladder row; not a second rung.
-16. **Guest work after a guest-side stamp can still move a
-    host-observed edge.** QEMU's TCG and slirp share an execution
-    loop. Instrumentation that runs *after* E3g occupies TCG and
-    delays hostfwd, so E4 moves without E3g moving. This generalizes
-    beyond PHASE/DBCN (D-0068). Leaving the dump on the publish→E4
-    path biases the flagship cross-system metric against Whimbrel;
-    Linux and Unikraft have no equivalent dump. If measured runs
-    stopped printing PHASE, the decomposition and E0→E4 would come
-    from different boots — that would be its own line.
+14. **Estimate bias (D-0069).** Stated as methodology prose, not only
+    here. Three-for-three, all optimistic (predicted too fast):
+    finding 10, T4.4 leftover bounds (~40%), T4.6 both paging phases
+    over range. We scale as if cost were linear in operation count;
+    a fixed per-call cost does not scale down with N (~75 ns/leaf
+    over ~32k becoming ~1.3 µs/leaf over ~580). Any rung that
+    reduces an operation count will disappoint relative to linear
+    projection, because the fixed component becomes the dominant
+    term. Headline E2→E3g ranges that pad for this have held;
+    unpadded phase ranges have not.
+15. **Matched TCG secondaries.** T4.4 made later phases faster (warm
+    data cache after not touching ~125 MiB). T4.6 made `freeze`
+    slower (cold instruction translation after the hot loop's
+    removal). Same cause, opposite signs, both
+    sub-instrumentation-noise. Presented together under item 16;
+    named in the ladder rows; not rungs.
+16. **The measurement apparatus and the measured system share
+    state.** QEMU's TCG (data cache, instruction translation) and
+    the main loop that pumps slirp are host state that guest work
+    writes as a side effect of existing. Two illustrations. The
+    matched pair in item 15 is the cache/translation surface. The
+    occupancy surface is guest work after a guest-side stamp moving
+    a host-observed edge: before D-0068 the PHASE dump occupied TCG
+    after E3g and delayed E4, so E0→E4 measured instrumentation.
+    The N-trial after this landing records the correction; either
+    direction is a validity line. Linux and Unikraft have no
+    equivalent dump. If measured runs stopped printing PHASE, the
+    decomposition and E0→E4 would come from different boots — that
+    would be its own line.
 
 ---
 
 ## Future work
 
-Next: D-0068 dump placement (same-boot yield then dump), then the
-Linux baseline (D-0062). `virtq_init` remains eligible at 13% of
-6.43 ms and is not the next action. D-0060 is declined-by-subsumption.
-`-bios none` (D-0061). Unikraft spike (D-0063). T4.3b audit cleanup.
-Harness per-batch result files (D-0067) — spec in
-`results/README.md`; the bench host implements the write path.
+Next: dedicated-host N-trial of D-0068 (fill the E0→E4 correction
+in item 16), then the Linux baseline (D-0062). `virtq_init` remains
+eligible at 13% of 6.43 ms and is not the next action. D-0060 is
+declined-by-subsumption. `-bios none` (D-0061). Unikraft spike
+(D-0063). T4.3b audit cleanup. Harness per-batch result files
+(D-0067) — spec in `results/README.md`; the bench host implements
+the write path.
 
 ---
 

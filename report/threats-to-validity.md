@@ -20,9 +20,11 @@ item is mitigated-and-measured or stated.
 7. **Unikraft pin** (D-0063) — stated when that row exists.
 8. **Instrumentation observer effect.** Stamp overhead is a generated
    edges-exhibit row (~5.5 µs fast-boot). `print_after_response` dumps
-   PHASE over DBCN after E3g and can delay E4 without moving E3g
-   (D-0066). Placement so the dump cannot sit between publish and
-   the client's first byte is D-0068 (designed; not yet landed).
+   PHASE over DBCN after E3g and delayed E4 without moving E3g
+   (D-0066). Before D-0068, E0→E4 measured that dump — instrumentation,
+   not Whimbrel. The dump now yields first (same boot). The
+   dedicated-host N-trial records the correction; either direction is
+   a validity line.
 9. **Host variance.** Report numbers are the dedicated Ubuntu 26.04
    host (7800X3D, 8 cores SMT off, boost off, performance governor,
    QEMU 10.2.1, steal 0). Freeze, T4.4, and T4.6 each ran two
@@ -46,23 +48,28 @@ item is mitigated-and-measured or stated.
     numbers are larger; boost-state and thermal variance are removed.
     All systems measured identically; comparisons unaffected; only the
     absolute floor moves.
-14. **Estimate bias (D-0069).** Three-for-three, all optimistic:
-    finding 10, T4.4 leftovers (~40%), T4.6 paging phases over
-    range. Cost is not linear in operation count; per-call / TCG
-    floors dominate once N drops.
-15. **Cache/TLB / TCG-trace secondary effects.** T4.4 warmed later
-    phases by not touching ~125 MiB. T4.6 cooled `freeze`
-    (7.3 → 12.2 µs) by deleting the 32k-iteration verify loop.
-    Opposite sign, same class; named in the ladder row.
-16. **Guest work after a guest-side stamp can still move a
-    host-observed edge.** QEMU's TCG and slirp share an execution
-    loop. Instrumentation that runs *after* E3g (the PHASE dump
-    today; any post-publish spin) occupies TCG and delays hostfwd
-    delivery, so E4 moves without E3g moving. This is a property of
-    measuring inside this emulator and generalizes beyond PHASE/DBCN
-    (D-0068). Linux and Unikraft will not have an equivalent dump
-    before their first byte reaches the client; leaving the dump
-    where it is biases the flagship cross-system metric against
-    Whimbrel. If measured runs ever stopped printing PHASE, the
-    decomposition and E0→E4 would come from different boots — that
-    would be its own line.
+14. **Estimate bias (D-0069).** Methodology prose, not only this bullet.
+    Three-for-three, all optimistic: finding 10, T4.4 leftovers (~40%),
+    T4.6 paging phases over range. Cost is not linear in operation
+    count; a fixed per-call cost does not scale down with N
+    (~75 ns/leaf over ~32k becoming ~1.3 µs/leaf over ~580). Any rung
+    that reduces an operation count will disappoint relative to linear
+    projection, because the fixed component becomes the dominant term.
+15. **Matched TCG secondaries.** T4.4 made later phases faster (warm
+    data cache after not touching ~125 MiB). T4.6 made `freeze` slower
+    (cold instruction translation after the hot loop's removal). Same
+    cause, opposite signs, both sub-instrumentation-noise. Presented
+    together under item 16.
+16. **The measurement apparatus and the measured system share state.**
+    QEMU's TCG (data cache, instruction translation) and the main loop
+    that pumps slirp are host state that guest work writes as a side
+    effect of existing. Two illustrations. The matched pair in item 15
+    is the cache/translation surface. The occupancy surface is guest
+    work after a guest-side stamp moving a host-observed edge: before
+    D-0068 the PHASE dump occupied TCG after E3g and delayed E4, so
+    E0→E4 measured instrumentation. The N-trial after this landing
+    records the correction; either direction is a validity line.
+    Linux and Unikraft will not have an equivalent dump before their
+    first byte reaches the client. If measured runs ever stopped
+    printing PHASE, the decomposition and E0→E4 would come from
+    different boots — that would be its own line.
