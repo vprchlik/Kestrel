@@ -264,14 +264,13 @@ extrapolated, 731 µs measured, ~75 ns/leaf over ~32k becoming
 
 ### Matched TCG secondaries (T4.4 and T4.6)
 
-Present them together. T4.4 made later phases faster: warm data
-cache and TLB after not touching ~125 MiB. T4.6 made `freeze`
-slower: cold instruction translation after the hot loop's removal.
-Same cause, opposite signs, both sub-instrumentation-noise in
-absolute terms. Together they illustrate threats item 16 —
-measuring inside an emulator means the measurement apparatus and
-the measured system share state. Named in the ladder rows; not
-rungs.
+T4.4 made later phases faster: warm data cache and TLB after not
+touching ~125 MiB. T4.6 made `freeze` slower: cold instruction
+translation after the hot loop's removal. Same cause, opposite
+signs, both sub-instrumentation-noise in absolute terms. Together
+they illustrate threats item 16 — measuring inside an emulator
+means the measurement apparatus and the measured system share
+state. Named in the ladder rows; not rungs.
 
 ### Ladder
 
