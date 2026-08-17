@@ -52,7 +52,8 @@ TCP connect to 127.0.0.1:8080 is what makes slirp ARP for 10.0.2.15.
 From T3.8 every invocation also carries `hostfwd=udp::7777-:7` (UDP
 echo on guest port 7). `tshark` above is what the harness uses to assert
 on those captures — without it, `just test` fails on a machine that has
-everything else.
+everything else. On Ubuntu 26.04+ the binary can be present and still
+fail every pcap read: §7 AppArmor.
 
 ## 2. Rust toolchain
 
@@ -166,6 +167,43 @@ below. T4.2 stamps from a KVM pod are ladder-ordering only.
 Missing evidence is a fail, not a skip. `governor=unavailable` is a fail
 on this host, not a recorded curiosity.
 
+The provisioned machine (Ubuntu 26.04, Ryzen 7 7800X3D, 8 cores SMT off,
+boost off, QEMU 10.2.1, steal 0) is the source of the turbo-off numbers
+in D-0055. Copy the harness machine-spec block into the report, not this
+sentence.
+
+### Required 26.04+ step: tshark AppArmor override
+
+Ubuntu 26.04 ships an **enforcing** AppArmor profile for `/usr/bin/tshark`
+that denies reads of pcaps under `$HOME`. The harness writes
+`whimbrel.pcap` in the repo; a clone under `$HOME` therefore fails every
+pcap assert after a green build and boot:
+
+```
+tshark: You don't have permission to read the file
+```
+
+The same binary reads a copy of that pcap in `/tmp` fine — that is the
+diagnostic, not the fix. Do not relocate the capture; QEMU and the
+asserts agree on a tree-local `whimbrel.pcap`.
+
+A **local** AppArmor override (host config, not this tree) is required
+on 26.04+ before `just test` or `just bench` can pass. Confirm a deny
+in the audit log (`apparmor="DENIED"` … `profile=…tshark` … the pcap
+path), install the override, reload the profile, and re-run `just test`
+until the pcap asserts pass. Older Ubuntu that never confined tshark
+does not need this step.
+
+### Measurement shell
+
+Run measurement — and `just test` when you need `check-utext` to see
+the kernel — from a **plain login shell**. Cursor's agent shell injects
+`CARGO_TARGET_DIR=/tmp/cursor-sandbox-cache/…`, so the image lands
+outside the tree and `check-utext` reports `no kernel at
+target/riscv64gc-unknown-none-elf/…`. That is an agent-shell artifact,
+not a distro bug. Unset `CARGO_TARGET_DIR` if you must use that shell.
+See DEBUGGING.md §7.
+
 ### What persists across reboot
 
 | Check | Persists? |
@@ -182,15 +220,18 @@ or turbo knob reset. Re-verify after every reboot; do not assume.
 
 ### What `scripts/bench.py` must assert (fail closed)
 
-The T4.1 harness **records** governor and per-trial steal but does not
-yet refuse a batch when they are wrong. Before the first report-grade
-batch, `just bench` / `scripts/bench.py` **must** check the table above
-and abort with `TEST FAIL` if any check fails — including "file missing",
-"command missing", and "mixed governors". It does not warn and continue.
-Steal is checked after the batch (any trial with `steal_ticks != 0`
-fails) as well as recorded. The stability criterion is unchanged
-(two interleaved 30-trial batches, max(2%, 200 µs)); these host checks
-are additional and do not widen it.
+`just bench` / `scripts/bench.py` **must** check the table above and
+abort with `TEST FAIL` if any check fails — including "file missing",
+"command missing", and "mixed governors". Missing evidence is a fail,
+not a skip. Steal is checked after the batch (any trial with
+`steal_ticks != 0` fails) as well as recorded. The five host-control
+fields (virt, cpufreq/governor, SMT, boost, steal) are also recorded
+on every `runs.csv` row. The stability criterion is unchanged (two
+interleaved 30-trial batches, max(2%, 200 µs)); these host checks are
+additional and do not widen it.
+
+Those asserts are landing from the dedicated-host tree. Do not
+implement them in this workspace — a carry-over diff is the source.
 
 A `--allow-dirty` style override for these host checks does **not**
 exist for report-grade runs. Gates (`just test`) do not run this gate.

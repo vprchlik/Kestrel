@@ -473,3 +473,19 @@ Work the list in order; each step either finds it or shrinks the search space.
    bug's home. Then take a real break.
 10. **Found it?** Add symptom → cause to §4, and if the fix embodies a choice,
     log it in DECISIONS.md.
+
+## 7. Host-side gate failures (not guest bugs)
+
+1. **`just test` boots to `M3 UNIKERNEL OK`, then every pcap assert
+   dies with `tshark: You don't have permission to read the file`.**
+   Ubuntu 26.04 ships an enforcing AppArmor profile for `/usr/bin/tshark`
+   that denies reads of pcaps under `$HOME`. The harness writes
+   `whimbrel.pcap` in the repo. A copy in `/tmp` reads fine — that is
+   the diagnostic, not the fix. Local AppArmor override: SETUP.md §7.
+   Confirm with the audit log (`apparmor="DENIED"` on the pcap path).
+2. **`check-utext: no kernel at target/riscv64gc-unknown-none-elf/…`
+   after a build that seemed to succeed.** Cursor's agent shell injects
+   `CARGO_TARGET_DIR=/tmp/cursor-sandbox-cache/…`, so cargo writes the
+   image outside the tree and `check-utext.sh` looks at the in-tree
+   default. Unset the variable, or run from a plain login shell
+   (SETUP.md §7). Not a distro issue.

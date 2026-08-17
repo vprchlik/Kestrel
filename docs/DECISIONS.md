@@ -1775,7 +1775,7 @@ D-0011 onward are working decisions made under those constraints.
   panic is a real miss.
 
 ## D-0055: M4 methodology frozen before any optimization
-- Date: 2026-08-16 — Status: accepted
+- Date: 2026-08-16 — Status: accepted (turbo-off override 2026-08-17)
 -   **Decision:** the benchmark protocol is fixed now and every M4 number
   obeys it. Per (system, config) batch: 3 warmup trials marked and
   excluded, 30 recorded trials. Warmup is round-robin across configs;
@@ -1810,11 +1810,13 @@ D-0011 onward are working decisions made under those constraints.
   Minimum as the headline statistic — theoretically closest to a floor
   under one-sided noise (rejected for comparisons: an order statistic
   improves with N and is unfair across systems with different noise
-  profiles; kept as the shown floor bound). Mean/stddev (rejected: one
+  profiles; kept as the shown floor bound).   Mean/stddev (rejected: one
   descheduled run poisons a mean invisibly). Deeper host surgery —
-  isolcpus, turbo off (rejected: breaks the runs-anywhere property;
-  `taskset` plus N trials plus recorded load average covers what the
-  claims need). Record-and-warn on QEMU mismatch (rejected: a
+  isolcpus, turbo off (rejected *for gates and for the original
+  runs-anywhere host*: breaks that property; `taskset` plus N trials
+  plus recorded load average covers what those claims need). **Overridden
+  for the dedicated host only — see Consequences.** Record-and-warn on
+  QEMU mismatch (rejected: a
   mixed-version CSV is silent corruption; fail loudly is the house rule).
   `-icount` for determinism (already rejected in D-0043).
 - **Rationale:** every before/after claim in the report is only as real
@@ -1893,11 +1895,19 @@ D-0011 onward are working decisions made under those constraints.
   measurement host). Required, and **fail-closed** in `scripts/bench.py`
   before a report-grade batch — missing evidence is a fail, not a skip:
   `systemd-detect-virt` = `none`, cpufreq present, every online CPU on
-  the performance governor, SMT off, turbo off, steal 0 on every trial
-  in the batch. The original alternative that rejected turbo-off / SMT
-  surgery still holds for gates; it does not hold for report numbers.
-  T4.1 records steal and governor but does not yet enforce this gate;
-  the first dedicated-host baseline lands the asserts with that batch.
+  the performance governor, SMT off, turbo/boost off, steal 0 on every
+  trial in the batch. The original alternative that rejected turbo-off
+  still holds for gates and for any machine that is not this host; it
+  does not hold for report numbers.
+  **Turbo-off override (dedicated host):** boost off costs ~20% peak
+  clock on the provisioned 7800X3D (4.2 GHz vs 5.05 GHz), so absolute
+  numbers are larger — TCG is host-bound. Boost-state and thermal
+  variance are removed, which is what the stability criterion measures.
+  Every compared system runs on this same host under the same boost-off
+  policy, so comparisons are unaffected; only the absolute floor moves.
+  Host-control asserts (virt / governor / SMT / boost /
+  steal, fail-closed, all five recorded in `runs.csv`) land from the
+  dedicated-host tree; do not implement them here.
   The cloud workspace is a pod on a KVM guest with no cpufreq and cannot
   meet this entry's host controls.
   **Harness findings that survive the move:** (1) per-trial `/proc/stat`
