@@ -1402,7 +1402,8 @@ accounting), D-0061 (`-bios none` charter; scoped amendment to D-0003),
 D-0062 (Linux baseline), D-0063 (Unikraft spike), D-0064 (report, claims
 discipline, convergence gate, audits, quizzes). Subsequent M4 entries:
 D-0065 (bump/lazy), D-0066 (E3w→E4 remainder), D-0067 (per-batch
-result files), D-0068 (PHASE dump must not sit on publish→E4). The
+result files), D-0068 (PHASE dump must not sit on publish→E4),
+D-0069 (pre-registration underestimates small-phase costs). The
 pre-M4 whole-tree
 audit is `docs/AUDIT-2026-08.md`; task text below cites its findings by
 number.
@@ -1625,31 +1626,32 @@ fix. Do not start this task.
 
 - **Acceptance:** ladder row disposition `declined-by-subsumption`.
 
-### T4.6 — Superpages, then `virtq_init`, then data-driven residue — M per rung
+### T4.6 — Superpages, then residue — M per rung
 Only rungs whose *attributed* projected gain ≥ 5% of the current E2→E3g
-median (D-0058). **2 MiB superpages (D-0059) landed in tree
-2026-08-17.** Mixed granularity, level-aware walker/verifier,
-grain-aware `map_range_2m` / `assert_range`, `EXPECTED_TABLES` = 5.
-Co-edit checklist (findings 24/25/27) walked in the same change.
-**Awaiting the bench-host N-trial** to fill the ladder row against the
-pre-registered ranges (paging 0.15–0.70 ms, fast E2→E3g 5.5–8.0 ms;
-falsify `page_verify` ≥ 1.0 ms or still 4K-stepping 1.5–2.2 ms). This
-pod's magnitudes are not report-grade (D-0055).
-**`virtq_init` (finding 4):** discarded first program+verify, 845.4 µs
-= 9% of T4.4 9.17 ms — **active candidate**, sequenced after the
-superpage N-trial; **not** bundled with `DRIVER_OK`. Against the freeze
-it was 4.0% of 21.42 ms and did not clear 5%.
-Other candidates, still data-driven: gate `ping_gateway` behind
-`not(fast-boot)` (diagnostics — gateway ARP and GARP stay in all
-profiles; needs its own decision entry since wire behavior changes);
-tick arming under fast-boot (legal only after T4.0b(c); needs the
-justfile `tick 3` co-edit, finding 27); E3g-tail work only if
-`syn_rx`→`E3g` shows kernel time worth taking. E3w→E4 remainder
-(D-0066) is the largest term in honest E0→E4; dump placement
-(D-0068: yield then dump, same boot) lands after the superpage
-N-trial and before the Linux baseline, not a 5%-bar kernel rung.
-Each rung: hypothesis → expected gain → land with its co-edit
-list → full gates → N-trial → ladder row → one commit.
+median (D-0058). **2 MiB superpages (D-0059) measured 2026-08-17**
+(batches `20260817T061753Z-1`/`-2`, git_sha `76830e13`, stability
+PASS both configs). Fast E2→E3g 9.17 → 6.43 ms (−30%), in the
+5.5–8.0 ms range. Cumulative from freeze 21.42 → 6.43 ms (3.3×).
+`page_verify` 731 µs (grain-correct; not the 1.5–2.2 ms 4K-stepping
+band). `tables_used` = 5. Both paging phases overran their ranges
+(D-0069). `freeze` 7.3 → 12.2 µs is a named TCG secondary, not a
+co-edit miss.
+**Profile after T4.6:** no phase exceeds 19%; seven clear the 5%
+bar (322 µs). Only `virtq_init` (842 µs = 13%) is a real remaining
+E2→E3g *candidate* (discarded first pass). The other six are the
+HTTP byte, D-0043 paranoia, necessary task slots, the live NIC
+pass, leftover page_build, and ARP wait. Ladder is **not** closed
+(one candidate still clears). Next *action* is D-0068 then the
+Linux baseline: E0→E4 is 51.67 ms, virtq_init is ~0.8 ms of that
+(1.6%). Do not take virtq_init next.
+**`virtq_init` (finding 4):** remains eligible at 13% of 6.43 ms;
+**not** bundled with `DRIVER_OK`. Ceiling on the gain: skip the
+discarded pass, keep `fill_descriptors`.
+Other residue, still data-driven: gate `ping_gateway` behind
+`not(fast-boot)`; tick arming under fast-boot (legal only after
+T4.0b(c)); E3g-tail only if `syn_rx`→`E3g` shows removable kernel
+time. Each rung: hypothesis → expected gain → land with its
+co-edit list → full gates → N-trial → ladder row → one commit.
 
 - **Acceptance:** every candidate landed-with-row or declined-with-reason;
   the ladder closes when no remaining candidate clears the 5% bar (the

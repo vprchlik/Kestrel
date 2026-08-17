@@ -29,8 +29,10 @@ AFTER_REV = "HEAD"
 
 BASELINE_BATCHES = frozenset({"20260817T041311Z-1", "20260817T041311Z-2"})
 BASELINE_SHA_PREFIX = "35861f3"
-AFTER_BATCHES = frozenset({"20260817T052349Z-1", "20260817T052349Z-2"})
-AFTER_SHA_PREFIX = "83ca9f9"
+AFTER_BATCHES = frozenset({"20260817T061753Z-1", "20260817T061753Z-2"})
+AFTER_SHA_PREFIX = "76830e13"
+# Caption label for the after-ladder CSV pin (not the baseline freeze).
+LADDER_LABEL = "superpages"
 
 SAFE = "release-default"
 FAST = "release-fast-boot"
@@ -69,8 +71,8 @@ PHASE_WHAT = {
     "stvec": "DBCN probe + CSR snapshot + trap install",
     "frame_init": "allocator init: eager free-list link at baseline; bump pointer after T4.4",
     "task_init": "fabricate four task frames (three Exited)",
-    "page_build": "Sv39 identity map, 4 KiB leaves",
-    "page_verify": "full second walk of the map (D-0043 paranoia)",
+    "page_build": "Sv39 identity map, mixed 4 KiB / 2 MiB leaves (D-0059)",
+    "page_verify": "full second walk of the map (D-0043 paranoia); grain-aware after D-0059",
     "activate": "`satp` write + `sfence.vma`",
     "virtq_init": "first virtqueue program+verify (wiped by later reset)",
     "DRIVER_OK": "virtio-net reset, second program+verify, DRIVER_OK",
@@ -97,7 +99,7 @@ PHASE_NECESSARY = {
     "page_build": "yes — Sv39",
     "page_verify": "no — paranoia; kept as its own line (D-0043)",
     "activate": "yes — paging on",
-    "virtq_init": "no — discarded first pass (finding 4); active candidate, 9% of T4.4 E2→E3g",
+    "virtq_init": "no — discarded first pass (finding 4); still above the 5% bar after superpages",
     "DRIVER_OK": "yes — the NIC; not bundled with virtq_init",
     "first_rx": "no — slirp RTT",
     "serving_ready": "ARP wait; not kernel compute",
@@ -331,9 +333,9 @@ def write_machine_spec(
     ]
     after_block = [
         "",
-        "## after-ladder (T4.4)",
+        f"## after-ladder ({LADDER_LABEL})",
         "",
-        *csv_field_block(after_rec, "T4.4 HEAD"),
+        *csv_field_block(after_rec, f"{LADDER_LABEL} HEAD"),
         f"rev:                   {AFTER_REV}",
         f"n_recorded:            {len(after_rec)}",
         f"batches:               {', '.join(sorted(AFTER_BATCHES))}",
@@ -398,12 +400,13 @@ def write_phase_table(
         )
     share_lines = [
         "",
-        f"T4.4 fast-boot E2→E3g median is **{fmt_ns(e2e3g_after_fast)}** "
-        f"(share denominator; baseline fast E2→E3g stays in the columns "
-        f"to the left). Share is (T4.4 phase median) / (T4.4 E2→E3g median), "
+        f"After-ladder ({LADDER_LABEL}) fast-boot E2→E3g median is "
+        f"**{fmt_ns(e2e3g_after_fast)}** (share denominator; baseline "
+        f"fast E2→E3g stays in the columns to the left). Share is "
+        f"(after-ladder phase median) / (after-ladder E2→E3g median), "
         "not a median of ratios.",
         "",
-        "| phase | T4.4 fast median | share of T4.4 E2→E3g |",
+        f"| phase | {LADDER_LABEL} fast median | share of {LADDER_LABEL} E2→E3g |",
         "|---|---:|---:|",
     ]
     ranked = []
@@ -426,7 +429,7 @@ def write_phase_table(
         f"`{sorted(BASELINE_BATCHES)[1]}`, n=60 per config).\n\n"
         f"After-ladder and Δ columns: `{AFTER_REV}` via "
         f"`git show {AFTER_REV}:results/{{runs,phases}}.csv` "
-        f"(T4.4 batches `{sorted(AFTER_BATCHES)[0]}` / "
+        f"({LADDER_LABEL} batches `{sorted(AFTER_BATCHES)[0]}` / "
         f"`{sorted(AFTER_BATCHES)[1]}`, measured kernel "
         f"`{AFTER_SHA_PREFIX}`, n=60 per config). After-ladder is the "
         f"fast-boot median. Δ is after-ladder minus baseline fast. "
@@ -543,7 +546,7 @@ def write_edges(
         lines,
         after_rec,
         after_phases,
-        "### After T4.4 (`HEAD`)",
+        f"### After-ladder ({LADDER_LABEL}, `HEAD`)",
     )
     return "\n".join(lines)
 

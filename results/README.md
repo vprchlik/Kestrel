@@ -26,9 +26,10 @@ price-of-paranoia contrast; it is supposed to differ.
 
 **The top-level CSVs are the latest run, overwritten, not appended.**
 `just bench` replaces `results/runs.csv` and `results/phases.csv`.
-T4.4's committed files are batches `20260817T052349Z-1` / `-2`
-(measured kernel `83ca9f9`). The T4.3 freeze rows are **not** in those
-files; they live in tag `baseline-t4.3` (commit `bce55a2`, measured
+T4.6 after-ladder pin: batches `20260817T061753Z-1` / `-2`
+(measured kernel `76830e13`). T4.4 rows live in git history
+(`867e28f`) until D-0067 per-batch files exist. The T4.3 freeze
+rows live in tag `baseline-t4.3` (commit `bce55a2`, measured
 kernel `35861f3`, batches `20260817T041311Z-1` / `-2`).
 
 **Exhibit generator (two git objects):** `just report-exhibits` runs
@@ -37,8 +38,9 @@ kernel `35861f3`, batches `20260817T041311Z-1` / `-2`).
 columns and `HEAD:results/{runs,phases}.csv` for after-ladder and Δ.
 It does not read the working tree, so a local `just bench` leftover
 cannot become an exhibit. Machine-spec baseline header comes from
-`git show baseline-t4.3:results/baseline-summary.txt`; the T4.4 block
-comes from HEAD CSV fields, not from `results/summary.txt`.
+`git show baseline-t4.3:results/baseline-summary.txt`; the
+after-ladder (superpages) block comes from HEAD CSV fields, not
+from `results/summary.txt`.
 
 Do not treat `results/summary.txt` as a report artifact; it is
 gitignored and may be a leftover from a local run.
@@ -91,7 +93,7 @@ copies are the same schema, one `batch_id` per directory.
 ```
 python3 scripts/report-exhibits.py \
   --baseline-tag baseline-t4.3 \
-  --after-batches 20260817T052349Z-1,20260817T052349Z-2
+  --after-batches 20260817T061753Z-1,20260817T061753Z-2
 ```
 
 - `--baseline-tag` (default `baseline-t4.3`): `git show
@@ -108,8 +110,8 @@ objects (`baseline-t4.3` vs `HEAD`) and does not grow argparse.
 Do not implement the flags against missing directories; a
 half-wired `--after-batches` that falls back to HEAD is fail-open.
 
-This pod does not run `just bench`. The bench host runs the
-superpage N-trial and is the first writer of `results/batches/`.
+This pod does not run `just bench`. The bench host runs N-trials
+and is the first writer of `results/batches/`.
 
 ## `runs.csv` — one row per trial
 

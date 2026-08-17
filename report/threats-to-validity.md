@@ -25,10 +25,11 @@ item is mitigated-and-measured or stated.
    the client's first byte is D-0068 (designed; not yet landed).
 9. **Host variance.** Report numbers are the dedicated Ubuntu 26.04
    host (7800X3D, 8 cores SMT off, boost off, performance governor,
-   QEMU 10.2.1, steal 0). Freeze and T4.4 each ran two interleaved
-   batches that met max(2%, 200 µs) on both configs. The KVM pod
-   failed this criterion and is not cited. Steal=0 is necessary, not
-   sufficient (USER_HZ=100) — recorded as a surviving T4.1 finding.
+   QEMU 10.2.1, steal 0). Freeze, T4.4, and T4.6 each ran two
+   interleaved batches that met max(2%, 200 µs) on both configs. The
+   KVM pod failed this criterion and is not cited. Steal=0 is
+   necessary, not sufficient (USER_HZ=100) — recorded as a surviving
+   T4.1 finding.
 10. **E3w fidelity.** filter-dump pcap timestamps are a QEMU realtime
     clock that does not match Python `time.time_ns()`. `e0_to_e3w_ns` is
     first-connect (monotonic from E0) plus the pcap-relative SYN/ACK→HTTP
@@ -45,12 +46,14 @@ item is mitigated-and-measured or stated.
     numbers are larger; boost-state and thermal variance are removed.
     All systems measured identically; comparisons unaffected; only the
     absolute floor moves.
-14. **Estimate bias.** Finding 10 and the T4.4 leftover bounds missed
-    in the same direction (predicted too fast). Superpage projections
-    are ranges for that reason (D-0059).
-15. **Cache/TLB secondary effects.** Removing a ~125 MiB walk moves
-    later phases a few percent without changing their code (T4.4
-    `page_verify`, `E3g`).
+14. **Estimate bias (D-0069).** Three-for-three, all optimistic:
+    finding 10, T4.4 leftovers (~40%), T4.6 paging phases over
+    range. Cost is not linear in operation count; per-call / TCG
+    floors dominate once N drops.
+15. **Cache/TLB / TCG-trace secondary effects.** T4.4 warmed later
+    phases by not touching ~125 MiB. T4.6 cooled `freeze`
+    (7.3 → 12.2 µs) by deleting the 32k-iteration verify loop.
+    Opposite sign, same class; named in the ladder row.
 16. **Guest work after a guest-side stamp can still move a
     host-observed edge.** QEMU's TCG and slirp share an execution
     loop. Instrumentation that runs *after* E3g (the PHASE dump

@@ -2135,17 +2135,23 @@ D-0011 onward are working decisions made under those constraints.
   bump design (and the D-0019 amendment) in its own entry before code.
   After bump: superpages (D-0059) if `page_build`+`page_verify` clears
   the 5% bar against the new denominator — T4.4 measured 3.84 ms = 42%
-  of 9.17 ms, so they are next. `page_verify` as a delete-the-pass rung
-  stays rejected (D-0043).
+  of 9.17 ms, so they were next. T4.6 measured them: paging 1.12 ms,
+  E2→E3g 6.43 ms. `page_verify` as a delete-the-pass rung stays
+  rejected (D-0043).
   **`virtq_init` candidate (finding 4):** the first program+verify pass,
   wiped by `net::init`'s reset. Against the freeze it was 850.5 µs =
   4.0% of 21.42 ms and did **not** clear 5%. After T4.4 it is 845.4 µs
-  = 9% of 9.17 ms (5% bar 458 µs) and is an **active candidate**,
-  sequenced after superpages. It is **not** bundled with `DRIVER_OK`
-  (545.5 µs): that sibling is the live pass, structurally necessary;
-  summing to manufacture a larger percentage would count work we are
-  not removing. `fill_descriptors` stays, so 845.4 µs is a ceiling on
-  the gain. The bar is 5% of the *current* median.
+  = 9% of 9.17 ms (5% bar 458 µs). After superpages it is 842 µs =
+  13% of 6.43 ms (5% bar 322 µs) and **remains eligible**. It is
+  **not** bundled with `DRIVER_OK` (543 µs): that sibling is the live
+  pass, structurally necessary; summing to manufacture a larger
+  percentage would count work we are not removing. `fill_descriptors`
+  stays, so 842 µs is a ceiling on the gain. The bar is 5% of the
+  *current* median. Sequencing after T4.6: D-0068 (dump placement)
+  then the Linux baseline take the honest number and the comparison
+  section; virtq_init stays recorded-eligible, not the next action
+  (see D-0069 / the T4.6 ladder read). The floor is **not** declared:
+  one candidate still clears 5% of E2→E3g.
   Further residue, still data-driven: `ping_gateway` gated out of
   fast-boot (needs its own decision entry: wire behavior changes; ARP
   wait and GARP stay in all profiles), tick arming under fast-boot
@@ -2187,16 +2193,17 @@ D-0011 onward are working decisions made under those constraints.
   survives as its own line is kept by construction. Expected arc, stated
   as an estimate and not a claim: bump/lazy collapsed `frame_init` and,
   by the same representation, `accounting` (and the safe profile's
-  second freeze walk); paging is now 42% of the remainder so superpages
-  are next; `virtq_init` cleared the bar against the new denominator
-  and follows. After those, firmware (~24 ms class) and the E3w→E4
-  host-side remainder (D-0066) dominate the honest number; D-0061 is
-  the firmware candidate by the ladder's own rule.
+  second freeze walk); superpages (D-0059) took paging from 42% of
+  9.17 ms to 1.12 ms of 6.43 ms. `virtq_init` still clears 5% of
+  E2→E3g (842 µs / 6.43 ms). After T4.6 the honest number is
+  dominated by firmware (~24 ms class) and E3w→E4 (D-0066 / D-0068);
+  D-0061 is the firmware candidate by the ladder's own rule. The
+  next *action* is D-0068, not another E2→E3g rung.
 
 ## D-0059: 2 MiB superpages for the RAM interior (amends D-0026)
-- Date: 2026-08-16 — Status: accepted (landed in tree 2026-08-17;
-  projection pre-registered as ranges; N-trial is the bench host, not
-  this pod)
+- Date: 2026-08-16 — Status: accepted (measured 2026-08-17; batches
+  `20260817T061753Z-1`/`-2`, git_sha `76830e13`, n=60, steal 0,
+  stability PASS both configs)
 - **Decision:** the identity map goes mixed-granularity. 4 KiB leaves
   stay for everything the map distinguishes at 4 KiB grain: kernel image
   W^X regions, guard holes, user sections, task-slot stacks and break
@@ -2297,8 +2304,43 @@ D-0011 onward are working decisions made under those constraints.
   `map_range` (4 KiB) still steps `PAGE_SIZE` for fine-grained
   regions; the named failed co-edit was a 4 KiB-step `assert_range`
   against L1 leaves, which would leave `page_verify` in the 1.5–2.2 ms
-  band. N-trial on the bench host is what fills the ladder row;
-  this pod's magnitudes are not report-grade (D-0055).
+  band.
+- **Consequences — measured T4.6 (dedicated host, batches
+  `20260817T061753Z-1`/`-2`, git_sha `76830e13`, n=60, steal 0,
+  stability PASS both configs):**
+  | metric | predicted | actual | verdict |
+  |---|---|---|---|
+  | `page_build` | 50–300 µs | 386 µs | over range; falsify-if ≥ 0.8 ms held |
+  | `page_verify` | 80–400 µs grain-correct; 1.5–2.2 ms if 4K-stepping | 731 µs | over range; far from the 4K-stepping band; falsify-if ≥ 1.0 ms and < 30 µs held |
+  | combined paging | 0.15–0.70 ms | 1.12 ms | over range |
+  | fast E2→E3g | 5.5–8.0 ms | 6.43 ms | **in range** |
+  | `tables_used` | 5–8 | 5 | hit; L1 leaves resolved |
+  Headline: fast E2→E3g 9.17 → 6.43 ms (−30%). Cumulative from
+  `baseline-t4.3` 21.42 → 6.43 ms (3.3×). Fast E0→E4 54.52 → 51.67 ms
+  (the 2.74 ms paging save showed up on the honest number). Grain-
+  correct path confirmed: 731 µs is not the 1.5–2.2 ms failed-co-edit
+  band. Arithmetic remainder if only paging moved: 9.17 − (3.84 −
+  1.12) = 6.45 ms; actual 6.43 ms. The headline range caught the
+  phase-range miss because it padded for D-0069; the phase ranges
+  did not pad enough.
+  **Estimate bias (D-0069), third data point.** Both paging phases
+  overran a range that was already 2–10× a linear-in-leaves
+  extrapolation. Linear `page_verify`: 2.39 ms × (~580 / ~32k) ≈
+  40 µs; registered 80–400 µs; measured 731 µs (~18× linear).
+  Same direction as finding 10 and T4.4 leftovers.
+  **`freeze` 7.3 → 12.2 µs (+67%).** `freeze()` is unchanged: one
+  `FROZEN` store; the `free_count()` println is not evaluated under
+  fast-boot (`src/console.rs` `#[cfg(not(feature = "fast-boot"))]`).
+  The frames-consumed assert moved to `EXPECTED_TABLES` but sits
+  *before* the accounting stamp, so it is not in this delta. Cause:
+  TCG/I-cache secondary of deleting the 32k-iteration verify loop
+  that previously ran immediately before accounting+freeze. T4.4's
+  secondary was a *warm* data cache after not touching ~125 MiB
+  (`page_verify` −7%, `E3g` −13%). This one is the opposite sign
+  on a few instructions: the hot `walk()` trace is gone, freeze+stamp
+  re-translate. Extra ~5 µs is stamp-overhead class (`stamp_b` is
+  5.5 µs). Not a second walk, not a co-edit miss. Named in the
+  ladder row so it is not an unexplained change. Not a rung.
 - Revisit trigger: none — D-0026's 4-KiB-only rule is superseded for
   the RAM interior and stands everywhere else.
 
@@ -2540,7 +2582,8 @@ D-0011 onward are working decisions made under those constraints.
   debug-era history killed by the regeneration rule; Linux-tuning
   fairness; Unikraft pin; instrumentation observer effect; host
   variance; E3w fidelity; E3w→E4 host remainder per D-0066;
-  reservation vs working set per D-0030) is
+  reservation vs working set per D-0030; estimate bias per D-0069;
+  TCG-trace secondaries) is
   maintained in the draft from day one.
 
 ## D-0065: Bump-pointer / lazy free list (T4.4; amends D-0019)
@@ -2786,7 +2829,7 @@ D-0011 onward are working decisions made under those constraints.
   notify. Only the *print* moves. `println_always` / DBCN is the
   occupancy; `rdtime` stores are not.
 - **Consequences:** implementation is a later change, after the
-  superpage N-trial, before T4.8. Gates that wait for `M3
+  superpage N-trial (done T4.6), before T4.8. Gates that wait for `M3
   UNIKERNEL OK` or PHASE lines will see them up to one tick later;
   E4 itself must not move later. If a subsequent rung removes tick
   arming from fast-boot, this `wfi` is illegal (D-0056.3 / finding
@@ -2802,5 +2845,51 @@ D-0011 onward are working decisions made under those constraints.
   measuring inside this emulator, not unique to PHASE/DBCN.
 - Revisit trigger: the dump-move change itself; or a tick-removal
   rung, which must replace the `wfi` first.
+
+## D-0069: Pre-registration underestimates small-phase costs
+- Date: 2026-08-17 — Status: accepted (finding; three data points)
+- **Decision:** treat optimistic small-phase estimates as a stated
+  property of this project's pre-registration, not as three
+  independent misses. When a rung's *phase* projection is a range
+  derived from "N operations × cheap per-op cost", expect the
+  measured median to land high. Headline E2→E3g ranges that
+  explicitly pad for this bias have held; the unpadded phase
+  ranges have not.
+  Three-for-three, all in the same direction (predicted too fast):
+  1. Audit finding 10: `task_init` / `virtq_init` / `stvec` — µs
+     on paper, sub-ms on the stamp table.
+  2. T4.4 leftovers (D-0065): `frame_init` 141 µs vs < 100 µs,
+     `accounting` 25 µs vs < 20 µs, safe `freeze` 100 µs vs < 50 µs
+     (~40% optimistic). Falsify-if ≥ 1 ms held.
+  3. T4.6 paging (D-0059): `page_build` 386 µs vs 50–300 µs,
+     `page_verify` 731 µs vs 80–400 µs. Combined 1.12 ms vs
+     0.15–0.70 ms. Fast E2→E3g 6.43 ms landed in the padded
+     5.5–8.0 ms headline range.
+- **Alternatives considered:** treating each overrun as a
+  distinct surprise (rejected: same sign, three campaigns).
+  Tightening the next rung's phase range to the linear
+  extrapolation (rejected: that is the mistake). Declaring
+  estimates useless (rejected: mechanism and magnitude of T4.4
+  and T4.6 were correct; the headline arithmetic was exact once
+  paging actually moved — 9.17 − 2.72 = 6.45 vs 6.43).
+- **Rationale:** we scale as if cost were linear in operation
+  count. At large N the per-call checks and TCG trace warmup
+  amortize (T4.4 `page_verify` ~75 ns/leaf over ~32k leaves). At
+  a few hundred they dominate (T4.6 ~1.3 µs/leaf over ~580
+  leaves, ~17× the linear extrapolation of ~40 µs). The 80–400 µs
+  range was already 2–10× linear and still undershot. Fixed
+  per-operation overhead — software-walk decode, level/grain
+  asserts, a colder TCG trace once the 32k loop is gone — does
+  not scale down with the count. Finding 10 was the same error
+  in miniature: paper costs counted the operation, not the
+  call/TCG floor.
+- **Consequences:** future phase projections pad more than a
+  linear remainder, or they are ranges wide enough that "over
+  range" is the expected miss and only the falsify-if line is
+  load-bearing. Threats item 14 is this finding, not a note.
+  It does not change the 5% bar (that bar is measured, not
+  estimated).
+- Revisit trigger: a fourth pre-registered small-phase range
+  that lands *low* would break the sign and reopen this.
 
 
