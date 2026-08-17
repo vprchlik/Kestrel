@@ -729,7 +729,7 @@ bench-whimbrel:
     bash scripts/bench.sh whimbrel
 
 # Fail-closed checks for the new asserts (missing tshark, malformed
-# PHASE, zero-trial CSV, QEMU/git mismatch, dirty tree).
+# PHASE, zero-trial CSV, QEMU/git mismatch, dirty tree, host controls).
 bench-selftest:
     bash scripts/bench.sh selftest
 
