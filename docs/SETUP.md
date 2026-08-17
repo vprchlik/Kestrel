@@ -122,3 +122,70 @@ CI/benchmarks (M4) should still run on Linux for comparability.
 `.cursor/environment.json` runs `scripts/install.sh` to provision the same
 toolchain in a fresh VM, so background agents can build and boot-test. Keep
 that script in lockstep with this document.
+
+## 7. Bench host (Ubuntu 26.04+)
+
+Report numbers come from a dedicated bare-metal Ubuntu host (D-0055), not
+from the cloud workspace. Two 26.04-specific steps are required before
+`just test` pcap asserts or `just bench-whimbrel` will pass; the cloud
+image did not hit either.
+
+**QEMU package split.** `qemu-system-misc` no longer ships
+`qemu-system-riscv64`. Install `qemu-system-riscv` instead (or as well).
+`scripts/install.sh` still names the old package — a 26.04 host that
+follows §1 alone gets QEMU but not the RISC-V binary.
+
+**tshark AppArmor (required).** Ubuntu 26.04 ships an enforcing profile
+for `/usr/bin/tshark` that can read pcaps under `/tmp` (the `user-tmp`
+abstraction) but not under a home-directory clone. Symptom:
+
+```
+TEST FAIL: tshark could not read whimbrel.pcap (status=3)
+tshark: You don't have permission to read the file "whimbrel.pcap".
+```
+
+`dmesg` / journal: `apparmor="DENIED" profile="tshark" name="…/whimbrel.pcap"`.
+The file itself is world-readable; Python can open it. The M4 harness
+calls `tshark -r` on `results/trials/.../qemu.pcap` under the same tree,
+so this blocks the report, not just `just test`.
+
+Add a **local** override, read-only, scoped to this clone — not a `$HOME`
+grant. `/etc/apparmor.d/tshark` already has `include if exists <local/tshark>`.
+
+```bash
+# Substitute the clone path if it is not /home/victor/src/Whimbrel.
+sudo tee /etc/apparmor.d/local/tshark >/dev/null <<'EOF'
+# Whimbrel bench host (Ubuntu 26.04+): tshark -r on filter-dump pcaps.
+owner /home/victor/src/Whimbrel/**.pcap r,
+owner /home/victor/src/Whimbrel/**.pcapng r,
+EOF
+sudo apparmor_parser -r /etc/apparmor.d/tshark
+tshark -r whimbrel.pcap -c 1   # from the repo root; must print a frame, not a permission error
+```
+
+`owner` matches the QEMU-written capture (same uid as the harness). A
+package upgrade of `tshark` does not clobber `local/tshark`.
+
+**Host controls (volatile; the harness asserts, it does not set).** At
+batch start `scripts/bench.py` fails closed unless:
+
+- `scaling_governor` == `performance`
+- `/sys/devices/system/cpu/smt/control` == `off`
+- `/sys/devices/system/cpu/cpufreq/boost` == `0`
+- `systemd-detect-virt` prints `none`
+- `/proc/stat` aggregate steal == 0
+
+None of SMT or boost persist across reboot (sysfs only; grub has no
+`nosmt`). The governor can look persistent because `power-profiles-daemon`
+stores `Profile=performance`, but a desktop power-menu click flips it
+back to Balanced — treat it as volatile too. Re-apply before a batch:
+
+```bash
+powerprofilesctl set performance
+sudo bash -c 'echo off > /sys/devices/system/cpu/smt/control; echo 0 > /sys/devices/system/cpu/cpufreq/boost'
+```
+
+On this AMD `amd-pstate-epp` host, `powerprofilesctl set performance`
+also sets `energy_performance_preference=performance`. The harness
+records the five controls on every `runs.csv` row so a violating batch
+is identifiable after the fact.
