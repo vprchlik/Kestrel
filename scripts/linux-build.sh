@@ -58,7 +58,8 @@ preflight() {
     [[ -f "$FRAG_TRIM" ]] || die "missing $FRAG_TRIM"
     [[ -f "$SERVER_C" ]] || die "missing $SERVER_C"
     [[ -f "$INITRAMFS_SPEC" ]] || die "missing $INITRAMFS_SPEC"
-    virt="$(systemd-detect-virt 2>/dev/null || echo missing)"
+    # systemd-detect-virt exits 1 on bare metal while still printing "none".
+    virt="$(systemd-detect-virt 2>/dev/null || true)"
     [[ "$virt" == "none" ]] || die "bench host only (systemd-detect-virt=$virt, want none)"
     if [[ -f /sys/devices/system/cpu/cpufreq/boost ]]; then
         boost="$(cat /sys/devices/system/cpu/cpufreq/boost)"
