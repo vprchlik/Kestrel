@@ -2578,8 +2578,8 @@ D-0011 onward are working decisions made under those constraints.
   table-generation script that `git show`s freeze CSVs from tag
   `baseline-t4.3` and after-ladder CSVs from a named git object
   (D-0067 — the harness overwrites `results/*.csv` per run; HEAD may
-  hold a later non-rung batch); `just bench`
-  regenerating every cited number is the acceptance test; the
+  hold a later non-rung batch). Regenerating cited numbers from
+  those objects is the acceptance test; the
   threats-to-validity list opened at T4.0 (TCG ≠ hardware; slirp as
   peer; client granularity measured; single hart and fixed RAM;
   debug-era history killed by the regeneration rule; Linux-tuning
