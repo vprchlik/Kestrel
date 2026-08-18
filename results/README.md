@@ -412,11 +412,58 @@ as D-0067 / D-0071.
    The artifacts themselves are not committed (size); the MANIFEST
    is.
 
+### What `linux-build` prints (merge verification)
+
+The build is only trustworthy if its output shows the merge did
+what the fragment intended. The recipe prints, in order:
+
+1. **Pin echo:** buildroot release, tarball sha256 with `verified
+   OK` against `PIN`, and the kernel version the tree pins.
+2. **Raw `merge_config.sh` output** for the trimmed build,
+   unfiltered.
+3. **Requested-vs-final table:** every line of
+   `linux-trimmed.fragment` against the trimmed final `.config` —
+   `CONFIG_X: requested y, final y` / `requested unset, final
+   unset` — with per-line PASS/FAIL. Any FAIL whose symbol is not
+   annotated in the fragment (a dependency re-enable recorded in a
+   comment) aborts the build:
+   `TEST FAIL: merge override not annotated: CONFIG_X requested
+   unset, final y`.
+4. **Config diff summary:** the kernel tree's `scripts/diffconfig`
+   between the stock final `.config` and the trimmed final
+   `.config` — the complete end-to-end delta, intended trims plus
+   dependency fallout, so the reviewer sees what the trim actually
+   changed rather than what the fragment asked for.
+5. **Artifact table:** path, byte size, sha256 for `Image-stock`,
+   `Image-trimmed`, `rootfs.cpio`, `init`, then the MANIFEST
+   contents just written.
+
+A build that cannot print all five blocks is a failed build.
+
 ### Campaign-time rules
 
-- The harness verifies MANIFEST sha256s before a batch and fails
-  closed on mismatch. No rebuild inside a batch, ever — the
-  Whimbrel analogue: build once per campaign, hash, verify.
+- **Hash verification, fail-closed shape:** at batch start, before
+  the first warmup trial boots, the harness hashes every Linux
+  artifact the batch will use and compares against the committed
+  MANIFEST. On any mismatch:
+
+  ```
+  TEST FAIL: linux artifact mismatch: bench/linux/artifacts/Image-trimmed
+    sha256=<actual> want <MANIFEST value>
+  ```
+
+  The batch does not start — no trial boots, no CSV row is
+  written. Not a warning, not a per-trial skip, and **never** an
+  automatic rebuild: a rebuild inside a batch is the silent-refresh
+  path fail-open harnesses die of (finding 31). The operator reruns
+  `just linux-build` (a new MANIFEST is a new commit) or restores
+  the artifact. A missing MANIFEST, a missing artifact file, or an
+  empty one fails the same way.
+- Belt and braces at read time: `runs.csv` `kernel_sha256` must
+  equal the MANIFEST value for that row's config; the summarizer
+  and exhibit generator fail closed on disagreement, so a row from
+  a stale artifact cannot survive into an exhibit even if it was
+  somehow recorded.
 - `runs.csv` `kernel_sha256` for Linux rows is the booted `Image`
   sha. The cpio sha and the `-append` string go in the batch header
   (`summary.txt`), like `s_ns`.
