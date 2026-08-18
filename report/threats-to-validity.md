@@ -7,7 +7,8 @@ item is mitigated-and-measured or stated.
 1. **TCG ≠ hardware.** Compute-dense phases and MMIO-dense phases are
    taxed differently than on silicon. Every claim carries "under QEMU TCG".
 2. **slirp is a peer**, not a wire. E3w−E3g prices virtio+slirp, not a NIC.
-   E3w→E4 prices hostfwd delivery plus client recv (D-0066).
+   E3w→E4 prices hostfwd delivery plus client recv (D-0066). After
+   D-0068 it is still ~31 ms of ~52 ms and unexplained.
 3. **Client granularity.** Persistent process. Measured median on the
    T4.3 freeze is **1.000 ms** (see `report/exhibits/machine-spec.md`
    `client_granularity_ns`). That cadence is connect-retry only; it
@@ -19,19 +20,18 @@ item is mitigated-and-measured or stated.
 6. **Linux-tuning fairness** (D-0062) — stated when that row exists.
 7. **Unikraft pin** (D-0063) — stated when that row exists.
 8. **Instrumentation observer effect.** Stamp overhead is a generated
-   edges-exhibit row (~5.5 µs fast-boot). `print_after_response` dumps
-   PHASE over DBCN after E3g and delayed E4 without moving E3g
-   (D-0066). Before D-0068, E0→E4 measured that dump — instrumentation,
-   not Whimbrel. The dump now yields first (same boot). The
-   dedicated-host N-trial records the correction; either direction is
-   a validity line.
+   edges-exhibit row (~5.5 µs fast-boot). D-0068 moved
+   `print_after_response` after a yield. Two N-trials produced no
+   E0→E4 improvement (`report/exhibits/dump-placement.md`). The yield
+   stays on principle. It did not solve E3w→E4.
 9. **Host variance.** Report numbers are the dedicated Ubuntu 26.04
    host (7800X3D, 8 cores SMT off, boost off, performance governor,
-   QEMU 10.2.1, steal 0). Freeze, T4.4, and T4.6 each ran two
-   interleaved batches that met max(2%, 200 µs) on both configs. The
-   KVM pod failed this criterion and is not cited. Steal=0 is
-   necessary, not sufficient (USER_HZ=100) — recorded as a surviving
-   T4.1 finding.
+   QEMU 10.2.1, steal 0). Freeze, T4.4, T4.6, and both D-0068
+   invocations each ran two interleaved batches that met max(2%, 200 µs)
+   on both configs. D-0068 additionally reproduced across two
+   independent campaigns. The KVM pod failed this criterion and is
+   not cited. Steal=0 is necessary, not sufficient (USER_HZ=100) —
+   recorded as a surviving T4.1 finding.
 10. **E3w fidelity.** filter-dump pcap timestamps are a QEMU realtime
     clock that does not match Python `time.time_ns()`. `e0_to_e3w_ns` is
     first-connect (monotonic from E0) plus the pcap-relative SYN/ACK→HTTP
@@ -65,11 +65,10 @@ item is mitigated-and-measured or stated.
     that pumps slirp are host state that guest work writes as a side
     effect of existing. Two illustrations. The matched pair in item 15
     is the cache/translation surface. The occupancy surface is guest
-    work after a guest-side stamp moving a host-observed edge: before
-    D-0068 the PHASE dump occupied TCG after E3g and delayed E4, so
-    E0→E4 measured instrumentation. The N-trial after this landing
-    records the correction; either direction is a validity line.
-    Linux and Unikraft will not have an equivalent dump before their
-    first byte reaches the client. If measured runs ever stopped
+    work after a guest-side stamp moving a host-observed edge. D-0068
+    tested the PHASE dump as that occupant: two N-trials, no E4
+    movement. The dump stays off the interval on principle. E3w→E4
+    is open (~31 ms of ~52 ms). Linux and Unikraft share slirp/hostfwd
+    and will not share a PHASE dump. If measured runs ever stopped
     printing PHASE, the decomposition and E0→E4 would come from
     different boots — that would be its own line.

@@ -2148,11 +2148,11 @@ D-0011 onward are working decisions made under those constraints.
   percentage would count work we are not removing. `fill_descriptors`
   stays, so 842 µs is a ceiling on the gain. The bar is 5% of the
   *current* median. Sequencing after T4.6: D-0068 (dump placement)
-  landed in tree; the dedicated-host N-trial then the Linux baseline
-  take the honest number and the comparison section; virtq_init stays
-  recorded-eligible, not the next action (see D-0069 / the T4.6
-  ladder read). The floor is **not** declared: one candidate still
-  clears 5% of E2→E3g.
+  landed and was measured — occupancy not confirmed; yield kept.
+  The Linux baseline takes the honest number with E3w→E4 stated
+  open; virtq_init stays recorded-eligible, not the next action
+  (see D-0069 / the T4.6 ladder read). The floor is **not** declared:
+  one candidate still clears 5% of E2→E3g.
   Further residue, still data-driven: `ping_gateway` gated out of
   fast-boot (needs its own decision entry: wire behavior changes; ARP
   wait and GARP stay in all profiles), tick arming under fast-boot
@@ -2199,8 +2199,8 @@ D-0011 onward are working decisions made under those constraints.
   E2→E3g (842 µs / 6.43 ms). After T4.6 the honest number is
   dominated by firmware (~24 ms class) and E3w→E4 (D-0066 / D-0068);
   D-0061 is the firmware candidate by the ladder's own rule. The
-  next *action* after D-0068's N-trial is the Linux baseline, not
-  another E2→E3g rung.
+  next *action* is the Linux baseline, not another E2→E3g rung.
+  E3w→E4 is open.
 
 ## D-0059: 2 MiB superpages for the RAM interior (amends D-0026)
 - Date: 2026-08-16 — Status: accepted (measured 2026-08-17; batches
@@ -2576,8 +2576,9 @@ D-0011 onward are working decisions made under those constraints.
   audit — are what let it claim floor-finding instead of benchmarketing.
 - **Consequences:** `report/` lives in-repo; markdown source plus a
   table-generation script that `git show`s freeze CSVs from tag
-  `baseline-t4.3` and after-ladder CSVs from `HEAD` (D-0067 — the
-  harness overwrites `results/*.csv` per run); `just bench`
+  `baseline-t4.3` and after-ladder CSVs from a named git object
+  (D-0067 — the harness overwrites `results/*.csv` per run; HEAD may
+  hold a later non-rung batch); `just bench`
   regenerating every cited number is the acceptance test; the
   threats-to-validity list opened at T4.0 (TCG ≠ hardware; slirp as
   peer; client granularity measured; single hart and fixed RAM;
@@ -2586,7 +2587,7 @@ D-0011 onward are working decisions made under those constraints.
   variance; E3w fidelity; E3w→E4 host remainder per D-0066;
   reservation vs working set per D-0030; estimate bias per D-0069;
   TCG-trace secondaries as a matched pair under item 16; D-0068
-  dump occupancy and its measured correction) is
+  dump occupancy tested and not confirmed; E3w→E4 open) is
   maintained in the draft from day one.
 
 ## D-0065: Bump-pointer / lazy free list (T4.4; amends D-0019)
@@ -2698,16 +2699,11 @@ D-0011 onward are working decisions made under those constraints.
   The interval is tens of milliseconds, not a µs loopback. D-0043's
   original "E4−E3w the host loopback" understated a structural term.
   It is also not a single fixed timer: freeze fast was 41.24 ms; T4.4
-  fast is 33.87 ms; T4.4 safe is 94.46 ms. Safe vs fast scaling
-  implicates QEMU occupancy after publish — TCG and slirp share a
-  loop, and Whimbrel's next act after E3g is `print_after_response`
-  (DBCN, one `ecall` per byte, `println_always`). That dump cannot
-  move E3g or the filter-dump timestamp; it can delay hostfwd delivery
-  to the client. The shared conduit (QEMU user-net + the same client)
-  applies to Linux and Unikraft equally; the PHASE dump is
-  Whimbrel-only extra occupancy on E0→E4. May be reducible later
-  (defer or slim the dump; TAP / passt; `TCP_NODELAY` on hostfwd) but
-  that is not a 5%-bar kernel rung and is not this change.
+  fast is 33.87 ms; T4.6 fast is 31.04 ms; T4.4 safe is 94.46 ms;
+  T4.6 safe is 92.50 ms. Safe vs fast scaling implicated QEMU
+  occupancy after publish. The PHASE dump was the natural candidate
+  (D-0068). Two N-trials of yield-then-dump left E3w→E4 untouched.
+  The remainder is open.
 - **Alternatives considered:** treating E4−E3w as client-cadence
   quantization (rejected: cadence does not run after connect). Treating
   it as slirp-only wire delay identical across configs (rejected: safe
@@ -2722,12 +2718,10 @@ D-0011 onward are working decisions made under those constraints.
   the guest.
 - **Consequences:** methodology and threats cite this entry. Cross-system
   E0→E4 still uses the same client and slirp, so comparisons remain
-  defined; Whimbrel's PHASE dump is a stated extra. A diagnostic that
-  skipped the dump would falsify the occupancy hypothesis if E3w→E4
-  collapsed; that experiment is not this rung. Placement of the dump
-  so it cannot sit between publish and the client's first byte is
-  D-0068 — landed in tree after the superpage N-trial; the
-  dedicated-host N-trial of the yield records the correction.
+  defined. D-0068 tested dump occupancy and did not take the term.
+  E3w→E4 is an open threats item (~31 ms of ~52 ms), not a solved
+  one. TAP / passt / `TCP_NODELAY` on hostfwd remain host-side
+  candidates, not 5%-bar kernel rungs.
 
 ## D-0067: Per-batch result files (harness recommendation)
 - Date: 2026-08-17 — Status: accepted (approved; design only — the
@@ -2737,7 +2731,9 @@ D-0011 onward are working decisions made under those constraints.
   each run. T4.4 overwrote the freeze rows; those rows live in tag
   `baseline-t4.3` (commit `bce55a2`). The exhibit generator now
   sources baseline columns from that tag and after-ladder columns
-  from `HEAD` via `git show`, and does **not** read the working tree.
+  from a named git object via `git show` (the T4.6 superpage CSV
+  commit, not necessarily `HEAD`: a later non-rung batch may sit
+  at HEAD), and does **not** read the working tree.
   That unblocks a two-rung table. A five-rung ladder would otherwise
   be archaeology across five commits to regenerate one exhibit.
   Recommended layout, implemented on the bench host:
@@ -2762,7 +2758,8 @@ D-0011 onward are working decisions made under those constraints.
   Exhibit generator, once those files exist: keep `--baseline-tag`
   (default `baseline-t4.3`) and add `--after-batches <id>,<id>` that
   reads `results/batches/<id>/{runs,phases}.csv` and concatenates.
-  Until then, `--after` is `HEAD` via `git show`. Fail closed on
+  Until then, `--after` is a named git object via `git show` (T4.6
+  CSV commit `c40945c`, not necessarily HEAD). Fail closed on
   mixed `git_sha`, mixed QEMU, dirty rows, n≠60, steal≠0 — same
   checks as today.
 - **Alternatives considered:** append-only `results/runs.csv`
@@ -2779,13 +2776,14 @@ D-0011 onward are working decisions made under those constraints.
 - **Consequences:** `results/README.md` is the bench-host spec:
   directory layout, what stays at `results/{runs,phases}.csv`, and
   the generator's `--baseline-tag` / `--after-batches` interface.
-  Until those files exist, the generator stays two `git show`
-  objects and does not grow argparse. No change to
+  Until those files exist, the generator stays named `git show`
+  objects (baseline tag, T4.6 CSV commit, D-0068 run pins) and does
+  not grow argparse. No change to
   `scripts/bench.py` in this tree.
 
 ## D-0068: Do not dump PHASE between publish and the client's first byte
-- Date: 2026-08-17 — Status: accepted (landed in tree; dedicated-host
-  N-trial records the E0→E4 correction)
+- Date: 2026-08-17 — Status: accepted (landed; measured 2026-08-18;
+  occupancy hypothesis not confirmed; yield kept)
 - **Decision:** `print_after_response` must not run between publishing
   the HTTP response and the client reading it. **Same-boot deferral
   via a yield, then dump.** After first-HTTP `wait_tx` /
@@ -2796,14 +2794,20 @@ D-0011 onward are working decisions made under those constraints.
   Do **not** spin waiting for FIN or for a timer in software: a
   post-publish poll loop occupies TCG the same way the dump does
   and would still delay hostfwd. `wfi` returns the vCPU to QEMU's
-  main loop so slirp/hostfwd can deliver the already-queued frame;
-  E4 happens during that halt; the dump runs after.
+  main loop so slirp/hostfwd can deliver the already-queued frame.
   Do **not** set `sstatus.SIE` around the `wfi`: the call is from
   the trap handler, hardware already cleared SIE, and setting it
   reopens D-0036. `wfi` wakes when `sip.STIP` becomes pending even
   if the interrupt is not taken. Re-arm is load-bearing: a leftover
   STIP (tick during this syscall, not taken because SIE is 0) would
   make `wfi` a no-op and leave the dump on the publish→E4 path.
+  **Measured (two invocations, four batches, stability PASS):**
+  E2→E3g unchanged; E0→E4 did not improve; E3w→E4 untouched in
+  both profiles (`report/exhibits/dump-placement.md`). The
+  pre-registered claim that this dump was the tens-of-milliseconds
+  occupant is refuted for the one-tick implementation. The yield
+  stays: instrumentation off the measured path is correct even
+  when the measured cost is zero.
 - **Alternatives considered:**
   1. **Gate the dump behind a feature so measured runs never print
      PHASE**, reading the array another way (GDB, a second boot,
@@ -2829,42 +2833,44 @@ D-0011 onward are working decisions made under those constraints.
   5. **Assume ticks are still armed** (rejected: finding 13. A
      later rung that drops tick arming would hang the HTTP path
      with no panic. Assert `sie.STIE` and fail loudly).
+  6. **Revert the yield after the N-trial showed no E4 movement**
+     (rejected: putting DBCN back on an unexplained interval
+     confuses the next experiment. A `wfi` is not occupancy).
+  7. **Extend to a yield that brackets ~31 ms in the same change**
+     (rejected: that is a new diagnostic, not this landing. Name
+     it; do not ship it unmeasured).
 - **Rationale:** if the PHASE dump (DBCN, one `ecall` per byte)
   runs after publish while TCG occupies the loop that pumps slirp,
-  E0→E4 measures Whimbrel's instrumentation, not Whimbrel. Linux
-  and Unikraft have no equivalent dump before their first byte
-  reaches the client. That biases the flagship cross-system metric
-  against us by tens of milliseconds. D-0066 named the remainder;
-  this entry is the fix, sequenced before the Linux row because a
-  methodology note is not enough once the comparison section would
-  otherwise attribute our DBCN to our kernel.
-  Stamps stay where they are: E3g at publish, E3g_doorbell after
-  notify. Only the *print* moves. `println_always` / DBCN is the
-  occupancy; `rdtime` stores are not.
+  E0→E4 measures Whimbrel's instrumentation, not Whimbrel. That
+  was the hypothesis. The N-trial did not confirm it. The dump
+  still should not sit on publish→E4: Linux and Unikraft have no
+  equivalent, and leaving DBCN there would mix a known observer
+  into an unknown remainder. Stamps stay where they are: E3g at
+  publish, E3g_doorbell after notify. Only the *print* moves.
 - **Consequences:** `src/timer.rs` owns `assert_ticks_armed` /
   `yield_once`; `src/net.rs` calls them after first-HTTP `wait_tx`.
   Gates that wait for `M3 UNIKERNEL OK` or PHASE lines see them up
-  to one tick later; E4 itself must not move later. If a subsequent
-  rung removes tick arming from fast-boot, this `wfi` is illegal
-  (D-0056.3 / finding 13) and must be replaced with a wake that is
-  not the timer — not with a return to dumping on the measured
-  path. The dedicated-host N-trial records how far E0→E4 and
-  E3w→E4 move; that magnitude is a threats-to-validity entry
-  regardless of sign (report/draft item 16). Until that CSV exists
-  the draft states the claim and does not invent a KVM-pod delta.
+  to one tick later. A subsequent rung that removes tick arming
+  from fast-boot must replace this `wfi` first (D-0056.3 / finding
+  13).
+  **Why no change does not yet prove D = 0.** If dump occupancy D
+  is serialized with remaining host time H, observed E3w→E4 is
+  D+H. Yield Y < H reorders to Y + D + (H−Y) = D+H. One tick is
+  ~10 ms; the fast gap is ~31 ms. The discriminating test is
+  Y large enough to bracket that gap. Independent evidence already
+  leans host-side for most of the term: the dump is `println_always`
+  (identical in safe and fast, both release / opt-level 3), so it
+  cannot be the 3×; E3w→E4 already moved freeze→T4.4→T4.6 with the
+  dump unmoved. What scales with profile after E3g is TCG/QEMU
+  state after 76 ms vs 6.4 ms of guest boot, plus safe-only
+  `println!` on TX complete (tens of bytes, not 60 ms).
+  E3w→E4 returns to threats as an open item (~31 ms of ~52 ms).
   **Tradeoff if someone later chooses split-boot anyway:** the
   phase decomposition and the honest E0→E4 number are not the same
   machine-state and must be stated as a threats line.
-  **Threats general form:** instrumentation on the guest can
-  perturb host-observed edges even when it runs *after* the
-  guest-side stamp, because QEMU's TCG and slirp share an
-  execution loop. That is a property of measuring inside this
-  emulator, not unique to PHASE/DBCN. The T4.4/T4.6 TCG
-  secondaries are the same threat with the opposite surface
-  (shared cache/translation state, not occupancy).
-- Revisit trigger: the dedicated-host N-trial (fill the correction
-  magnitude); or a tick-removal rung, which must replace the `wfi`
-  first.
+- Revisit trigger: a yield that brackets ~31 ms (discriminate
+  too-short implementation from dump-irrelevant host term); or a
+  tick-removal rung, which must replace the `wfi` first.
 
 ## D-0069: Pre-registration underestimates small-phase costs
 - Date: 2026-08-17 — Status: accepted (finding; three data points)

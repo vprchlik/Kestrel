@@ -2,7 +2,7 @@
 
 Host-observed edges and guest E2→E3g. Warmup excluded, both batches of each freeze pooled (n=60 recorded per config). E3w is first-connect plus the pcap-relative SYN/ACK→HTTP interval (D-0043); E3w→E4 is `e0_to_e4_ns − e0_to_e3w_ns`.
 
-Baseline sourced from `git show baseline-t4.3:results/{runs,phases}.csv`. After-ladder sourced from `git show HEAD:results/{runs,phases}.csv`.
+Baseline sourced from `git show baseline-t4.3:results/{runs,phases}.csv`. After-ladder sourced from `git show c40945cdb71b5aef68c5e72e292a718b66ec651e:results/{runs,phases}.csv`.
 
 ### Baseline (`baseline-t4.3`)
 
@@ -22,20 +22,20 @@ Baseline sourced from `git show baseline-t4.3:results/{runs,phases}.csv`. After-
 | release-default | E3g_doorbell − E3g | 60 | 388.6 µs | 7.6 µs | 375.2 µs |
 | release-fast-boot | stamp overhead (`stamp_b`−`stamp_a`) | 60 | 5.5 µs | 125 ns | 5.3 µs |
 
-### After T4.4 (`HEAD`)
+### After-ladder (superpages, `c40945cdb71b`)
 
 | config | metric | n | median | IQR | min |
 |---|---|---:|---:|---:|---:|
-| release-fast-boot | E0→first-connect | 60 | 18.61 ms | 307.5 µs | 17.85 ms |
-| release-fast-boot | E0→E3w | 60 | 20.74 ms | 324.4 µs | 19.94 ms |
-| release-fast-boot | E0→E4 | 60 | 54.52 ms | 314.0 µs | 54.10 ms |
-| release-fast-boot | E3w→E4 | 60 | 33.87 ms | 431.8 µs | 33.29 ms |
-| release-fast-boot | E2→E3g | 60 | 9.17 ms | 73.2 µs | 9.07 ms |
-| release-fast-boot | E3g_doorbell − E3g | 60 | 79.2 µs | 1.6 µs | 76.5 µs |
-| release-default | E0→first-connect | 60 | 18.57 ms | 240.1 µs | 17.81 ms |
-| release-default | E0→E3w | 60 | 29.54 ms | 290.1 µs | 28.66 ms |
-| release-default | E0→E4 | 60 | 123.94 ms | 594.7 µs | 123.08 ms |
-| release-default | E3w→E4 | 60 | 94.46 ms | 583.1 µs | 93.72 ms |
-| release-default | E2→E3g | 60 | 78.25 ms | 507.0 µs | 77.51 ms |
-| release-default | E3g_doorbell − E3g | 60 | 378.1 µs | 18.3 µs | 359.5 µs |
-| release-fast-boot | stamp overhead (`stamp_b`−`stamp_a`) | 60 | 5.5 µs | 100 ns | 5.3 µs |
+| release-fast-boot | E0→first-connect | 60 | 18.53 ms | 337.5 µs | 17.92 ms |
+| release-fast-boot | E0→E3w | 60 | 20.64 ms | 338.6 µs | 19.99 ms |
+| release-fast-boot | E0→E4 | 60 | 51.66 ms | 277.5 µs | 50.93 ms |
+| release-fast-boot | E3w→E4 | 60 | 31.04 ms | 443.9 µs | 30.48 ms |
+| release-fast-boot | E2→E3g | 60 | 6.43 ms | 56.9 µs | 6.26 ms |
+| release-fast-boot | E3g_doorbell − E3g | 60 | 78.1 µs | 1.8 µs | 75.6 µs |
+| release-default | E0→first-connect | 60 | 18.55 ms | 494.3 µs | 17.75 ms |
+| release-default | E0→E3w | 60 | 29.47 ms | 544.7 µs | 28.58 ms |
+| release-default | E0→E4 | 60 | 121.85 ms | 879.5 µs | 120.92 ms |
+| release-default | E3w→E4 | 60 | 92.50 ms | 813.5 µs | 91.52 ms |
+| release-default | E2→E3g | 60 | 76.28 ms | 692.6 µs | 75.65 ms |
+| release-default | E3g_doorbell − E3g | 60 | 379.1 µs | 18.3 µs | 317.6 µs |
+| release-fast-boot | stamp overhead (`stamp_b`−`stamp_a`) | 60 | 5.5 µs | 100 ns | 5.2 µs |

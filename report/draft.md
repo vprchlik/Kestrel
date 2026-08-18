@@ -6,11 +6,14 @@ by `scripts/report-exhibits.py`. Regeneration: `just report-exhibits`.
 Do not type table cells.
 
 The harness overwrites `results/runs.csv` and `results/phases.csv` per
-run. The exhibit generator therefore reads two git objects, not the
+run. The exhibit generator therefore reads git objects, not the
 working tree: **baseline columns** from tag `baseline-t4.3` (measured
-kernel `35861f3`), **after-ladder and Δ** from `HEAD` (superpages,
-measured kernel `76830e13`). See [exhibits/phase-decomposition.md](exhibits/phase-decomposition.md)
-caption and D-0067.
+kernel `35861f3`), **after-ladder and Δ** from the T4.6 superpage CSV
+commit (measured kernel `76830e13`), **D-0068 dump-placement** from
+that commit plus the two yield-then-dump CSV commits. See
+[exhibits/phase-decomposition.md](exhibits/phase-decomposition.md)
+caption and D-0067. `HEAD` may hold a later non-rung batch; it is not
+the after-ladder pin.
 
 Conditions, stated once: QEMU TCG, `virt` machine, `-bios default`,
 slirp as the TCP peer, dedicated Ubuntu 26.04 host, boost off. Not
@@ -29,8 +32,8 @@ had been two walks of the frame free list; T4.4 collapsed those;
 T4.6 mixed-granularity paging took the next 42%. Safe vs fast is
 still a large factor. Cross-system rows (Linux, Unikraft) are empty
 until T4.8/T4.9. The largest single term in the honest E0→E4
-number is host-side (E3w→E4; D-0066); dump placement is D-0068
-(landed; dedicated-host N-trial records the correction).
+number is host-side (E3w→E4; D-0066). D-0068 moved the PHASE dump
+off that interval and did not change the term.
 
 ---
 
@@ -69,8 +72,17 @@ attributed delta. Statistics: median and IQR; min shown as the
 observed floor bound; means never. Stability: two interleaved
 30-trial batches, per-metric medians within max(2%, 200 µs) for
 every metric ≥ 1 ms. The criterion passed on this host for both
-configs on the freeze, T4.4, and T4.6; it failed on the KVM pod,
-so that pod's numbers are not cited here.
+configs on the freeze, T4.4, T4.6, and both D-0068 invocations; it
+failed on the KVM pod, so that pod's numbers are not cited here.
+
+**Reproducibility beyond interleaved batches.** D-0055's stability
+check is two shuffled halves of one campaign. D-0068 ran twice:
+four batches, two independent invocations, different shuffle seeds,
+kernels a CSV-commit apart. [exhibits/dump-placement.md](exhibits/dump-placement.md)
+reports the pairwise relative disagreement. Two campaigns
+reproducing is a stronger claim than one campaign splitting, and
+the generated figure is inside max(2%, 200 µs) on every compared
+median.
 
 **Baseline freeze.** Tag `baseline-t4.3` (CSV freeze commit `bce55a2`).
 Measured kernel git SHA `35861f3`. Batches `20260817T041311Z-1` and
@@ -85,8 +97,9 @@ after-ladder columns.
 
 **T4.6 after-ladder (superpages).** Batches `20260817T061753Z-1`
 and `20260817T061753Z-2`, measured kernel `76830e13`, sourced from
-`git show HEAD:results/{runs,phases}.csv`. Machine-spec fields come
-from those CSV rows, not from `results/summary.txt`.
+`git show c40945c:results/{runs,phases}.csv` (the T4.6 CSV commit,
+not necessarily `HEAD`). Machine-spec fields come from those CSV
+rows, not from `results/summary.txt`.
 
 Host-control asserts (virt / governor / SMT / boost / steal) fail
 closed at batch start. Boost-off is a dedicated-host override of
@@ -152,29 +165,27 @@ co-edit misses. Together they illustrate threats item 16.
 
 The occupancy case of the same threat is the PHASE dump. Until
 D-0068, `print_after_response` ran immediately after first-HTTP
-`wait_tx`. E3g had already been stored; E4 had not. DBCN is one
-`ecall` per byte, so the dump occupied TCG on the same thread that
-pumps slirp/hostfwd. **E0→E4 before this fix was measuring
-Whimbrel's instrumentation, not Whimbrel.** Linux and Unikraft have
-no equivalent dump before their first byte. The mechanism is
-same-boot: after `wait_tx` / `E3g_doorbell`, `timer::yield_once`
-asserts ticks are armed (finding 13), re-arms a future deadline so
-a leftover `sip.STIP` cannot make `wfi` a no-op, executes one `wfi`,
-then prints PHASE and `M3 UNIKERNEL OK`. Stamps do not move. The
-dedicated-host N-trial records how far E0→E4 and E3w→E4 move; that
-magnitude is a threats-to-validity entry regardless of which
-direction it moves. This draft does not cite a KVM-pod delta.
+`wait_tx`. The hypothesis was that DBCN occupied TCG on the thread
+that pumps slirp and that E0→E4 therefore measured instrumentation.
+The mechanism landed: after `wait_tx` / `E3g_doorbell`,
+`timer::yield_once` asserts ticks are armed (finding 13), re-arms,
+`wfi`s once, then prints. Two N-trials produced no improvement.
+The dump stays after the yield: instrumentation off the measured
+path is correct even when the measured cost is zero. E3w→E4 remains
+open — see Results.
 
 Exhibit tables: [phase decomposition](exhibits/phase-decomposition.md)
-(D-0064 centerpiece columns) and [edges](exhibits/edges.md).
+(D-0064 centerpiece columns), [edges](exhibits/edges.md), and
+[dump placement](exhibits/dump-placement.md).
 
 ---
 
 ## Results
 
 The centerpiece is [exhibits/phase-decomposition.md](exhibits/phase-decomposition.md).
-Host-observed edges: [exhibits/edges.md](exhibits/edges.md). Figures
-in the findings below are those generated tables, in prose.
+Host-observed edges: [exhibits/edges.md](exhibits/edges.md). D-0068
+dump placement: [exhibits/dump-placement.md](exhibits/dump-placement.md).
+Figures in the findings below are those generated tables, in prose.
 
 ### Two walks, one root cause (T4.3 freeze)
 
@@ -253,7 +264,7 @@ phase ranges overran (D-0069). Every falsification line held.
 | unnamed phase vanishes | would falsify | none vanished | held |
 
 Headline edges: fast E2→E3g 9.17 → 6.43 ms (−30%); cumulative from
-`baseline-t4.3` 21.42 → 6.43 ms (3.3×); fast E0→E4 54.52 → 51.67 ms.
+`baseline-t4.3` 21.42 → 6.43 ms (3.3×); fast E0→E4 54.52 → 51.66 ms.
 Arithmetic remainder if only paging moved: 9.17 − 2.72 = 6.45 ms;
 actual 6.43 ms.
 
@@ -272,6 +283,63 @@ they illustrate threats item 16 — measuring inside an emulator
 means the measurement apparatus and the measured system share
 state. Named in the ladder rows; not rungs.
 
+### D-0068: dump placement did not move E3w→E4
+
+Pre-registered: the PHASE dump between publish and the client's
+first byte occupied TCG on the loop that pumps slirp, so E0→E4
+measured instrumentation, and that occupancy was the natural
+account of tens of milliseconds of E3w→E4 — including why safe
+is ~3× worse than fast on that term. The mechanism landed (one
+`wfi` after `wait_tx`, then dump, same boot). The generated
+comparison is [exhibits/dump-placement.md](exhibits/dump-placement.md).
+
+E2→E3g unchanged is correct: the stamps did not move. E0→E4 did
+not improve in either invocation. E3w→E4 is untouched in both
+profiles. The pre-registered claim is refuted for this
+implementation.
+
+Before keep / extend / revert, two possibilities.
+
+**The yield is ineffective, not the hypothesis wrong.** One `wfi`
+returns on the next armed tick (~10 ms). If dump occupancy D is
+serialized with remaining host time H, the observed gap is D+H.
+A yield Y < H reorders the same work: Y of delivery, then D of
+dump, then H−Y of delivery. Total still D+H. No change is what
+both a too-short yield and a dump-irrelevant gap predict. The
+discriminating test is a yield long enough to bracket the entire
+fast gap (~31 ms). If that collapses E3w→E4, the mechanism was
+right and one tick under-shot. That test is not this change and
+is not a kernel rung.
+
+**The gap is host-side, unrelated to guest dump occupancy.** Then
+the dump is not why safe is 3× worse, and something else that
+scales with profile after E3g has to be. Both measured configs are
+`cargo build --release` (opt-level 3, LTO). The difference is the
+`fast-boot` feature, not the compiler. The PHASE dump is
+`println_always` — the same bytes in both images — so it cannot
+be the 3×. What remains after E3g that `fast-boot` actually
+compiles out is ordinary `println!` on the TX segment and
+`wait_tx` complete lines: tens of DBCN bytes, not sixty
+milliseconds. Tick prints are compiled out too, and `sstatus.SIE`
+is 0 in the handler, so they do not run during the gap. What does
+scale is TCG / QEMU state after a much longer boot: safe E2→E3g
+is 76 ms against 6.4 ms fast. E3w→E4 already moved
+freeze → T4.4 → T4.6 (41.24 → 33.87 → 31.04 ms) with the dump
+unmoved. That is the same shared-state threat as the matched TCG
+pair. The 93 vs 31 ms split is that term.
+
+The yield stays. Instrumentation off the measured path is
+defensible on principle even when it costs nothing (here the
+flagship edges moved the wrong way by a fraction of a millisecond,
+inside stability). A `wfi` does not occupy TCG the way a post-publish
+spin would. Reverting would put DBCN back on the interval we still
+cannot explain. Extending the yield is the discriminator above,
+not a fix to land without its own N-trial.
+
+E3w→E4 is ~31 ms of the ~52 ms honest number and we do not know
+what it is. It returns to threats-to-validity as an open item,
+not a solved one.
+
 ### Ladder
 
 | rung | hypothesis | E2→E3g after | Δ vs `baseline-t4.3` | disposition |
@@ -279,7 +347,7 @@ state. Named in the ladder rows; not rungs.
 | bump / lazy free-list | stop linking ~31k virgin frames; `free_count()` is bump arithmetic | 9.17 ms | −12.25 ms (−57%) | landed T4.4 (D-0065); batches `20260817T052349Z-1`/`-2`; subsumes D-0060. Secondary: later phases faster (warm data cache; matched pair) |
 | D-0060 allocated counter | `free_count = TOTAL − allocated` on the current list | — | — | declined-by-subsumption |
 | 2 MiB superpages (D-0059) | mixed-granularity identity map; level-aware verifier; grain-aware `assert_range` | 6.43 ms | −15.00 ms (−70% vs freeze); −2.74 ms (−30% vs T4.4) | **landed T4.6**; batches `20260817T061753Z-1`/`-2`; `tables_used`=5; paging 3.84 → 1.12 ms. Phase ranges over (D-0069); E2→E3g in range. Secondary: `freeze` slower (cold I-translation; matched pair) |
-| `virtq_init` skip discarded program+verify | first pass wiped by `net::init` reset; `fill_descriptors` stays | — | 842 µs = 13% of 6.43 ms; 5% bar is 322 µs | **eligible, not next.** Ceiling on the gain. D-0068 N-trial then Linux take the honest number |
+| `virtq_init` skip discarded program+verify | first pass wiped by `net::init` reset; `fill_descriptors` stays | — | 842 µs = 13% of 6.43 ms; 5% bar is 322 µs | **eligible, not next.** Ceiling on the gain. Linux takes the honest number; E3w→E4 is open |
 
 ### Superpage outcome (D-0059; T4.6)
 
@@ -310,12 +378,12 @@ rungs:
 | `serving_ready` 6% | ARP wait; not kernel compute |
 
 By D-0058's letter the ladder is not closed: `virtq_init` still
-clears 5% of E2→E3g. By the report's claim, D-0068 was next and
-has landed in tree; the dedicated-host N-trial records the E0→E4
-correction, then Linux. E0→E4 is 51.67 ms on the T4.6 batches
-(dump still on the publish→E4 path in those CSVs); skipping the
-discarded virtqueue pass is ~0.8 ms of that (1.6%). virtq_init
-stays recorded-eligible. The floor is not declared.
+clears 5% of E2→E3g. D-0068 was the next *action* and has been
+measured: it did not move E0→E4. Linux is next. Fast E0→E4 is
+51.66 ms on the T4.6 batches; skipping the discarded virtqueue
+pass is ~0.8 ms of that (1.6%). virtq_init stays
+recorded-eligible. The floor is not declared. E3w→E4 is ~31 ms
+of that 52 ms and is open.
 
 Leaf-count estimate from T4.4 exhaust `total=31823` → `__heap_end`
 ≈ `0x803B1000`: 62 × 2 MiB leaves on `0x80400000..0x88000000`;
@@ -346,9 +414,9 @@ move); DEBUGGING.md superpage first-response note.
 *(stub — T4.8 / T4.9)* Comparisons ride only on E0→first-connect and
 E0→E4. Whimbrel's row is [exhibits/edges.md](exhibits/edges.md).
 Linux and Unikraft cells stay empty until those tasks land. E3w→E4
-is investigated before the Linux baseline (D-0066) so that section
-does not treat tens of milliseconds of host-side remainder —
-including, before D-0068, Whimbrel's own PHASE dump — as guest work.
+is ~31 ms of honest E0→E4 and is open (D-0066 / D-0068): dump
+placement did not take it. The comparison section must not treat
+that remainder as guest work.
 
 ---
 
@@ -362,7 +430,7 @@ maintained in [threats-to-validity.md](threats-to-validity.md).
    differently than on silicon. Every claim carries "under QEMU TCG".
 2. **slirp is the TCP peer**, not a wire. E3w−E3g prices virtio+slirp.
    E3w→E4 prices hostfwd delivery plus client recv, not guest compute
-   (D-0066).
+   (D-0066). After D-0068 it is still ~31 ms of ~52 ms and unexplained.
 3. **Client retry granularity is 1.000 ms measured** (persistent
    process; see machine-spec `client_granularity_ns`). That cadence
    does not apply after `connect()`. Fork-per-attempt curl was
@@ -383,16 +451,17 @@ maintained in [threats-to-validity.md](threats-to-validity.md).
 9. **Unikraft pin** (D-0063) — stated when that row exists.
 10. **Instrumentation observer effect.** Stamp overhead is a generated
     row in [exhibits/edges.md](exhibits/edges.md) (5.5 µs on
-    fast-boot). `print_after_response` is a second observer: DBCN
-    after E3g delayed E4 without moving E3g (D-0066). Before D-0068,
-    E0→E4 measured that dump — Whimbrel's instrumentation, not
-    Whimbrel. The dump now yields first (same boot). The
-    dedicated-host N-trial records the correction to E0→E4 /
-    E3w→E4; that magnitude is a validity line regardless of sign.
+    fast-boot). `print_after_response` is a second observer. D-0068
+    moved it after a yield so DBCN is not on publish→E4. Two N-trials
+    produced no E0→E4 improvement
+    ([dump-placement.md](exhibits/dump-placement.md)). The yield
+    stays on principle. It did not solve E3w→E4.
 11. **Host variance.** Dedicated native host, performance governor,
     SMT off, boost off, steal 0 on all recorded trials of the freeze,
-    T4.4, and T4.6, two interleaved batches that met max(2%, 200 µs).
-    The KVM pod failed this criterion and is not cited.
+    T4.4, T4.6, and both D-0068 invocations, two interleaved batches
+    that met max(2%, 200 µs). D-0068 additionally reproduced across
+    two independent campaigns. The KVM pod failed the criterion and
+    is not cited.
 12. **E3w fidelity.** filter-dump timestamps are a QEMU realtime clock
     that does not match Python `time.time_ns()`. `e0_to_e3w_ns` is
     first-connect plus the pcap-relative SYN/ACK→HTTP interval.
@@ -420,21 +489,24 @@ maintained in [threats-to-validity.md](threats-to-validity.md).
     writes as a side effect of existing. Two illustrations. The
     matched pair in item 15 is the cache/translation surface. The
     occupancy surface is guest work after a guest-side stamp moving
-    a host-observed edge: before D-0068 the PHASE dump occupied TCG
-    after E3g and delayed E4, so E0→E4 measured instrumentation.
-    The N-trial after this landing records the correction; either
-    direction is a validity line. Linux and Unikraft have no
-    equivalent dump. If measured runs stopped printing PHASE, the
-    decomposition and E0→E4 would come from different boots — that
-    would be its own line.
+    a host-observed edge. D-0068 tested the PHASE dump as that
+    occupant: two N-trials, no E4 movement. The dump stays off the
+    interval on principle. **E3w→E4 is open:** ~31 ms of the ~52 ms
+    honest number, unexplained, and it already moved with rungs that
+    did not touch the dump. Linux and Unikraft share slirp/hostfwd;
+    they will not share a PHASE dump. If measured runs stopped
+    printing PHASE, the decomposition and E0→E4 would come from
+    different boots — that would be its own line.
 
 ---
 
 ## Future work
 
-Next: dedicated-host N-trial of D-0068 (fill the E0→E4 correction
-in item 16), then the Linux baseline (D-0062). `virtq_init` remains
-eligible at 13% of 6.43 ms and is not the next action. D-0060 is
+Next: the Linux baseline (D-0062). E3w→E4 is open (~31 ms of
+~52 ms); a yield long enough to bracket that gap would discriminate
+a too-short D-0068 implementation from a dump-irrelevant host term,
+and is a diagnostic, not a rung. `virtq_init` remains eligible at
+13% of 6.43 ms and is not the next action. D-0060 is
 declined-by-subsumption. `-bios none` (D-0061). Unikraft spike
 (D-0063). T4.3b audit cleanup. Harness per-batch result files
 (D-0067) — spec in `results/README.md`; the bench host implements
@@ -448,4 +520,5 @@ the write path.
   findings 16–23).
 - [Phase decomposition exhibit](exhibits/phase-decomposition.md)
 - [Edges exhibit](exhibits/edges.md)
+- [Dump placement exhibit](exhibits/dump-placement.md)
 - [Machine-spec block](exhibits/machine-spec.md)

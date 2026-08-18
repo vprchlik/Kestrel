@@ -1421,7 +1421,8 @@ number.
   as the baseline table exists; all later work edits the draft. Exhibit
   tables are generated from CSV by script, never typed, so prose cannot
   drift from data. After T4.4 the generator reads the freeze from tag
-  `baseline-t4.3` and the after-ladder from `HEAD` (D-0067).
+  `baseline-t4.3` and the after-ladder from a named T4.6 CSV commit
+  (D-0067).
 - **Convergence gate.** M4 is done when the checklist at the end of this
   section is fully checked — an open-ended timeline must not become an
   unfinished one.
@@ -1641,11 +1642,11 @@ bar (322 µs). Only `virtq_init` (842 µs = 13%) is a real remaining
 E2→E3g *candidate* (discarded first pass). The other six are the
 HTTP byte, D-0043 paranoia, necessary task slots, the live NIC
 pass, leftover page_build, and ARP wait. Ladder is **not** closed
-(one candidate still clears). D-0068 dump placement has landed in
-tree (same-boot yield then dump; ticks-armed assert). Next *action*
-is the dedicated-host N-trial of that yield, then the Linux
-baseline: E0→E4 is 51.67 ms on the T4.6 batches (dump still on the
-path in those CSVs), virtq_init is ~0.8 ms of that (1.6%). Do not
+(one candidate still clears). D-0068 dump placement landed and was
+measured: two invocations, E3w→E4 untouched, occupancy hypothesis
+not confirmed, yield kept. Next *action* is the Linux baseline.
+E0→E4 is 51.66 ms on the T4.6 batches; virtq_init is ~0.8 ms of
+that (1.6%). E3w→E4 is ~31 ms of that 52 ms and is open. Do not
 take virtq_init next.
 **`virtq_init` (finding 4):** remains eligible at 13% of 6.43 ms;
 **not** bundled with `DRIVER_OK`. Ceiling on the gain: skip the
@@ -1700,11 +1701,12 @@ Linux's decomposition comes from the instrumented run and is presented
 with the asymmetry stated (different instrument, measured on the logging
 config, quiet-vs-instrumented delta shown). Same QEMU binary, machine,
 single CPU, default 128 MiB, same netdev/hostfwd/filter-dump.
-E3w→E4 dump placement (D-0068) has landed in tree so the honest
-number is not Whimbrel's DBCN and the flagship comparison is not
-biased against us by tens of milliseconds. D-0066 named the
-remainder; D-0068 is the fix. The dedicated-host N-trial fills the
-correction magnitude in threats item 16 before this row is filled.
+E3w→E4 dump placement (D-0068) landed and was measured: the dump
+is off the publish→E4 path on principle and did not take the ~31 ms
+term. D-0066 named the remainder; it is still open. The Linux row
+must not treat that remainder as guest work. A yield that brackets
+the gap would discriminate a too-short implementation from a
+dump-irrelevant host term; that is a diagnostic, not this task.
 
 - **Acceptance:** `just bench-linux` produces both configs' rows through
   the same harness; pcap shows the same handshake/response shape; the

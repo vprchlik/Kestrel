@@ -16,18 +16,18 @@ n_recorded:            120
 batches:               20260817T041311Z-1, 20260817T041311Z-2
 source:                git show baseline-t4.3:results/baseline-summary.txt
 
-## after-ladder (T4.4)
+## after-ladder (superpages)
 
-# T4.4 HEAD (CSV fields; not results/summary.txt)
+# superpages c40945cdb71b (CSV fields; not results/summary.txt)
 qemu_version=QEMU emulator version 10.2.1 (Debian 1:10.2.1+ds-1ubuntu3.2)
 qemu_hash=89a99b20357ac92b2c6a533fe79d6fab6b507784858299f7109651f2d524d274
-git_sha=83ca9f996b51174e6dc380fa880bca936c829165 dirty=0
+git_sha=76830e1386d012924c0212b97afc8f1a02981ee1 dirty=0
 host_kernel=7.0.0-29-generic
 cpu_model=AMD Ryzen 7 7800X3D 8-Core Processor
-governor=performance smt_control=off cpufreq_boost=0 virt=none steal_start_ticks=0 loadavg_1m=0.57
+governor=performance smt_control=off cpufreq_boost=0 virt=none steal_start_ticks=0 loadavg_1m=0.69
 client_granularity_ns=1000092
-shuffle_seed=1786944231056017133
-rev:                   HEAD
+shuffle_seed=1786947474544343932
+rev:                   c40945cdb71b5aef68c5e72e292a718b66ec651e
 n_recorded:            120
-batches:               20260817T052349Z-1, 20260817T052349Z-2
-source:                git show HEAD:results/runs.csv
+batches:               20260817T061753Z-1, 20260817T061753Z-2
+source:                git show c40945cdb71b5aef68c5e72e292a718b66ec651e:results/runs.csv

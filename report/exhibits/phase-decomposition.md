@@ -2,56 +2,56 @@
 
 Safe / fast / IQR / min columns: tag `baseline-t4.3` via `git show baseline-t4.3:results/{runs,phases}.csv` (batches `20260817T041311Z-1` / `20260817T041311Z-2`, n=60 per config).
 
-After-ladder and Δ columns: `HEAD` via `git show HEAD:results/{runs,phases}.csv` (T4.4 batches `20260817T052349Z-1` / `20260817T052349Z-2`, measured kernel `83ca9f9`, n=60 per config). After-ladder is the fast-boot median. Δ is after-ladder minus baseline fast. Working-tree CSVs are not read. Regeneration: `just report-exhibits`.
+After-ladder and Δ columns: `c40945cdb71b5aef68c5e72e292a718b66ec651e` via `git show c40945cdb71b5aef68c5e72e292a718b66ec651e:results/{runs,phases}.csv` (superpages batches `20260817T061753Z-1` / `20260817T061753Z-2`, measured kernel `76830e13`, n=60 per config). After-ladder is the fast-boot median. Δ is after-ladder minus baseline fast. Working-tree CSVs are not read. Regeneration: `just report-exhibits`.
 
 | phase | what the work is | safe median | fast median | fast IQR | fast min | after-ladder median | Δ vs baseline | structurally necessary? |
 |---|---|---:|---:|---:|---:|---:|---:|---|
 | _start | first kernel instruction (E2); zero-width by construction | 0 ns | 0 ns | 0 ns | 0 ns | 0 ns | 0 | yes — the origin |
-| stamp_a | overhead pair, first stamp | 45.7 µs | 44.5 µs | 700 ns | 43.5 µs | 44.1 µs | −400 ns | no — instrumentation |
+| stamp_a | overhead pair, first stamp | 45.7 µs | 44.5 µs | 700 ns | 43.5 µs | 44.3 µs | −200 ns | no — instrumentation |
 | stamp_b | overhead pair, second stamp (the floor) | 5.4 µs | 5.5 µs | 125 ns | 5.3 µs | 5.5 µs | 0 | no — instrumentation |
-| stvec | DBCN probe + CSR snapshot + trap install | 1.02 ms | 254.4 µs | 4.0 µs | 246.5 µs | 253.2 µs | −1.1 µs | yes — a trap handler |
-| frame_init | allocator init: eager free-list link at baseline; bump pointer after T4.4 | 36.78 ms | 7.20 ms | 107.9 µs | 7.05 ms | 141.2 µs | −7.06 ms | an allocator, not the O(n) link; T4.4 collapsed it to a bump (D-0065) |
-| task_init | fabricate four task frames (three Exited) | 3.10 ms | 587.2 µs | 6.6 µs | 572.1 µs | 582.0 µs | −5.2 µs | yes — U-mode task slots |
-| page_build | Sv39 identity map, 4 KiB leaves | 1.25 ms | 1.45 ms | 9.5 µs | 1.44 ms | 1.45 ms | +3.5 µs | yes — Sv39 |
-| page_verify | full second walk of the map (D-0043 paranoia) | 13.22 ms | 2.57 ms | 18.8 µs | 2.40 ms | 2.39 ms | −181.4 µs | no — paranoia; kept as its own line (D-0043) |
-| activate | `satp` write + `sfence.vma` | 299.8 µs | 100.9 µs | 2.8 µs | 97.8 µs | 86.2 µs | −14.8 µs | yes — paging on |
-| virtq_init | first virtqueue program+verify (wiped by later reset) | 6.99 ms | 850.5 µs | 8.7 µs | 828.9 µs | 845.4 µs | −5.2 µs | no — discarded first pass (finding 4); active candidate, 9% of T4.4 E2→E3g |
-| DRIVER_OK | virtio-net reset, second program+verify, DRIVER_OK | 6.27 ms | 554.9 µs | 10.2 µs | 533.7 µs | 545.5 µs | −9.3 µs | yes — the NIC; not bundled with virtq_init |
-| first_rx | gateway ARP reply arrived (slirp RTT, not kernel) | 3.38 ms | 313.7 µs | 7.8 µs | 305.2 µs | 310.9 µs | −2.8 µs | no — slirp RTT |
-| serving_ready | gateway MAC learned; earliest serve point | 897.5 µs | 362.4 µs | 7.7 µs | 352.7 µs | 354.4 µs | −8.1 µs | ARP wait; not kernel compute |
-| net_init_done | GARP + diagnostic `ping_gateway` done | 5.15 ms | 270.6 µs | 5.3 µs | 263.4 µs | 280.5 µs | +9.9 µs | no — ping is diagnostic |
-| heap_init | kernel heap init (idle in production images) | 26.3 µs | 25.2 µs | 425 ns | 24.4 µs | 22.1 µs | −3.1 µs | no — heap is idle (finding 11) |
-| accounting | frames-consumed check: free-list walk at baseline; bump arithmetic after T4.4 | 6.93 ms | 4.79 ms | 494.3 µs | 4.73 ms | 24.9 µs | −4.76 ms | no — paranoia; T4.4 subsumed the walk (D-0065) |
-| freeze | `FROZEN` store; safe profile also prints `free_count()` | 4.88 ms | 7.5 µs | 100 ns | 7.1 µs | 7.3 µs | −200 ns | the bool, not a second walk |
-| sret | first `sret` to U-mode | 227.2 µs | 19.8 µs | 325 ns | 19.0 µs | 18.8 µs | −1.0 µs | yes — U-mode |
-| syn_rx | client SYN arrived (external) | 1.24 ms | 283.9 µs | 6.3 µs | 273.9 µs | 281.1 µs | −2.8 µs | external arrival |
-| established | TCP handshake complete | 778.1 µs | 271.9 µs | 5.8 µs | 266.2 µs | 268.4 µs | −3.5 µs | protocol |
-| E3g | HTTP response published to the used ring (D-0043) | 1.95 ms | 1.42 ms | 76.4 µs | 1.23 ms | 1.24 ms | −183.1 µs | yes — the byte |
-| E3g_doorbell | `QueueNotify` store returned (device-model handoff) | 388.6 µs | 86.5 µs | 3.3 µs | 79.3 µs | 79.2 µs | −7.4 µs | the notify; priced separately (D-0056.2) |
+| stvec | DBCN probe + CSR snapshot + trap install | 1.02 ms | 254.4 µs | 4.0 µs | 246.5 µs | 254.1 µs | −300 ns | yes — a trap handler |
+| frame_init | allocator init: eager free-list link at baseline; bump pointer after T4.4 | 36.78 ms | 7.20 ms | 107.9 µs | 7.05 ms | 140.7 µs | −7.06 ms | an allocator, not the O(n) link; T4.4 collapsed it to a bump (D-0065) |
+| task_init | fabricate four task frames (three Exited) | 3.10 ms | 587.2 µs | 6.6 µs | 572.1 µs | 581.8 µs | −5.5 µs | yes — U-mode task slots |
+| page_build | Sv39 identity map, mixed 4 KiB / 2 MiB leaves (D-0059) | 1.25 ms | 1.45 ms | 9.5 µs | 1.44 ms | 386.6 µs | −1.06 ms | yes — Sv39 |
+| page_verify | full second walk of the map (D-0043 paranoia); grain-aware after D-0059 | 13.22 ms | 2.57 ms | 18.8 µs | 2.40 ms | 731.4 µs | −1.84 ms | no — paranoia; kept as its own line (D-0043) |
+| activate | `satp` write + `sfence.vma` | 299.8 µs | 100.9 µs | 2.8 µs | 97.8 µs | 94.4 µs | −6.5 µs | yes — paging on |
+| virtq_init | first virtqueue program+verify (wiped by later reset) | 6.99 ms | 850.5 µs | 8.7 µs | 828.9 µs | 841.2 µs | −9.3 µs | no — discarded first pass (finding 4); still above the 5% bar after superpages |
+| DRIVER_OK | virtio-net reset, second program+verify, DRIVER_OK | 6.27 ms | 554.9 µs | 10.2 µs | 533.7 µs | 543.2 µs | −11.7 µs | yes — the NIC; not bundled with virtq_init |
+| first_rx | gateway ARP reply arrived (slirp RTT, not kernel) | 3.38 ms | 313.7 µs | 7.8 µs | 305.2 µs | 305.3 µs | −8.4 µs | no — slirp RTT |
+| serving_ready | gateway MAC learned; earliest serve point | 897.5 µs | 362.4 µs | 7.7 µs | 352.7 µs | 356.4 µs | −6.0 µs | ARP wait; not kernel compute |
+| net_init_done | GARP + diagnostic `ping_gateway` done | 5.15 ms | 270.6 µs | 5.3 µs | 263.4 µs | 285.1 µs | +14.6 µs | no — ping is diagnostic |
+| heap_init | kernel heap init (idle in production images) | 26.3 µs | 25.2 µs | 425 ns | 24.4 µs | 22.2 µs | −3.0 µs | no — heap is idle (finding 11) |
+| accounting | frames-consumed check: free-list walk at baseline; bump arithmetic after T4.4 | 6.93 ms | 4.79 ms | 494.3 µs | 4.73 ms | 25.6 µs | −4.76 ms | no — paranoia; T4.4 subsumed the walk (D-0065) |
+| freeze | `FROZEN` store; safe profile also prints `free_count()` | 4.88 ms | 7.5 µs | 100 ns | 7.1 µs | 12.2 µs | +4.7 µs | the bool, not a second walk |
+| sret | first `sret` to U-mode | 227.2 µs | 19.8 µs | 325 ns | 19.0 µs | 18.9 µs | −900 ns | yes — U-mode |
+| syn_rx | client SYN arrived (external) | 1.24 ms | 283.9 µs | 6.3 µs | 273.9 µs | 275.9 µs | −8.1 µs | external arrival |
+| established | TCP handshake complete | 778.1 µs | 271.9 µs | 5.8 µs | 266.2 µs | 264.6 µs | −7.3 µs | protocol |
+| E3g | HTTP response published to the used ring (D-0043) | 1.95 ms | 1.42 ms | 76.4 µs | 1.23 ms | 1.24 ms | −185.8 µs | yes — the byte |
+| E3g_doorbell | `QueueNotify` store returned (device-model handoff) | 388.6 µs | 86.5 µs | 3.3 µs | 79.3 µs | 78.1 µs | −8.4 µs | the notify; priced separately (D-0056.2) |
 
-T4.4 fast-boot E2→E3g median is **9.17 ms** (share denominator; baseline fast E2→E3g stays in the columns to the left). Share is (T4.4 phase median) / (T4.4 E2→E3g median), not a median of ratios.
+After-ladder (superpages) fast-boot E2→E3g median is **6.43 ms** (share denominator; baseline fast E2→E3g stays in the columns to the left). Share is (after-ladder phase median) / (after-ladder E2→E3g median), not a median of ratios.
 
-| phase | T4.4 fast median | share of T4.4 E2→E3g |
+| phase | superpages fast median | share of superpages E2→E3g |
 |---|---:|---:|
-| page_verify | 2.39 ms | 26% |
-| page_build | 1.45 ms | 16% |
-| E3g | 1.24 ms | 14% |
-| virtq_init | 845.4 µs | 9% |
-| task_init | 582.0 µs | 6% |
-| DRIVER_OK | 545.5 µs | 6% |
-| serving_ready | 354.4 µs | 4% |
-| first_rx | 310.9 µs | 3% |
-| syn_rx | 281.1 µs | 3% |
-| net_init_done | 280.5 µs | 3% |
-| established | 268.4 µs | 3% |
-| stvec | 253.2 µs | 3% |
-| frame_init | 141.2 µs | 2% |
-| activate | 86.2 µs | 1% |
-| E3g_doorbell | 79.2 µs | 1% |
-| stamp_a | 44.1 µs | 0% |
-| accounting | 24.9 µs | 0% |
-| heap_init | 22.1 µs | 0% |
-| sret | 18.8 µs | 0% |
-| freeze | 7.3 µs | 0% |
+| E3g | 1.24 ms | 19% |
+| virtq_init | 841.2 µs | 13% |
+| page_verify | 731.4 µs | 11% |
+| task_init | 581.8 µs | 9% |
+| DRIVER_OK | 543.2 µs | 8% |
+| page_build | 386.6 µs | 6% |
+| serving_ready | 356.4 µs | 6% |
+| first_rx | 305.3 µs | 5% |
+| net_init_done | 285.1 µs | 4% |
+| syn_rx | 275.9 µs | 4% |
+| established | 264.6 µs | 4% |
+| stvec | 254.1 µs | 4% |
+| frame_init | 140.7 µs | 2% |
+| activate | 94.4 µs | 1% |
+| E3g_doorbell | 78.1 µs | 1% |
+| stamp_a | 44.3 µs | 1% |
+| accounting | 25.6 µs | 0% |
+| heap_init | 22.2 µs | 0% |
+| sret | 18.9 µs | 0% |
+| freeze | 12.2 µs | 0% |
 | stamp_b | 5.5 µs | 0% |
 | _start | 0 ns | 0% |

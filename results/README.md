@@ -27,19 +27,24 @@ price-of-paranoia contrast; it is supposed to differ.
 **The top-level CSVs are the latest run, overwritten, not appended.**
 `just bench` replaces `results/runs.csv` and `results/phases.csv`.
 T4.6 after-ladder pin: batches `20260817T061753Z-1` / `-2`
-(measured kernel `76830e13`). T4.4 rows live in git history
-(`867e28f`) until D-0067 per-batch files exist. The T4.3 freeze
-rows live in tag `baseline-t4.3` (commit `bce55a2`, measured
-kernel `35861f3`, batches `20260817T041311Z-1` / `-2`).
+(measured kernel `76830e13`, CSV commit `c40945c`). D-0068
+yield-then-dump batches (`20260818T013740Z-*` at `59e0703`,
+`20260818T014549Z-*` at `4755fa3`) are not the after-ladder pin.
+T4.4 rows live in git history (`867e28f`) until D-0067 per-batch
+files exist. The T4.3 freeze rows live in tag `baseline-t4.3`
+(commit `bce55a2`, measured kernel `35861f3`, batches
+`20260817T041311Z-1` / `-2`).
 
-**Exhibit generator (two git objects):** `just report-exhibits` runs
+**Exhibit generator:** `just report-exhibits` runs
 `scripts/report-exhibits.py`, which `git show`s
 `baseline-t4.3:results/{runs,phases}.csv` for the safe/fast/IQR/min
-columns and `HEAD:results/{runs,phases}.csv` for after-ladder and Δ.
-It does not read the working tree, so a local `just bench` leftover
-cannot become an exhibit. Machine-spec baseline header comes from
+columns and the T4.6 CSV commit for after-ladder and Δ. D-0068
+dump-placement is a third exhibit from those plus the two
+yield-then-dump CSV commits. It does not read the working tree, so
+a local `just bench` leftover cannot become an exhibit. Machine-spec
+baseline header comes from
 `git show baseline-t4.3:results/baseline-summary.txt`; the
-after-ladder (superpages) block comes from HEAD CSV fields, not
+after-ladder (superpages) block comes from the T4.6 CSV fields, not
 from `results/summary.txt`.
 
 Do not treat `results/summary.txt` as a report artifact; it is
