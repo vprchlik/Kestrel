@@ -128,6 +128,46 @@ CONFIG_FUTEX=y
 # menu; this prompt sits under IPv4. /init does SIOCSIFADDR
 # itself. T4.8: ip_auto_config.
 # CONFIG_IP_PNP is not set
+# FHANDLE: default-y EXPERT prompt; selects the fs-export helper.
+# /init never name_to_handle_at. Unsetting the helper alone
+# leaves it m because this prompt still selects it.
+# CONFIG_FHANDLE is not set
+# OVERLAY_FS: the other live selector of the fs-export helper
+# (defconfig m). Same: unsetting the helper alone leaves it m.
+# CONFIG_OVERLAY_FS is not set
+# EXPORTFS: bare tristate in fs/Kconfig, no menu. NFSD selected
+# it; FHANDLE and overlay still did after NFSD vanished.
+# Non-reversing select: killing a selector does not unset the
+# target.
+# CONFIG_EXPORTFS is not set
+# KEYS: D-0073 originally said keep; superseded after
+# NETWORK_FILESYSTEMS removed the only selector.
+# Only live selector was NFS_V4. /init never touches a keyring.
+# CONFIG_KEYS is not set
+# MEMFD_CREATE: EXPERT prompt, no default; selected by TMPFS
+# and HUGETLBFS, both already unset. The prompt kept it y.
+# CONFIG_MEMFD_CREATE is not set
+# EEPROM_93CX6: selected by SERIAL_8250_EXAR (PCI), now gone.
+# CONFIG_EEPROM_93CX6 is not set
+# EXTCON: selected by USB_PHY; USB already off. Charger-manager
+# is not a remaining consumer.
+# CONFIG_EXTCON is not set
+# INPUT_FF_MEMLESS: selected by HID force-feedback drivers;
+# HID already unset.
+# CONFIG_INPUT_FF_MEMLESS is not set
+# HID_SUPPORT: menuconfig default y wrapping HID. Same split as
+# USB_SUPPORT: we unset the bus, the menu parent stayed.
+# CONFIG_HID_SUPPORT is not set
+# REALTEK_PHY: selected by R8169, which died with PCI. (MICREL
+# still serves MACB; that is not this pattern.)
+# CONFIG_REALTEK_PHY is not set
+# SPI_MEM: selected by MTD_SPI_NOR; MTD already unset.
+# CONFIG_SPI_MEM is not set
+# NETWORK_SECMARK: selected by SELinux, which cascaded off.
+# CONFIG_NETWORK_SECMARK is not set
+# SECURITYFS: selected by AppArmor/IMA; SECURITY already absent.
+# The prompt kept it y.
+# CONFIG_SECURITYFS is not set
 # USB_SUPPORT: host USB / usbhid. No USB on this virt path.
 # CONFIG_USB_SUPPORT is not set
 # SOUND: ALSA. T4.8: "No soundcards found."

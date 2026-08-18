@@ -616,6 +616,36 @@ maintained in [threats-to-validity.md](threats-to-validity.md).
    hole. D-0073 acts on that miss (new Image, T4.8b campaign);
    the T4.8 numbers still include it. The miss is not left as
    "we ran out of patience."
+
+   **Non-reversing select.** Kconfig `select` does not unset the
+   target when the selector goes. A helper or transport that
+   `select` pulled in stays `=y` whenever it has its own prompt,
+   a default, or another selector under a menu the trim did not
+   touch. That is a property of trimming a kernel by subsystem,
+   not a quirk of this fragment; it cost three `linux-build`
+   iterations to see. Seven symbols on this Image were that
+   shape: `NET_9P`, `DNS_RESOLVER`, `NLS`, `MTD`, `DAX`,
+   `IP_PNP`, `EXPORTFS`. The fourth pass walked remaining `=y`
+   against live `select` edges in one go (`FHANDLE` and overlay
+   were still selecting `EXPORTFS`; unsetting the helper alone
+   would have left it `=m`) rather than catching the next
+   orphan after another rebuild.
+
+   Walked and kept, with the reason, so the bound is analysis
+   rather than patience: `CRC32` (`MACB` still selects it);
+   `NVMEM` (`NVMEM_SUNXI_SID` still y); `SHMEM` (anonymous
+   memory, not a DRM leftover); `EVENTFD` (`default y` syscall;
+   `MEMCG`'s select was extra); `FW_LOADER` (`default y`
+   firmware facility); `FILE_LOCKING` (`default y`); `MACB` /
+   `PHYLIB` / `MICREL_PHY` (sibling NIC to virtio-net, still a
+   live ethernet driver); `NETFILTER` (defconfig y, own prompt);
+   `INET_DIAG` (`default y` for `ss`; not a dropped consumer);
+   `AUTOFS_FS`, `POSIX_MQUEUE`, `SYSVIPC` (defconfig y, own
+   prompts); `VIRTIO_CONSOLE` / `BALLOON` / `INPUT` (defconfig y
+   extra virtio); `XFRM` (`XFRM_USER=m` still a consumer);
+   `FAILOVER` / `NET_FAILOVER` (`VIRTIO_NET` selects them);
+   `DEBUG_FS`, `FB`, `VT`, `PINCTRL`, `I2C`, `SPI`, `THERMAL`,
+   `CPU_IDLE` (named deferred: no-boot risk or idle path).
 9. **Unikraft pin** (D-0063) — stated when that row exists.
 10. **Instrumentation observer effect.** Stamp overhead is a generated
     row in [exhibits/edges.md](exhibits/edges.md) (5.5 µs on

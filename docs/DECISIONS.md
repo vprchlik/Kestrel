@@ -3422,6 +3422,16 @@ D-0011 onward are working decisions made under those constraints.
   - `MTD` — `MTD_BLOCK` leftover; MTD core
   - `DAX` — PMEM leftover; direct-access menu
   - `IP_PNP` — NFS-root leftover; `/init` does `SIOCSIFADDR`
+  - `FHANDLE` / `OVERLAY_FS` / `EXPORTFS` — remaining
+    selectors of the fs-export helper (fourth pass). Unsetting
+    `EXPORTFS` alone leaves `=m`.
+  - `KEYS` — D-0073 originally said keep; superseded after
+    `NETWORK_FILESYSTEMS` removed the only selector (`NFS_V4`).
+    `/init` never touches a keyring.
+  - `MEMFD_CREATE`, `EEPROM_93CX6`, `EXTCON`,
+    `INPUT_FF_MEMLESS`, `HID_SUPPORT`, `REALTEK_PHY`,
+    `SPI_MEM`, `NETWORK_SECMARK`, `SECURITYFS` — same
+    non-reversing-select walk; only selectors now absent
   - `USB_SUPPORT` — USB / usbhid
   - `SOUND` — ALSA ("No soundcards found.")
   - `MMC` — SDHCI
@@ -3590,7 +3600,35 @@ D-0011 onward are working decisions made under those constraints.
   it should already have vanished; 3b lists it so a future
   split cannot hide. Do not unset `FAILOVER` /
   `NET_FAILOVER` (`VIRTIO_NET` `select`s it). Do not unset
-  `KEYS` or `FILE_LOCKING`.
+  `FILE_LOCKING`.
+- **Amendment (2026-08-18 — non-reversing select, one pass):**
+  block 3b then caught `EXPORTFS: final y`. It is a bare
+  `tristate` in `fs/Kconfig` with no menu. `NFSD` `select`s it,
+  but `NFSD` was never y on this defconfig. The live selectors
+  were `FHANDLE` (EXPERT prompt, `default y`) and
+  `OVERLAY_FS=m`. Unsetting `EXPORTFS` alone would have left
+  it `=m`. Fragment unsets `FHANDLE`, `OVERLAY_FS`, and
+  `EXPORTFS` together.
+
+  Same walk, remaining `=y` whose only selectors were now
+  absent (reconstructed `riscv defconfig` + fragment +
+  `olddefconfig`): `KEYS`, `MEMFD_CREATE`, `EEPROM_93CX6`,
+  `EXTCON`, `INPUT_FF_MEMLESS`, `HID_SUPPORT`, `REALTEK_PHY`,
+  `SPI_MEM`, `NETWORK_SECMARK`, `SECURITYFS`. All 13 go in
+  this pass.
+
+  `KEYS`: D-0073 originally said keep; superseded after
+  `NETWORK_FILESYSTEMS` removed the only selector (`NFS_V4`).
+  `/init` never touches a keyring. The reversal is in the
+  fragment note, not silent.
+
+  The shape has a name: **non-reversing select**. `select`
+  does not unset the target when the selector goes. Seven
+  exemplars on this Image: `NET_9P`, `DNS_RESOLVER`, `NLS`,
+  `MTD`, `DAX`, `IP_PNP`, `EXPORTFS`. Finding them one 3b
+  miss at a time cost three rebuilds; the fourth pass
+  enumerated live `select` edges against remaining `=y`
+  instead.
 
 
 

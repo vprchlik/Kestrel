@@ -946,16 +946,30 @@ not 222.6 ms on the nose.
 ### Fragment (already in tree)
 
 `bench/linux/linux-trimmed.fragment` D-0073 section. Parents
-only (`NETWORK_FILESYSTEMS`, `NET_9P`, `DNS_RESOLVER`, `NLS`,
-`MTD`, `DAX`, `IP_PNP`, `USB_SUPPORT`, `SOUND`, `MMC`,
-`RTC_CLASS`, …). Do not also unset children in the fragment
-(noise, and merge_config `grep -w` can match a parent prefix).
-`linux-build` block 3b still asserts the children are not y.
-`NET_9P` is not a child of `NETWORK_FILESYSTEMS` — 9p has a
-filesystem under that menu and a transport under `NET`; T4.8b
-block 3b caught the transport still y after the fs menu
-dropped. Same split: `DNS_RESOLVER`, `NLS`, `MTD`, `DAX`,
-`IP_PNP`.
+only, plus the non-reversing-select helpers enumerated in one
+pass (`FHANDLE`, `OVERLAY_FS`, `EXPORTFS`, `KEYS`,
+`MEMFD_CREATE`, `EEPROM_93CX6`, `EXTCON`, `INPUT_FF_MEMLESS`,
+`HID_SUPPORT`, `REALTEK_PHY`, `SPI_MEM`, `NETWORK_SECMARK`,
+`SECURITYFS`). Do not also unset children in the fragment
+(noise, and merge_config `grep -w` can match a parent prefix),
+except `EXPORTFS` itself: it is the helper, and `FHANDLE` /
+overlay are its remaining selectors. `linux-build` block 3b
+still asserts the children are not y. `KEYS`: D-0073 originally
+said keep; superseded after `NETWORK_FILESYSTEMS` removed the
+only selector (`NFS_V4`). `/init` never touches a keyring.
+
+**Non-reversing select.** `select` does not unset the target
+when the selector goes. Seven exemplars: `NET_9P`,
+`DNS_RESOLVER`, `NLS`, `MTD`, `DAX`, `IP_PNP`, `EXPORTFS`.
+Unsetting `EXPORTFS` alone would have left it `=m`.
+
+Walked and kept: `CRC32` (`MACB`), `NVMEM` (`NVMEM_SUNXI_SID`),
+`SHMEM`, `EVENTFD`, `FW_LOADER`, `FILE_LOCKING`, `MACB` /
+`PHYLIB` / `MICREL_PHY`, `NETFILTER`, `INET_DIAG`,
+`AUTOFS_FS`, `POSIX_MQUEUE`, `SYSVIPC`, `VIRTIO_CONSOLE` /
+`BALLOON` / `INPUT`, `XFRM` (`XFRM_USER=m`), `FAILOVER` /
+`NET_FAILOVER`, `DEBUG_FS`, `FB`, `VT`, `PINCTRL`, `I2C`,
+`SPI`, `THERMAL`, `CPU_IDLE`.
 
 Keeps: `SERIAL_8250`, `SERIAL_OF_PLATFORM`, virtio-mmio/net,
 IPv4 TCP, initramfs, `DEVTMPFS`, `FUTEX`, `MODULES=y`,
@@ -1000,13 +1014,15 @@ arbiter. If a T4.8-printk leftover is still y and unused by
 thing this pass exists to avoid.
 
 Grep at least: `FTRACE`, `NFS`, `9P`, `NET_9P`, `SUNRPC`,
-`DNS_RESOLVER`, `NLS`, `MTD`, `DAX`, `IP_PNP`, `USB`,
-`SOUND`/`SND`, `MMC`/`SDHCI`, `MOUSEDEV`, `HUGETLB`, `AUDIT`,
-`ACPI`, `PNP`, `RTC`, `WATCHDOG`, `BPF_SYSCALL`. The deferred
-list in the fragment (VT, DEBUG_FS, FB, PINCTRL, I2C/SPI/GPIO,
-thermal, cpuidle, LSM) is named, not forgotten: unset in this
-pass only if the second-look shows y *and* obviously unused
-*and* not a no-boot risk.
+`DNS_RESOLVER`, `NLS`, `MTD`, `DAX`, `IP_PNP`, `EXPORTFS`,
+`FHANDLE`, `OVERLAY`, `KEYS`, `MEMFD`, `USB`, `SOUND`/`SND`,
+`MMC`/`SDHCI`, `MOUSEDEV`, `HUGETLB`, `AUDIT`, `ACPI`, `PNP`,
+`RTC`, `WATCHDOG`, `BPF_SYSCALL`. The deferred list in the
+fragment (VT, DEBUG_FS, FB, PINCTRL, I2C/SPI/GPIO, thermal,
+cpuidle) is named, not forgotten: unset in this pass only if
+the second-look shows y *and* obviously unused *and* not a
+no-boot risk. LSM leftovers (`SECURITYFS`, `NETWORK_SECMARK`)
+are in the fragment from the non-reversing-select walk.
 
 The T4.8 hole window (`dns_resolver` → `clk-disable`) may move
 or vanish once NFS / DNS_RESOLVER go away. That is T4.8b
@@ -1046,10 +1062,10 @@ labeling, not a retarget of the T4.8 exhibit.
 ### What this pod already did
 
 Fragment + `linux-build` reuse/hash gates + D-0073 + this spec
-+ the T4.8 exhibit frozen as the before. Split leftovers
-(`NET_9P`, `DNS_RESOLVER`, `NLS`, `MTD`, `DAX`, `IP_PNP`) are
-in the fragment; 3b lists the other-parent children. No Image,
-no T4.8b CSV, no MANIFEST rewrite.
++ the T4.8 exhibit frozen as the before. Non-reversing-select
+helpers (`NET_9P` … `EXPORTFS`, plus `FHANDLE` / overlay /
+`KEYS` / …) are in the fragment; 3b lists the other-parent
+children. No Image, no T4.8b CSV, no MANIFEST rewrite.
 
 ## `runs.csv` — one row per trial
 

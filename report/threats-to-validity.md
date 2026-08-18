@@ -28,6 +28,31 @@ item is mitigated-and-measured or stated.
    `FTRACE` is a recorded miss (`trace_eval_sync` / D-0072).
    D-0073 acts on it; T4.8b is the after. The T4.8 numbers still
    include the miss.
+
+   **Non-reversing select.** Kconfig `select` does not unset the
+   target when the selector goes. A helper or transport that
+   `select` pulled in stays `=y` whenever it has its own prompt,
+   a default, or another selector under a menu the trim did not
+   touch. That is a property of trimming a kernel by subsystem;
+   it cost three `linux-build` iterations to see. Seven symbols
+   on this Image were that shape: `NET_9P`, `DNS_RESOLVER`,
+   `NLS`, `MTD`, `DAX`, `IP_PNP`, `EXPORTFS`. The fourth pass
+   walked remaining `=y` against live `select` edges in one go
+   (`FHANDLE` and overlay still selected `EXPORTFS`; unsetting
+   the helper alone would have left it `=m`).
+
+   Walked and kept, with the reason: `CRC32` (`MACB` still
+   selects it); `NVMEM` (`NVMEM_SUNXI_SID` still y); `SHMEM`
+   (anonymous memory); `EVENTFD` (`default y` syscall);
+   `FW_LOADER` (`default y`); `FILE_LOCKING` (`default y`);
+   `MACB` / `PHYLIB` / `MICREL_PHY` (sibling NIC, still live);
+   `NETFILTER` (defconfig y); `INET_DIAG` (`default y` for
+   `ss`); `AUTOFS_FS`, `POSIX_MQUEUE`, `SYSVIPC` (defconfig y);
+   `VIRTIO_CONSOLE` / `BALLOON` / `INPUT` (defconfig y extra
+   virtio); `XFRM` (`XFRM_USER=m` still a consumer);
+   `FAILOVER` / `NET_FAILOVER` (`VIRTIO_NET` selects them);
+   `DEBUG_FS`, `FB`, `VT`, `PINCTRL`, `I2C`, `SPI`, `THERMAL`,
+   `CPU_IDLE` (named deferred).
 7. **Unikraft pin** (D-0063) — stated when that row exists.
 8. **Instrumentation observer effect.** Stamp overhead is a generated
    edges-exhibit row (~5.5 µs fast-boot). D-0068 moved

@@ -410,9 +410,11 @@ for line in cfg.splitlines():
 # D-0073: these must not be y. Absent/unset is a pass (menu vanished).
 # Parents we unset plus transport/core/lib layers that sit under a
 # different menu (NET_9P vs 9P_FS, DNS_RESOLVER vs NFS, NLS vs FAT,
-# MTD vs MTD_BLOCK, DAX vs PMEM, IP_PNP vs ROOT_NFS). Children of
-# those parents are listed so a split cannot hide. Do not also
-# put the children in the fragment (redundant-by-fragment).
+# MTD vs MTD_BLOCK, DAX vs PMEM, IP_PNP vs ROOT_NFS, EXPORTFS vs
+# FHANDLE/overlay). Children of those parents are listed so a
+# split cannot hide. Do not also put the children in the fragment
+# (redundant-by-fragment), except EXPORTFS itself: it is the
+# helper, and FHANDLE/overlay are its remaining selectors.
 must_not_be_y = (
     "FTRACE",
     "NETWORK_FILESYSTEMS",
@@ -476,6 +478,20 @@ must_not_be_y = (
     "FS_DAX",
     "LIBNVDIMM",
     "BLK_DEV_PMEM",
+    "FHANDLE",
+    "OVERLAY_FS",
+    "FS_STACK",
+    "KEYS",
+    "ASSOCIATIVE_ARRAY",
+    "MEMFD_CREATE",
+    "EEPROM_93CX6",
+    "EXTCON",
+    "INPUT_FF_MEMLESS",
+    "HID_SUPPORT",
+    "REALTEK_PHY",
+    "SPI_MEM",
+    "NETWORK_SECMARK",
+    "SECURITYFS",
 )
 print("===== 3b. D-0073 leftovers must not be y =====")
 failed = []
