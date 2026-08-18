@@ -242,6 +242,15 @@ build_trimmed_linux() {
     if [[ -f "$ARTIFACTS/Image-trimmed" && -f "$BUILD/trimmed.config" && -f "$BUILD/merge_config.out" ]]; then
         TRIM_IMAGE="$ARTIFACTS/Image-trimmed"
         echo "linux-build: reusing $TRIM_IMAGE (skip trimmed rebuild)" >&2
+        # D-0072: System.map is the offline initcall labeler. Copy it
+        # if the O= tree still has it and the artifact was never saved.
+        if [[ ! -f "$ARTIFACTS/System.map-trimmed" ]]; then
+            if [[ -f "$TRIM_O/System.map" ]]; then
+                cp -a "$TRIM_O/System.map" "$ARTIFACTS/System.map-trimmed"
+            else
+                echo "linux-build: WARNING: System.map-trimmed missing (D-0072 diagnostic needs it; do not rebuild Image-trimmed to recover)" >&2
+            fi
+        fi
         return
     fi
     # Buildroot builds the pinned kernel in-tree under output/build/linux-*.
@@ -274,7 +283,9 @@ build_trimmed_linux() {
         Image -j"$jobs"
     TRIM_IMAGE="$TRIM_O/arch/riscv/boot/Image"
     [[ -f "$TRIM_IMAGE" ]] || die "trimmed build produced no $TRIM_IMAGE"
+    [[ -f "$TRIM_O/System.map" ]] || die "trimmed build produced no System.map"
     cp -a "$TRIM_IMAGE" "$ARTIFACTS/Image-trimmed"
+    cp -a "$TRIM_O/System.map" "$ARTIFACTS/System.map-trimmed"
     cp -a "$TRIM_O/.config" "$BUILD/trimmed.config"
 }
 

@@ -2,7 +2,7 @@
 
 T4.8 five-arm campaign. **RISC-V under QEMU TCG software emulation** (not x86, not KVM hardware virtualization). Source: `git show ffb7ac71234e953ae51339a3e1f5e17ba8c3f1b3:results/{runs,phases}.csv` (batches `20260818T073023Z-1` / `20260818T073023Z-2`, measured kernel `1005399`, n=60 recorded per arm, warmup excluded). Working-tree CSVs are not read. Regeneration: `just report-exhibits`.
 
-E0→E4 is the comparison: two direct client-clock stamps. No E3w-derived column (D-0070 / D-0071). W is not in this table — it is the accepted connection waiting for the guest, and a cell next to Linux would be boot-wait in disguise. Whimbrel W lives in [edges.md](edges.md) (T4.8 section). E0→first-connect is a same-QEMU **control**, not a comparison. D_fin is the same pcap definition on every row (client FIN − HTTP frame). Linux guest decomposition (printk / initcall_debug) is not this exhibit.
+E0→E4 is the comparison: two direct client-clock stamps. No E3w-derived column (D-0070 / D-0071). W is not in this table — it is the accepted connection waiting for the guest, and a cell next to Linux would be boot-wait in disguise. Whimbrel W lives in [edges.md](edges.md) (T4.8 section). E0→first-connect is a same-QEMU **control**, not a comparison. D_fin is the same pcap definition on every row (client FIN − HTTP frame). Linux guest decomposition is [linux-decomposition.md](linux-decomposition.md) (T4.8 instrumented serial; not a per-initcall ranking).
 
 ### Comparison (E0→E4)
 

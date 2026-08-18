@@ -749,10 +749,21 @@ bench-summary:
 
 # T4.3 / T4.4 / T4.6 / T4.8: regenerate report exhibits from git objects.
 # Baseline: tag baseline-t4.3. After-ladder / Δ: T4.6 CSV commit.
-# Cross-system: T4.8 CSV commit ffb7ac7. Working-tree CSVs are not
-# read (D-0067).
+# Cross-system: T4.8 CSV commit ffb7ac7. Linux decomposition: serial
+# pin d705ecb. Working-tree CSVs / serials are not read (D-0067).
 report-exhibits:
     python3 scripts/report-exhibits.py
+
+# D-0072: label the 327 ms printk hole. Same Image-trimmed, cmdline
+# = instrumented MANIFEST append + ignore_loglevel, System.map
+# offline. One boot, not a campaign arm, never runs.csv. Bench host.
+# This pod fail-closes without artifacts. Selftest does not boot.
+linux-initcall-label:
+    python3 scripts/label-linux-initcalls.py selftest
+    bash scripts/linux-initcall-label.sh
+
+label-linux-initcalls-selftest:
+    python3 scripts/label-linux-initcalls.py selftest
 
 # D-0070 read-only tshark pass over recorded T4.6 / D-0068 pcaps.
 # git show of those CSV objects; results/trials/ must already exist.

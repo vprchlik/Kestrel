@@ -329,6 +329,12 @@ D-0067's `--after-batches`).
   kernel `1005399`. Cross-system table:
   `report/exhibits/cross-system.md`. New-schema Whimbrel edges
   append to `report/exhibits/edges.md`.
+- **Linux decomposition pin:** `d705ecb8c67350519f9ce4653a4685a89e20e1d4`
+  (`results/serial/` T4.8 batch-1 trial 4). Generated
+  `report/exhibits/linux-decomposition.md`. Not a cross-system
+  table. The D-0072 `ignore_loglevel` boot is a later pin when
+  that serial exists as a git object; until then gap 1 stays
+  anonymous.
 
 ### Cross-system tables (T4.8 / T4.9, and any table that has more
 than one `system` value)
@@ -678,6 +684,157 @@ append instrumented console=ttyS0 loglevel=7 printk.time=1 initcall_debug rdinit
 Files live at `bench/linux/artifacts/<name>`. Append strings that
 disagree with the D-0062 pins fail closed. This file is not
 committed until linux-build has run on the bench host.
+
+## Bench-host spec (D-0072): one `ignore_loglevel` boot to name the 327 ms hole
+
+Not a campaign. Not a sixth arm. Not an E0→E4 row. A **labeling
+pass** for gap 1 of
+`report/exhibits/linux-decomposition.md`. The dedicated host
+executes it (`just linux-initcall-label`). This pod fail-closes
+without `bench/linux/artifacts/`. Results never enter
+`runs.csv` / `phases.csv` / a cross-system table.
+
+The T4.8 instrumented serial already measured the hole (327 ms
+between `dns_resolver registered` and `clk: Disabling unused
+clocks` under `loglevel=7`). This boot exists because
+`initcall_debug` printed nothing there. Two factors, this order
+(D-0072):
+
+1. **`loglevel=7` filters `KERN_DEBUG`** — necessary and
+   sufficient for zero initcall lines. Linux 6.18 emits
+   `calling  %pS` / `initcall %pS returned %d after %lld usecs`
+   at `KERN_DEBUG`. Console prints levels strictly below
+   `console_loglevel`; debug is 7.
+2. **`# CONFIG_KALLSYMS is not set`** affects **names only**.
+   `%pS` still prints the pointer (`PM: Calling 0xffffffff800614ec`
+   in the T4.8 log). Kallsyms would name it; it would not have
+   created the missing lines.
+
+A kallsyms-enabled Image is a different binary than the trimmed
+row. Do not build one for this pass.
+
+### Cmdline (exact)
+
+Same `Image-trimmed` as T4.8 (MANIFEST `artifact Image-trimmed`).
+The **only** delta from the instrumented MANIFEST append is
+`ignore_loglevel`:
+
+```
+console=ttyS0 loglevel=7 printk.time=1 initcall_debug ignore_loglevel rdinit=/init
+```
+
+Do not drop `loglevel=7`. Do not substitute `loglevel=8` on the
+host — `ignore_loglevel` is the stated knob (it ignores the
+console loglevel entirely, which is what makes `KERN_DEBUG`
+visible). Do not add this string to MANIFEST as a third `append`
+line; it is not a campaign config.
+
+### What to boot
+
+One boot. `linux-boot-test.sh` shape so `/init` still runs the
+measured path (client started before QEMU, SYN-grid, no RST,
+`READY`, 92-byte RESP, `LINUX INIT OK`, QEMU exit 0):
+
+- `-kernel bench/linux/artifacts/Image-trimmed`
+- `-initrd bench/linux/artifacts/rootfs.cpio`
+- `-append` the cmdline above
+- shared `qemu-args.sh` (`csum=off` / TSO-family off)
+- `TIMEOUT_S=60` (same floor as `just test-linux`); if this boot
+  times out, raise once and record the new budget in the serial
+  header — extra `KERN_DEBUG` UART is expected to inflate wall
+  time. That inflation is why this boot's initcall **durations
+  do not replace** the 327 ms.
+
+Fail closed **before** QEMU:
+
+- `sha256(Image-trimmed)` ≠ MANIFEST `artifact Image-trimmed`
+- missing `rootfs.cpio` / `init` / MANIFEST
+- missing `System.map` (see below)
+
+Fail closed **after**:
+
+- zero lines matching `initcall .* returned .* after .* usecs`
+  (`ignore_loglevel` did not take, or this is the T4.8 log
+  again)
+- `INIT FAIL:` / `Kernel panic` / missing `LINUX INIT OK`
+- any unresolved initcall address against `System.map`
+
+Do not write `results/runs.csv`. Do not invent a `config=` value.
+`just bench-t48` stays five arms.
+
+### `System.map` — offline resolution
+
+`System.map` is a **build sidecar**, not a boot artifact. It is
+not in MANIFEST and not in git (`bench/linux/artifacts/` and
+`build/` are gitignored). It must come from the same trimmed
+`O=` build that produced this `Image-trimmed`.
+
+Search order:
+
+1. `bench/linux/artifacts/System.map-trimmed` (copied by
+   `just linux-build` when it produces `Image-trimmed`)
+2. `bench/linux/build/linux-trimmed/System.map` (the `O=` tree)
+
+If neither exists: `TEST FAIL: System.map-trimmed missing`. Do
+**not** rebuild the Image to recover the map — a new Image is a
+new hash and is not the T4.8 binary. Recover the map from the
+build tree that already hashed to MANIFEST, or stop.
+
+`just linux-build` copies `O=.../System.map` to
+`artifacts/System.map-trimmed` whenever it writes
+`Image-trimmed`. The reuse-skip path copies it if the `O=` file
+is still there and the artifact is missing.
+
+### How the resolver works
+
+`scripts/label-linux-initcalls.py` reads the diagnostic serial
+and `System.map`. It does not read `runs.csv`.
+
+**Parse** (CRLF-tolerant), Linux 6.18 `trace_initcall_finish_cb`:
+
+```
+initcall 0xffffffff8xxxxxxx returned <ret> after <usecs> usecs
+```
+
+`%pS` without kallsyms is a hex pointer, with or without `0x`.
+Ignore `calling  … @ <pid>` for ranking; the `returned` line
+carries the duration. `entering initcall level: …` is a
+breadcrumb, not a cost.
+
+**Resolve.** `System.map` lines are `<hex> <type> <name>`
+(no `0x`). For each initcall address A, take the greatest map
+address ≤ A (the same nearest-symbol rule kallsyms uses). Report
+`name+0xOFF`. Offset ≥ 64 KiB is `TEST FAIL` (wrong map for this
+Image). Any address below the map's first symbol is unresolved
+and fails the run.
+
+**Hole window.** The T4.8 anonymous region is the printk span
+from `Key type dns_resolver registered` to
+`clk: Disabling unused clocks`. Those two lines are `KERN_INFO`
+and still appear under `ignore_loglevel`. Initcalls whose
+**finish** timestamp falls in `(t_dns, t_clk]` are the labels
+for gap 1. Extra debug UART will **widen** that span on this
+boot; that is expected. Use the names and the ranking **inside
+the window**. Do not copy this boot's microseconds into the
+327 ms cell.
+
+**Outputs** (committed later, not by this spec's first run
+unless the operator chooses):
+
+```
+results/serial/linux-trimmed-ignore-loglevel-<UTC>.log
+results/serial/linux-trimmed-ignore-loglevel-<UTC>-initcalls.txt
+```
+
+The `.txt` header records Image sha256, System.map sha256, the
+exact cmdline, and QEMU version. The body is two tables: (1)
+hole-window initcalls sorted by `usecs` descending, (2) all
+initcalls the same way, captioned UART-inflated / not a report
+number.
+
+The exhibit generator does **not** read these files until they
+exist as a named git object and a follow-up pin is added. Until
+then gap 1 stays anonymous.
 
 ## `runs.csv` — one row per trial
 

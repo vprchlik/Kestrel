@@ -2597,6 +2597,18 @@ D-0011 onward are working decisions made under those constraints.
   in the fragment so those five unsets stick. `EFI` stays an
   annotated override (`PORTABLE` `select EFI`); `NONPORTABLE=y` is
   a board-personality change we will not make.
+- **Amendment (2026-08-18 — initcall_debug vs the trim, D-0072):**
+  The T4.8 instrumented serial (`results/serial/`, `d705ecb`) has
+  `initcall_debug` on the cmdline and zero initcall entries in 151
+  timestamped printk lines. Two factors, in this order: (1)
+  `loglevel=7` filters `KERN_DEBUG` — necessary and sufficient for
+  the missing lines; (2) `# CONFIG_KALLSYMS is not set` affects
+  names only. `PM: Calling 0xffffffff800614ec` in the same log
+  proves `%pS` still prints without kallsyms. A sixth campaign arm
+  with kallsyms is declined (D-0072): it would describe a different
+  binary than the trimmed row. Labeling the 327 ms printk hole is a
+  diagnostic boot of the *same* `Image-trimmed` with
+  `ignore_loglevel`, addresses resolved offline from `System.map`.
 
 ## D-0063: Unikraft spike — go/no-go and the no-core-patches line
 - Date: 2026-08-16 — Status: accepted
@@ -3295,5 +3307,58 @@ D-0011 onward are working decisions made under those constraints.
   pcap-write poll, ~10 boots) if anyone wants S measured rather than
   derived there; or any QEMU/host change on the bench machine, which
   may move S and with it nothing else.
+
+## D-0072: Label Linux's 327 ms hole on the same Image; do not add a sixth arm
+- Date: 2026-08-18 — Status: accepted
+- **Decision:** the Linux boot decomposition exhibit is generated
+  from the T4.8 instrumented serial of `Image-trimmed` (printk
+  gaps, `/init` stamps, unmeasured prefix). It is not a
+  per-initcall ranking. Naming the 327 ms anonymous gap is a
+  **diagnostic boot**, not a campaign arm: the same
+  `Image-trimmed` (MANIFEST hash), cmdline =
+  instrumented MANIFEST line plus `ignore_loglevel`, one boot, no
+  N-trial, no `runs.csv` row, never a cross-system table cell.
+  Addresses from `initcall 0x… returned … after N usecs` are
+  resolved offline against `System.map` from that Image's build.
+  Durations on that boot are UART-inflated labels for the hole;
+  they do not replace the 327 ms measured under `loglevel=7`.
+- **Initcall_debug produced nothing on the instrumented arm. Two
+  factors, this order:**
+  1. **`loglevel=7` filters `KERN_DEBUG`.** Linux 6.18 prints
+     initcall_debug via `printk(KERN_DEBUG "calling  %pS …")` /
+     `"initcall %pS returned %d after %lld usecs"`
+     (`init/main.c` `trace_initcall_*_cb`). Console emits levels
+     strictly below `console_loglevel`. Debug is 7, so
+     `loglevel=7` is **necessary and sufficient** for zero
+     initcall entries in the T4.8 serial. `ignore_loglevel` (or
+     `loglevel=8`) is what makes those lines exist.
+  2. **`# CONFIG_KALLSYMS is not set`** (`linux-trimmed.fragment`
+     line 71) affects **names only**. `%pS` without kallsyms still
+     prints the pointer. The same T4.8 log already does, at a
+     visible level: `PM: Calling 0xffffffff800614ec`. Kallsyms
+     would turn that into a symbol; it would not have created the
+     missing `KERN_DEBUG` lines.
+- **Alternatives considered:** a sixth campaign arm, trimmed +
+  `CONFIG_KALLSYMS=y`, instrumented (rejected: different Image than
+  the published trimmed row — the quiet-vs-instrumented asymmetry
+  D-0062 already refused, moved into kconfig; kallsyms without
+  raising loglevel still prints nothing, so the arm would have to
+  change the binary *and* the cmdline). Fabricating an E2 from
+  OpenSBI line count or from `W − accept` (rejected: D-0062;
+  mixed-clock remainder is the D-0071 shape). Typing printk table
+  cells (rejected: D-0064; generate from `git show` of the serial
+  pin).
+- **Rationale:** a kernel trimmed this hard cannot be fully
+  instrumented by its own debug facility. That is a finding about
+  minimal-kernel measurement, not a mistake in the T4.8 setup.
+  Labeling on the same binary keeps the decomposition honest;
+  ranking from a fatter Image would describe work we did not
+  compare.
+- **Consequences:** bench-host spec in `results/README.md`
+  (D-0072). Exhibit `report/exhibits/linux-decomposition.md` from
+  the T4.8 serial pin (`d705ecb`). `just linux-initcall-label`
+  is the diagnostic writer; this pod fail-closes without
+  artifacts. Revisit when that boot's labeled table is committed
+  — it annotates gap 1, it does not grow a sixth E0→E4 row.
 
 

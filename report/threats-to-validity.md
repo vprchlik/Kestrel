@@ -98,3 +98,11 @@ item is mitigated-and-measured or stated.
     stamps) was never wrong — each piece was counted once there.
     Lesson recorded next to D-0069's: an unexplained constant must
     not keep a plausible-sounding name.
+18. **A kernel trimmed this hard cannot be fully instrumented by
+    its own debug facility (D-0072).** `initcall_debug` on the T4.8
+    cmdline produced zero entries: `loglevel=7` filters
+    `KERN_DEBUG` (necessary and sufficient); kallsyms off affects
+    names only (`PM: Calling 0xffffffff800614ec`). Stated. The
+    decomposition is printk gaps plus `/init` stamps
+    (`report/exhibits/linux-decomposition.md`). Naming gap 1 is a
+    diagnostic boot of the same Image, not a sixth comparison arm.

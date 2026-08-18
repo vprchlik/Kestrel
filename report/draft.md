@@ -1,7 +1,7 @@
 # Floor-finding: boot to first HTTP byte on a RISC-V unikernel
 
 Draft-early skeleton (T4.3 / D-0064; T4.4 and T4.6 ladder rows
-filled; T4.8 cross-system filled). Every quantitative claim in
+filled; T4.8 cross-system and Linux decomposition filled). Every quantitative claim in
 Results is generated from CSV by `scripts/report-exhibits.py`.
 Regeneration: `just report-exhibits`. Do not type table cells.
 
@@ -12,7 +12,8 @@ kernel `35861f3`), **after-ladder and Δ** from the T4.6 superpage CSV
 commit (measured kernel `76830e13`), **D-0068 dump-placement** from
 that commit plus the two yield-then-dump CSV commits, **T4.8
 cross-system** from `ffb7ac7` (measured kernel `1005399`, batches
-`20260818T073023Z-1` / `20260818T073023Z-2`). See
+`20260818T073023Z-1` / `20260818T073023Z-2`), **Linux decomposition**
+from the T4.8 serial pin `d705ecb` (batch-1 trial 4). See
 [exhibits/phase-decomposition.md](exhibits/phase-decomposition.md)
 caption and D-0067. `HEAD` may hold a later batch; it is not
 the after-ladder pin.
@@ -101,6 +102,9 @@ reproducibility across a different campaign shape — three extra
 systems in the shuffle — not a new rung. Host-observed T4.8
 Whimbrel edges (new schema: E0→E4, W, D_fin, D_ack, no E3w) are
 the T4.8 section of [exhibits/edges.md](exhibits/edges.md).
+The Linux guest decomposition is the T4.8 instrumented serial
+([exhibits/linux-decomposition.md](exhibits/linux-decomposition.md)),
+not a sixth arm.
 
 **Baseline freeze.** Tag `baseline-t4.3` (CSV freeze commit `bce55a2`).
 Measured kernel git SHA `35861f3`. Batches `20260817T041311Z-1` and
@@ -516,9 +520,31 @@ hobbling Linux. The published config is
 could likely do better — we claim *a* minimal Linux, not *the*
 minimal Linux (D-0062).
 
-Linux's own boot decomposition (printk / `initcall_debug` on the
-instrumented arm) is not written up here. That exhibit waits on
-reading what those serial logs actually give.
+### Linux boot decomposition
+
+Generated from the T4.8 instrumented serial
+([exhibits/linux-decomposition.md](exhibits/linux-decomposition.md);
+`d705ecb`, batch-1 trial 4). Thesis: twenty named Whimbrel deltas
+against one 327 ms anonymous Linux region — kind, not magnitude.
+
+`initcall_debug` produced nothing. Two factors, this order
+(D-0072): `loglevel=7` filters `KERN_DEBUG` (necessary and
+sufficient for the missing lines); `# CONFIG_KALLSYMS is not set`
+affects names only (`PM: Calling 0xffffffff800614ec` in the same
+log). A kernel trimmed this hard cannot be fully instrumented by
+its own debug facility. That is a measurement finding, not a
+setup mistake. No sixth arm: kallsyms would describe a different
+binary than the trimmed row.
+
+The printk-visible kernel to `Run /init` is 617.58 ms. The top ten
+gaps are 84.1% of that span; gap 1 is 327.24 ms / 53.0%, the
+anonymous `do_initcalls` region a diagnostic `ignore_loglevel`
+boot of the same Image will name. `/init` is 627.03 ms of kernel
+then 26.18 ms of server work. Printk `Run /init` → shutdown =
+43.31 ms = 9.45 + 26.18 + 7.68, evidence the clocks agree, not a
+claim they are the same clock. Unmeasured prefix: 63 untimed
+OpenSBI lines, then 39 kernel lines at `0.000000` until
+`sched_clock` at 38 µs. No E2 constructed.
 
 ---
 
@@ -626,16 +652,27 @@ maintained in [threats-to-validity.md](threats-to-validity.md).
     stamps) was never wrong — each piece was counted once there.
     The lesson sits beside D-0069's: an unexplained constant must
     not keep a plausible-sounding name.
+18. **A kernel trimmed this hard cannot be fully instrumented by
+    its own debug facility** (D-0072). `initcall_debug` is on the
+    T4.8 cmdline and produced zero entries: `loglevel=7` filters
+    `KERN_DEBUG` (necessary and sufficient); kallsyms off affects
+    names only. Stated. The decomposition is printk gaps plus
+    `/init` stamps
+    ([linux-decomposition.md](exhibits/linux-decomposition.md)).
+    Naming gap 1 is a diagnostic boot of the same Image, not a
+    sixth comparison arm.
 
 ---
 
 ## Future work
 
-Next: Linux boot decomposition from the instrumented arm's serial
-(printk / `initcall_debug`) — not drafted until those logs are
-read. Unikraft spike (D-0063). `virtq_init` remains eligible at
-13% of 6.43 ms and is not the next action. D-0060 is
-declined-by-subsumption. `-bios none` (D-0061). T4.3b audit cleanup.
+Next: D-0072 diagnostic boot on the bench host (`just
+linux-initcall-label`) — same `Image-trimmed`, `ignore_loglevel`,
+`System.map` offline — to name gap 1. That table annotates this
+exhibit; it does not grow a sixth E0→E4 row. Unikraft spike
+(D-0063). `virtq_init` remains eligible at 13% of 6.43 ms and is
+not the next action. D-0060 is declined-by-subsumption.
+`-bios none` (D-0061). T4.3b audit cleanup.
 
 ---
 
@@ -647,6 +684,7 @@ declined-by-subsumption. `-bios none` (D-0061). T4.3b audit cleanup.
 - [Edges exhibit](exhibits/edges.md)
 - [Dump placement exhibit](exhibits/dump-placement.md)
 - [Cross-system exhibit](exhibits/cross-system.md)
+- [Linux boot decomposition](exhibits/linux-decomposition.md)
 - [D-0070 pcap pass exhibit](exhibits/d0070-pcap.md) (generated on
   the bench host; committed from there)
 - [Machine-spec block](exhibits/machine-spec.md)
