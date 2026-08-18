@@ -115,8 +115,9 @@ timeline as first-connect plus the pcap-relative SYN/ACK→HTTP
 interval); E4 = first byte at the client. E4−E3w is the host-side
 remainder after the frame is in the filter-dump (D-0066), not a µs
 loopback. The PHASE dump yields once after `wait_tx`, then prints
-(D-0068). Two N-trials left E3w→E4 untouched; the remainder is
-open (~31 ms of ~52 ms).
+(D-0068). Two N-trials left E3w→E4 untouched; D-0070 pre-registers
+that the term is mostly an E3w anchoring artifact (hostfwd accept
+≠ guest handshake), pcap test pending.
 T3.12(a) measured the E2 offset as 0, so `_start` *is* the OpenSBI phase.
 Headline E2→E3g uses a client retrying before E0; `just test`'s
 curl-after-`HTTP READY` E3g is harness wait (D-0043).

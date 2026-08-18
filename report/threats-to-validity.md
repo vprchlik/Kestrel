@@ -8,7 +8,8 @@ item is mitigated-and-measured or stated.
    taxed differently than on silicon. Every claim carries "under QEMU TCG".
 2. **slirp is a peer**, not a wire. E3w−E3g prices virtio+slirp, not a NIC.
    E3w→E4 prices hostfwd delivery plus client recv (D-0066). After
-   D-0068 it is still ~31 ms of ~52 ms and unexplained.
+   D-0068 it is still ~31 ms of ~52 ms; D-0070 pre-registers the
+   anchoring-artifact hypothesis with a pcap-internal test pending.
 3. **Client granularity.** Persistent process. Measured median on the
    T4.3 freeze is **1.000 ms** (see `report/exhibits/machine-spec.md`
    `client_granularity_ns`). That cadence is connect-retry only; it
@@ -36,7 +37,12 @@ item is mitigated-and-measured or stated.
     clock that does not match Python `time.time_ns()`. `e0_to_e3w_ns` is
     first-connect (monotonic from E0) plus the pcap-relative SYN/ACK→HTTP
     interval, not `pcap_epoch - e0_wall`. E3w→E4 inherits that
-    construction (D-0066).
+    construction (D-0066) — and the anchor is under test: with
+    hostfwd, connect-success is QEMU's host-side accept, not the
+    guest handshake, so the construction plausibly folds firmware +
+    boot-to-net-init into "E3w→E4" (D-0070, pre-registered).
+    No E3w-derived column may appear in a cross-system table;
+    E0→first-connect is a same-QEMU control, not a comparison.
 11. **Reservation vs working set** (D-0030).
 12. **Pre-M4 harness fail-open (finding 31, T4.0b receipt).**
     `scripts/boot-test.sh` ran under `set -u` only; a failed `cargo build`

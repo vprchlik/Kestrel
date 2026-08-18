@@ -2920,4 +2920,119 @@ D-0011 onward are working decisions made under those constraints.
 - Revisit trigger: a fourth pre-registered small-phase range
   that lands *low* would break the sign and reopen this.
 
+## D-0070: E3w→E4 is hypothesized to be an E3w anchoring artifact
+- Date: 2026-08-18 — Status: proposed (hypothesis pre-registered with
+  its discriminator; the bench host runs the pcap pass; no report
+  claim changes until it lands)
+- **Decision (hypothesis):** the open ~31 ms fast / ~93 ms safe
+  E3w→E4 term is not host-side post-publish delivery. It is the
+  time an already-accepted hostfwd connection waits for the guest
+  to become reachable, mislabeled by E3w's construction.
+  `scripts/bench.py::e0_to_e3w_ns` computes
+  `first_connect + pcap(SYN/ACK→HTTP)` and its docstring assumes
+  "first-connect (≈ SYN/ACK)". With hostfwd that approximation
+  fails: `connect()` succeeds at QEMU's host-side accept — the
+  listener is up during QEMU startup, before the machine runs —
+  while the guest SYN/ACK on the netdev happens only after
+  firmware + boot-to-net-init. Everything between accept and the
+  guest SYN/ACK lands in "E3w→E4". True publish→client delivery
+  is hypothesized sub-millisecond in both profiles.
+- **Evidence already in recorded CSVs (report-grade data, no new
+  runs):**
+  1. `e0_to_first_connect_ns` is profile-independent (fast
+     18.53 ms, safe 18.55 ms) while serving-readiness differs by
+     ~70 ms — connect success cannot be gated on the guest.
+     `attempts` ≈ 17 at 1 ms cadence: refused until listener-up.
+  2. Rung deltas partition exactly as the construction predicts.
+     Savings in phases *before* net-init move "E3w→E4":
+     freeze→T4.4 `frame_init` −7.06 ms predicted, −7.37 ms
+     observed; T4.4→T4.6 paging −2.72 ms predicted, −2.83 ms
+     observed. Savings *after* net-init move E0→E3w:
+     freeze→T4.4 `accounting` −4.77 ms predicted, E0→E3w moved
+     −5.08 ms; T4.4→T4.6 had no post-net savings and E0→E3w
+     moved −0.10 ms.
+  3. The affine form E3w→E4 ≈ const + boot-to-net-init explains
+     the 3× safe/fast ratio against the ~12× boot ratio, and the
+     D-0068 null: there was never tens of ms of post-publish host
+     work for a yield to reorder.
+- **Wire-level method check (this KVM pod, one release+fast-boot
+  gate boot; magnitudes not report-grade, mechanism only):** the
+  pcap's first frame is slirp broadcasting an ARP request for
+  10.0.2.15 (sender 10.0.2.2) — the queued hostfwd SYN trying to
+  resolve the guest at client-connect time. It goes unanswered for
+  28.5 ms until the guest's first TX (its gateway ARP request at
+  net-init); the queued SYN flushes 67 µs later; SYN/ACK, GET
+  (queued since accept), response. ACK of the 92 B response:
+  +36 µs after the HTTP frame. Client FIN (client received the
+  body and closed): +212 µs. Accept-to-SYN/ACK wait: 29.3 ms =
+  ~99% of what the E3w construction would call "E3w→E4" on this
+  boot. Guest-clock vs pcap-clock rate agreement on the same
+  intervals: ~1%. Incidentally: the guest ACKs the client's FIN
+  19.4 ms late — it is inside the D-0068 `wfi` + PHASE dump,
+  after E4, exactly where the dump no longer matters.
+- **Pre-registered discriminator (bench host; read-only over
+  already-recorded per-trial pcaps of T4.6 and both D-0068
+  campaigns; zero new boots, no harness change):** per trial, on
+  the single pcap clock:
+  - `W` := t(first guest SYN/ACK) − t(first slirp ARP request for
+    10.0.2.15) — accept-to-handshake wait.
+    (`arp.opcode==1 && arp.src.proto_ipv4==10.0.2.2 &&
+    arp.dst.proto_ipv4==10.0.2.15`; `tcp.srcport==80 &&
+    tcp.flags==0x012`.)
+  - `D_ack` := t(first pure ACK from slirp acknowledging the 92 B
+    payload+FIN) − t(HTTP frame) — delivery to the host stack.
+  - `D_fin` := t(first client FIN toward :80) − t(HTTP frame) —
+    upper bound on publish→client-recv (the bench client closes
+    after `recv`; D-0068 alternative 3).
+  - Crosscheck: pcap(SYN/ACK→HTTP) vs guest
+    `rdtime(E3g − established)` within ~0.3 ms (clock-rate sanity).
+  **Predictions (padded per D-0069):** `D_fin` ≤ 5 ms and
+  safe/fast ratio < 2; `W` ≈ E3w→E4 − `D_fin` within ~1 ms in
+  both profiles; `W_safe − W_fast` ≈ 61.5 ms ≈ the
+  boot-to-net-init difference. **Falsify the hypothesis if**
+  `D_fin` ≥ 10 ms in fast, or `D_fin` scales ≥ 2× with profile.
+- **Outcome meanings:**
+  1. As predicted → E3w→E4 was mislabeled guest-boot wait; amend
+     D-0066 ("largest host-side term" was mostly our own boot,
+     already counted once, correctly, in E0→E4); retire E3w→E4 as
+     a remainder metric; report true delivery as `D_fin`
+     (generated); no QEMU/slirp mechanism to chase; D-0068's yield
+     stays on principle.
+  2. `D_fin` large and profile-scaling → real post-publish host
+     delay; TCG/main-loop contention returns as candidate; next
+     discriminators: a yield bracketing the full gap, then
+     main-loop tracing.
+  3. Intermediate → partition the term: `W` vs `D_fin`, per
+     profile, per rung.
+- **Alternatives considered as the mechanism, and why they do not
+  fit the three facts:** TCG translation-cache state (affects
+  guest-side intervals, which live inside the pcap-relative term
+  E3w subtracts out; cannot scale a host-clock gap with boot
+  length). QEMU main-loop timer coalescing and slirp polling
+  (sub-ms, boot-independent). Host TCP delayed-ACK / Nagle on the
+  loopback hostfwd path (single 92 B data+FIN push; host stack
+  ACKs immediately — 36 µs measured on the pod; constant, not
+  boot-scaling). Client `recv` scheduling (sub-ms; bounded by
+  `D_fin`). None predicts the rung-delta partition in evidence
+  item 2; the anchoring artifact predicts it exactly.
+- **Cross-system consequence (rules on the Linux row, whichever
+  way the pcap pass lands):** cross-system tables carry **no
+  E3w-derived columns** (E0→E3w, E3w→E4). Under the hypothesis,
+  Linux's "E3w→E4" would be its boot-to-listening time in
+  disguise — hundreds of ms of pure confound. E0→E4 is two direct
+  client-clock stamps and is not confounded: Linux's longer boot
+  is counted once, correctly. E0→first-connect under hostfwd
+  measures QEMU listener-up (~18.5 ms, guest-independent) and
+  becomes a same-QEMU **control** column, not a comparison — if
+  Linux's differs, that flags the run, not the system. Whimbrel's
+  own decomposition may keep E3w with the construction stated
+  (threats item 12). One stated asymmetry: SYN delivery waits for
+  the guest's first wire TX (slirp learns the MAC from any guest
+  frame), so a stack that stays wire-silent until after listening
+  defers its own handshake by up to one ARP exchange — µs-class,
+  stated, not corrected.
+- Revisit trigger: the bench-host pcap pass (fills `W`, `D_ack`,
+  `D_fin`; either confirms or falsifies); or any harness change
+  that re-anchors E3w (D-0067 territory, bench host owns it).
+
 

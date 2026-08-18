@@ -409,7 +409,13 @@ no trap; the first channel that can name the bug is the one to read.
     `gateway 10.0.2.2 MAC learned` so the SYN is not dropped as noarp
     (D-0046). The live pcap assert is our request then slirp's reply
     (`assert-pcap-gateway-arp.sh`), not the T3.5/T3.6 slirp-asked-first
-    chain.
+    chain. **Converse (client-early runs):** a connect *before* any
+    guest TX makes slirp broadcast `who has 10.0.2.15 tell 10.0.2.2`
+    and queue the SYN; that ARP request as pcap frame 1 timestamps the
+    accept, and the queued SYN flushes ~µs after the guest's first
+    frame teaches slirp our MAC (D-0070). A pcap that starts with that
+    slirp request is a client that connected before the guest was
+    reachable, not a broken boot.
 11. `ipv4 drop_proto` non-zero on a happy boot used to be the hostfwd
     TCP SYN (protocol 6) hitting a stack that did not yet parse TCP.
     That exception **expired at T3.10** (D-0049). TCP exists, so

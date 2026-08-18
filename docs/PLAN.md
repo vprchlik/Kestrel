@@ -1703,10 +1703,12 @@ config, quiet-vs-instrumented delta shown). Same QEMU binary, machine,
 single CPU, default 128 MiB, same netdev/hostfwd/filter-dump.
 E3w→E4 dump placement (D-0068) landed and was measured: the dump
 is off the publish→E4 path on principle and did not take the ~31 ms
-term. D-0066 named the remainder; it is still open. The Linux row
-must not treat that remainder as guest work. A yield that brackets
-the gap would discriminate a too-short implementation from a
-dump-irrelevant host term; that is a diagnostic, not this task.
+term. D-0070 pre-registers the anchoring-artifact hypothesis (the
+term is mostly the accepted connection waiting for the guest, not
+host work); its pcap pass runs before this row. Whichever way it
+lands: cross-system tables carry no E3w-derived columns, E0→E4 is
+the comparison (two direct client-clock stamps, unconfounded by
+boot length), and E0→first-connect is a same-QEMU control.
 
 - **Acceptance:** `just bench-linux` produces both configs' rows through
   the same harness; pcap shows the same handshake/response shape; the

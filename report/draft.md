@@ -311,34 +311,54 @@ fast gap (~31 ms). If that collapses E3w→E4, the mechanism was
 right and one tick under-shot. That test is not this change and
 is not a kernel rung.
 
-**The gap is host-side, unrelated to guest dump occupancy.** Then
-the dump is not why safe is 3× worse, and something else that
-scales with profile after E3g has to be. Both measured configs are
-`cargo build --release` (opt-level 3, LTO). The difference is the
-`fast-boot` feature, not the compiler. The PHASE dump is
-`println_always` — the same bytes in both images — so it cannot
-be the 3×. What remains after E3g that `fast-boot` actually
-compiles out is ordinary `println!` on the TX segment and
-`wait_tx` complete lines: tens of DBCN bytes, not sixty
-milliseconds. Tick prints are compiled out too, and `sstatus.SIE`
-is 0 in the handler, so they do not run during the gap. What does
-scale is TCG / QEMU state after a much longer boot: safe E2→E3g
-is 76 ms against 6.4 ms fast. E3w→E4 already moved
-freeze → T4.4 → T4.6 (41.24 → 33.87 → 31.04 ms) with the dump
-unmoved. That is the same shared-state threat as the matched TCG
-pair. The 93 vs 31 ms split is that term.
+**The gap is host-side but not host *work*.** The E3w construction
+anchors the pcap-relative SYN/ACK→HTTP interval to first-connect,
+assuming connect-success coincides with the guest's SYN/ACK
+(`scripts/bench.py`, "first-connect (≈ SYN/ACK)"). With hostfwd
+that fails: `connect()` succeeds at QEMU's host-side accept — the
+listener is up during QEMU startup, guest-independent — while the
+guest SYN/ACK happens only after firmware plus boot to net-init.
+Everything between accept and SYN/ACK lands in "E3w→E4". Three
+pieces of recorded evidence fit: first-connect is
+profile-independent (18.53 vs 18.55 ms) though serving-readiness
+differs by ~70 ms; rung savings partition exactly as anchoring
+predicts (pre-net-init savings moved "E3w→E4": `frame_init`
+−7.06 ms predicted vs −7.37 observed, paging −2.72 vs −2.83;
+post-net-init savings moved E0→E3w: `accounting` −4.77 vs −5.08);
+and the affine form const + boot-to-net-init reproduces the 3×
+safe/fast ratio against the ~12× boot ratio. Under this reading
+the D-0068 null is expected: there was never tens of ms of
+post-publish host work to reorder — true delivery is
+sub-millisecond. This is D-0070, pre-registered with a
+falsifiable pcap-internal test (below); it is a hypothesis until
+the bench-host pcap pass lands.
 
 The yield stays. Instrumentation off the measured path is
-defensible on principle even when it costs nothing (here the
-flagship edges moved the wrong way by a fraction of a millisecond,
-inside stability). A `wfi` does not occupy TCG the way a post-publish
-spin would. Reverting would put DBCN back on the interval we still
-cannot explain. Extending the yield is the discriminator above,
-not a fix to land without its own N-trial.
+defensible on principle even when it costs nothing (the flagship
+edges moved by a fraction of a millisecond, inside stability). A
+`wfi` does not occupy TCG the way a post-publish spin would.
+Reverting would put DBCN back on the interval under test.
 
-E3w→E4 is ~31 ms of the ~52 ms honest number and we do not know
-what it is. It returns to threats-to-validity as an open item,
-not a solved one.
+**The discriminating test (D-0070)** is read-only over per-trial
+pcaps that already exist for T4.6 and both D-0068 campaigns — no
+new boots, no kernel or harness code. On one pcap clock, per
+trial: `W` = guest SYN/ACK − first slirp ARP request for the
+guest (accept-to-handshake wait); `D_ack` = ACK-of-response −
+HTTP frame; `D_fin` = client FIN − HTTP frame (the client closes
+after `recv`, so this bounds publish→client). Predictions:
+`D_fin` ≤ 5 ms, profile ratio < 2; `W` ≈ E3w→E4 − `D_fin`.
+Falsified if `D_fin` ≥ 10 ms or scales ≥ 2× with profile — in
+which case a real post-publish host mechanism exists and the
+next discriminator is a yield bracketing the full gap. A
+method check on this pod's gate pcap (not report-grade): the
+accept-time slirp ARP request sits unanswered for 28.5 ms until
+the guest's first TX; `D_ack` 36 µs; `D_fin` 212 µs; the wait is
+~99% of the would-be gap.
+
+E3w→E4 remains open as a *label* until that pass lands: ~31 ms
+of the ~52 ms honest number. It returns to threats-to-validity
+as an open item with a pre-registered resolution, not a solved
+one.
 
 ### Ladder
 
@@ -430,7 +450,9 @@ maintained in [threats-to-validity.md](threats-to-validity.md).
    differently than on silicon. Every claim carries "under QEMU TCG".
 2. **slirp is the TCP peer**, not a wire. E3w−E3g prices virtio+slirp.
    E3w→E4 prices hostfwd delivery plus client recv, not guest compute
-   (D-0066). After D-0068 it is still ~31 ms of ~52 ms and unexplained.
+   (D-0066). After D-0068 it is still ~31 ms of ~52 ms; D-0070
+   pre-registers the hypothesis that it is mostly an E3w anchoring
+   artifact, with a pcap-internal test pending on the bench host.
 3. **Client retry granularity is 1.000 ms measured** (persistent
    process; see machine-spec `client_granularity_ns`). That cadence
    does not apply after `connect()`. Fork-per-attempt curl was
@@ -465,7 +487,12 @@ maintained in [threats-to-validity.md](threats-to-validity.md).
 12. **E3w fidelity.** filter-dump timestamps are a QEMU realtime clock
     that does not match Python `time.time_ns()`. `e0_to_e3w_ns` is
     first-connect plus the pcap-relative SYN/ACK→HTTP interval.
-    E3w→E4 therefore inherits that construction (D-0066).
+    E3w→E4 therefore inherits that construction (D-0066) — and the
+    anchor itself is under test: with hostfwd, connect-success is
+    QEMU's host-side accept, not the guest handshake, so the
+    construction plausibly folds firmware + boot-to-net-init into
+    "E3w→E4" (D-0070, pre-registered; pcap-internal test pending).
+    No E3w-derived column may appear in a cross-system table.
 13. **Reservation vs working set** (D-0030).
 14. **Estimate bias (D-0069).** Stated as methodology prose, not only
     here. Three-for-three, all optimistic (predicted too fast):
@@ -502,11 +529,12 @@ maintained in [threats-to-validity.md](threats-to-validity.md).
 
 ## Future work
 
-Next: the Linux baseline (D-0062). E3w→E4 is open (~31 ms of
-~52 ms); a yield long enough to bracket that gap would discriminate
-a too-short D-0068 implementation from a dump-irrelevant host term,
-and is a diagnostic, not a rung. `virtq_init` remains eligible at
-13% of 6.43 ms and is not the next action. D-0060 is
+Next: the D-0070 pcap pass on the bench host (read-only over
+existing trial pcaps; decides whether E3w→E4 is an anchoring
+artifact or real post-publish host delay), then the Linux baseline
+(D-0062). The bracket-yield diagnostic is the fallback only if
+D-0070 is falsified. `virtq_init` remains eligible at 13% of
+6.43 ms and is not the next action. D-0060 is
 declined-by-subsumption. `-bios none` (D-0061). Unikraft spike
 (D-0063). T4.3b audit cleanup. Harness per-batch result files
 (D-0067) — spec in `results/README.md`; the bench host implements
