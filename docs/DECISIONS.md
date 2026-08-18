@@ -2609,6 +2609,17 @@ D-0011 onward are working decisions made under those constraints.
   binary than the trimmed row. Labeling the 327 ms printk hole is a
   diagnostic boot of the *same* `Image-trimmed` with
   `ignore_loglevel`, addresses resolved offline from `System.map`.
+- **Amendment (2026-08-18 — FTRACE is a missed trim, D-0072
+  labels):** the diagnostic boot named `trace_eval_sync` as 68% of
+  the 327 ms hole. `menuconfig FTRACE` defaults y when
+  `DEBUG_KERNEL=y`; the riscv `defconfig` sets `DEBUG_KERNEL=y`;
+  the fragment never unsets `FTRACE` / `TRACING` / `DEBUG_KERNEL`.
+  `FTRACE` is not EXPERT-gated, so `# CONFIG_FTRACE is not set`
+  would have stuck. That is a miss, not a documented keep.
+  `CONFIG_SERIAL_OF_PLATFORM=y` remains a keep (ttyS0 from DT).
+  We still claim *a* minimal Linux, not *the* minimal Linux. Do
+  not rebuild `Image-trimmed` to chase this; a new Image is a new
+  comparison.
 
 ## D-0063: Unikraft spike — go/no-go and the no-core-patches line
 - Date: 2026-08-16 — Status: accepted
@@ -3356,9 +3367,22 @@ D-0011 onward are working decisions made under those constraints.
   compare.
 - **Consequences:** bench-host spec in `results/README.md`
   (D-0072). Exhibit `report/exhibits/linux-decomposition.md` from
-  the T4.8 serial pin (`d705ecb`). `just linux-initcall-label`
-  is the diagnostic writer; this pod fail-closes without
-  artifacts. Revisit when that boot's labeled table is committed
-  — it annotates gap 1, it does not grow a sixth E0→E4 row.
+  the T4.8 serial pin (`d705ecb`) plus the diagnostic label pin
+  (`93ab617`). `just linux-initcall-label` is the diagnostic
+  writer; this pod fail-closes without artifacts. The labeled
+  table annotates gap 1; it does not grow a sixth E0→E4 row.
+- **Amendment (2026-08-18 — labels committed):** hole rank 1 is
+  `trace_eval_sync` (222.6 ms UART-inflated, 68% of the T4.8
+  327.24 ms cell). Ranks 2–29 combined are under 20 ms. Full-file,
+  `of_platform_serial_driver_init` is 163.0 ms UART-inflated;
+  `virtio_net_driver_init` + `virtio_mmio_init` are 4.9 ms
+  UART-inflated. Those microseconds label the 327 ms cell; they
+  do not replace it. `trace_eval_sync` is the eval-map flush
+  (`late_initcall_sync` / `destroy_workqueue`); no tracing
+  consumer is running. `FTRACE` is a missed trim (see D-0062
+  amendment). `CONFIG_SERIAL_OF_PLATFORM` is a keep: the 82.5×
+  gap vs `serial8250_init` is DT-probe vs core-register. The
+  comparison claim is named subsystems a single-purpose kernel
+  never runs, not "Linux is slower."
 
 

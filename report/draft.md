@@ -103,6 +103,7 @@ systems in the shuffle — not a new rung. Host-observed T4.8
 Whimbrel edges (new schema: E0→E4, W, D_fin, D_ack, no E3w) are
 the T4.8 section of [exhibits/edges.md](exhibits/edges.md).
 The Linux guest decomposition is the T4.8 instrumented serial
+plus D-0072 labels of the same Image
 ([exhibits/linux-decomposition.md](exhibits/linux-decomposition.md)),
 not a sixth arm.
 
@@ -518,33 +519,49 @@ hobbling Linux. The published config is
 `bench/linux/linux-trimmed.fragment` on `qemu_riscv64_virt_defconfig`
 (Buildroot 2026.02.3, kernel 6.18.7). A Linux boot-time specialist
 could likely do better — we claim *a* minimal Linux, not *the*
-minimal Linux (D-0062).
+minimal Linux (D-0062). The D-0072 labels named one miss: `FTRACE`
+defaults y from `DEBUG_KERNEL`, the fragment never unsets it, and
+`trace_eval_sync` is 68% of the 327 ms hole.
 
 ### Linux boot decomposition
 
-Generated from the T4.8 instrumented serial
+Generated from the T4.8 instrumented serial plus the D-0072
+`ignore_loglevel` labels
 ([exhibits/linux-decomposition.md](exhibits/linux-decomposition.md);
-`d705ecb`, batch-1 trial 4). Thesis: twenty named Whimbrel deltas
-against one 327 ms anonymous Linux region — kind, not magnitude.
+`d705ecb` + `93ab617`, same `Image-trimmed`). The finding inverts
+the intuition: the virtio path Linux actually needs is 4.9 ms
+(UART-inflated; `virtio_net_driver_init` + `virtio_mmio_init`).
+The 327.24 ms hole is not that path. `trace_eval_sync` is 222.6 ms
+UART-inflated on the diagnostic boot — 68.0% of the T4.8 cell,
+which those microseconds label and do not replace. Full-file,
+`of_platform_serial_driver_init` is 163.0 ms UART-inflated
+(generic DT serial-bus probe, not in the hole). Kind, not
+magnitude: named subsystems a single-purpose kernel never runs,
+not "Linux is slower."
 
-`initcall_debug` produced nothing. Two factors, this order
-(D-0072): `loglevel=7` filters `KERN_DEBUG` (necessary and
-sufficient for the missing lines); `# CONFIG_KALLSYMS is not set`
-affects names only (`PM: Calling 0xffffffff800614ec` in the same
-log). A kernel trimmed this hard cannot be fully instrumented by
-its own debug facility. That is a measurement finding, not a
-setup mistake. No sixth arm: kallsyms would describe a different
-binary than the trimmed row.
+`initcall_debug` produced nothing on the T4.8 pin. Two factors,
+this order (D-0072): `loglevel=7` filters `KERN_DEBUG` (necessary
+and sufficient for the missing lines); `# CONFIG_KALLSYMS is not
+set` affects names only (`PM: Calling 0xffffffff800614ec` in the
+same log). A kernel trimmed this hard cannot be fully
+instrumented by its own debug facility. No sixth arm.
 
-The printk-visible kernel to `Run /init` is 617.58 ms. The top ten
-gaps are 84.1% of that span; gap 1 is 327.24 ms / 53.0%, the
-anonymous `do_initcalls` region a diagnostic `ignore_loglevel`
-boot of the same Image will name. `/init` is 627.03 ms of kernel
-then 26.18 ms of server work. Printk `Run /init` → shutdown =
-43.31 ms = 9.45 + 26.18 + 7.68, evidence the clocks agree, not a
-claim they are the same clock. Unmeasured prefix: 63 untimed
-OpenSBI lines, then 39 kernel lines at `0.000000` until
-`sched_clock` at 38 µs. No E2 constructed.
+`trace_eval_sync` is the tracing subsystem's enum-to-string sync
+pass (`late_initcall_sync` flushing `eval_map_work_func`). No
+tracing consumer is running (`/init` is a static musl HTTP
+server; `PROC_FS`/`SYSFS` unset). `FTRACE` defaults y when
+`DEBUG_KERNEL=y`; the fragment never unsets it. That is a missed
+trim, not a documented keep. `CONFIG_SERIAL_OF_PLATFORM` stays a
+keep: `serial8250_init` is 2.0 ms UART-inflated (core register,
+"4 ports"); `of_platform_serial_driver_init` is the DT probe of
+`10000000.serial` (82.5×, UART-inflated).
+
+The printk-visible kernel to `Run /init` is 617.58 ms. The top
+ten gaps are 84.1% of that span; gap 1 is 327.24 ms / 53.0%.
+`/init` is 627.03 ms of kernel then 26.18 ms of server work.
+Printk `Run /init` → shutdown = 43.31 ms = 9.45 + 26.18 + 7.68.
+Unmeasured prefix: 63 untimed OpenSBI lines, then 39 kernel lines
+at `0.000000` until `sched_clock` at 38 µs. No E2 constructed.
 
 ---
 
@@ -584,7 +601,9 @@ maintained in [threats-to-validity.md](threats-to-validity.md).
    trim removed real work. Config published:
    `bench/linux/linux-trimmed.fragment`. A Linux boot-time
    specialist could likely do better; we claim *a* minimal Linux,
-   not *the* minimal Linux.
+   not *the* minimal Linux. `FTRACE` is a recorded miss: it
+   defaults y from `DEBUG_KERNEL`, the fragment never unsets it,
+   and `trace_eval_sync` is 68% of the 327 ms hole.
 9. **Unikraft pin** (D-0063) — stated when that row exists.
 10. **Instrumentation observer effect.** Stamp overhead is a generated
     row in [exhibits/edges.md](exhibits/edges.md) (5.5 µs on
@@ -657,22 +676,23 @@ maintained in [threats-to-validity.md](threats-to-validity.md).
     T4.8 cmdline and produced zero entries: `loglevel=7` filters
     `KERN_DEBUG` (necessary and sufficient); kallsyms off affects
     names only. Stated. The decomposition is printk gaps plus
-    `/init` stamps
+    `/init` stamps plus UART-inflated labels from one
+    `ignore_loglevel` boot of the same Image
     ([linux-decomposition.md](exhibits/linux-decomposition.md)).
-    Naming gap 1 is a diagnostic boot of the same Image, not a
-    sixth comparison arm.
+    Gap 1 is `trace_eval_sync` (222.6 ms UART-inflated, 68% of the
+    327.24 ms cell, which those microseconds label and do not
+    replace). Not a sixth comparison arm. `FTRACE` is a missed
+    trim (D-0062: *a* minimal Linux, not *the* minimal Linux).
 
 ---
 
 ## Future work
 
-Next: D-0072 diagnostic boot on the bench host (`just
-linux-initcall-label`) — same `Image-trimmed`, `ignore_loglevel`,
-`System.map` offline — to name gap 1. That table annotates this
-exhibit; it does not grow a sixth E0→E4 row. Unikraft spike
-(D-0063). `virtq_init` remains eligible at 13% of 6.43 ms and is
-not the next action. D-0060 is declined-by-subsumption.
-`-bios none` (D-0061). T4.3b audit cleanup.
+Unikraft spike (D-0063). `virtq_init` remains eligible at 13% of
+6.43 ms and is not the next action. D-0060 is
+declined-by-subsumption. `-bios none` (D-0061). T4.3b audit
+cleanup. `FTRACE` is a recorded miss on the Linux trim; unsetting
+it would be a new Image, not a relabel of T4.8.
 
 ---
 

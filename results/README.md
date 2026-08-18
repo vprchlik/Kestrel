@@ -330,11 +330,12 @@ D-0067's `--after-batches`).
   `report/exhibits/cross-system.md`. New-schema Whimbrel edges
   append to `report/exhibits/edges.md`.
 - **Linux decomposition pin:** `d705ecb8c67350519f9ce4653a4685a89e20e1d4`
-  (`results/serial/` T4.8 batch-1 trial 4). Generated
-  `report/exhibits/linux-decomposition.md`. Not a cross-system
-  table. The D-0072 `ignore_loglevel` boot is a later pin when
-  that serial exists as a git object; until then gap 1 stays
-  anonymous.
+  (`results/serial/` T4.8 batch-1 trial 4). **D-0072 label pin:**
+  `93ab617676672f6db7a1d076389f9a049678192a`
+  (`linux-trimmed-ignore-loglevel-20260818T084831Z-initcalls.txt`).
+  Generated `report/exhibits/linux-decomposition.md`. Not a
+  cross-system table. Diagnostic durations are UART-inflated
+  labels for the 327 ms cell; they do not replace it.
 
 ### Cross-system tables (T4.8 / T4.9, and any table that has more
 than one `system` value)
@@ -832,9 +833,11 @@ hole-window initcalls sorted by `usecs` descending, (2) all
 initcalls the same way, captioned UART-inflated / not a report
 number.
 
-The exhibit generator does **not** read these files until they
-exist as a named git object and a follow-up pin is added. Until
-then gap 1 stays anonymous.
+The exhibit generator reads the label pin
+(`93ab617676672f6db7a1d076389f9a049678192a`) via `git show`.
+Diagnostic microseconds annotate gap 1 of
+`report/exhibits/linux-decomposition.md`; they do not replace the
+327 ms T4.8 cell.
 
 ## `runs.csv` — one row per trial
 

@@ -750,7 +750,8 @@ bench-summary:
 # T4.3 / T4.4 / T4.6 / T4.8: regenerate report exhibits from git objects.
 # Baseline: tag baseline-t4.3. After-ladder / Δ: T4.6 CSV commit.
 # Cross-system: T4.8 CSV commit ffb7ac7. Linux decomposition: serial
-# pin d705ecb. Working-tree CSVs / serials are not read (D-0067).
+# pin d705ecb plus D-0072 labels 93ab617. Working-tree CSVs / serials
+# are not read (D-0067).
 report-exhibits:
     python3 scripts/report-exhibits.py
 

@@ -24,7 +24,8 @@ item is mitigated-and-measured or stated.
    stock by 188.32 ms (`report/exhibits/cross-system.md`). Config
    published: `bench/linux/linux-trimmed.fragment`. A Linux
    boot-time specialist could likely do better; we claim *a*
-   minimal Linux, not *the* minimal Linux.
+   minimal Linux, not *the* minimal Linux. `FTRACE` is a recorded
+   miss (`trace_eval_sync` / D-0072).
 7. **Unikraft pin** (D-0063) — stated when that row exists.
 8. **Instrumentation observer effect.** Stamp overhead is a generated
    edges-exhibit row (~5.5 µs fast-boot). D-0068 moved
@@ -103,6 +104,9 @@ item is mitigated-and-measured or stated.
     cmdline produced zero entries: `loglevel=7` filters
     `KERN_DEBUG` (necessary and sufficient); kallsyms off affects
     names only (`PM: Calling 0xffffffff800614ec`). Stated. The
-    decomposition is printk gaps plus `/init` stamps
-    (`report/exhibits/linux-decomposition.md`). Naming gap 1 is a
-    diagnostic boot of the same Image, not a sixth comparison arm.
+    decomposition is printk gaps plus `/init` stamps plus
+    UART-inflated labels from one `ignore_loglevel` boot of the
+    same Image (`report/exhibits/linux-decomposition.md`). Gap 1
+    is `trace_eval_sync` (222.6 ms UART-inflated, labeling 68% of
+    the 327.24 ms cell, not replacing it). Not a sixth comparison
+    arm. `FTRACE` is a missed trim.

@@ -6,10 +6,11 @@ run; they are not an append-only history. Baseline columns therefore
 come from tag `baseline-t4.3` via `git show`, after-ladder / Δ
 columns from the T4.6 superpage CSV commit, D-0068 dump-placement
 from its two CSV commits, the T4.8 cross-system table from that
-campaign's CSV commit, and the Linux decomposition from the T4.8
-serial pin (`d705ecb`). HEAD may hold a later batch; pins do not
-follow it. The working-tree files are not read — a local `just bench`
-leftover cannot become an exhibit.
+campaign's CSV commit, the Linux decomposition from the T4.8
+serial pin (`d705ecb`), and D-0072 hole labels from the
+`ignore_loglevel` pin (`93ab617`). HEAD may hold a later batch;
+pins do not follow it. The working-tree files are not read — a
+local `just bench` leftover cannot become an exhibit.
 
 Never type the numbers this script prints.
 `just report-exhibits` regenerates report/exhibits/.
@@ -63,6 +64,15 @@ LINUX_SERIAL_PATH = (
 WHIMBREL_SERIAL_PATH = (
     "results/serial/whimbrel-fast-20260818T073023Z-1-t04.log"
 )
+# D-0072 diagnostic labels. UART-inflated; they annotate the T4.8
+# 327 ms cell, they do not replace it. Not a sixth campaign arm.
+LABEL_REV = "93ab617676672f6db7a1d076389f9a049678192a"
+LABEL_PATH = (
+    "results/serial/"
+    "linux-trimmed-ignore-loglevel-20260818T084831Z-initcalls.txt"
+)
+FRAGMENT_PATH = "bench/linux/linux-trimmed.fragment"
+MANIFEST_PATH = "bench/linux/MANIFEST"
 T48_ARM_ORDER = (
     ("whimbrel", "release-fast-boot"),
     ("whimbrel", "release-default"),
@@ -915,7 +925,8 @@ def write_cross_system(
         "comparison. D_fin is the same pcap definition on every row "
         "(client FIN − HTTP frame). Linux guest decomposition is "
         "[linux-decomposition.md](linux-decomposition.md) (T4.8 "
-        "instrumented serial; not a per-initcall ranking).",
+        "instrumented serial plus D-0072 labels on the same Image; "
+        "not a sixth arm).",
         "",
         "### Comparison (E0→E4)",
         "",
@@ -1153,6 +1164,78 @@ def fmt_ms2(ns: float) -> str:
     return f"{ns / 1e6:.2f} ms"
 
 
+def fmt_us_ms1(usecs: int) -> str:
+    return f"{usecs / 1000.0:.1f} ms"
+
+
+LABEL_ROW_RE = re.compile(
+    r"^\| (\d+) \| (\d+) \| `([^`]+)` \| (-?\d+) \| ([0-9.]+) \|\s*$"
+)
+
+
+def manifest_image_trimmed_sha(text: str) -> str:
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) >= 3 and parts[0] == "artifact" and parts[1] == "Image-trimmed":
+            return parts[2]
+    raise ExhibitFail("TEST FAIL: MANIFEST missing artifact Image-trimmed")
+
+
+def parse_initcall_label_file(
+    text: str,
+) -> tuple[list[dict], list[dict], dict[str, str]]:
+    meta: dict[str, str] = {}
+    for line in text.splitlines():
+        if line.startswith("# Image-trimmed sha256="):
+            meta["image_sha"] = line.split("=", 1)[1].strip()
+        elif line.startswith("# cmdline="):
+            meta["cmdline"] = line.split("=", 1)[1]
+        elif line.startswith("# qemu="):
+            meta["qemu"] = line.split("=", 1)[1]
+        elif line.startswith("# System.map sha256="):
+            meta["smap_sha"] = line.split("=", 1)[1].split()[0]
+    hole: list[dict] = []
+    all_rows: list[dict] = []
+    section: str | None = None
+    for line in text.splitlines():
+        if line.startswith("## Hole window"):
+            section = "hole"
+            continue
+        if line.startswith("## All initcalls"):
+            section = "all"
+            continue
+        m = LABEL_ROW_RE.match(line)
+        if not m or section is None:
+            continue
+        rec = {
+            "rank": int(m.group(1)),
+            "usecs": int(m.group(2)),
+            "symbol": m.group(3),
+            "ret": int(m.group(4)),
+            "printk_s": float(m.group(5)),
+        }
+        if section == "hole":
+            hole.append(rec)
+        else:
+            all_rows.append(rec)
+    if "image_sha" not in meta or "cmdline" not in meta or "qemu" not in meta:
+        raise ExhibitFail("TEST FAIL: D-0072 label header missing sha/cmdline/qemu")
+    if not hole:
+        raise ExhibitFail("TEST FAIL: D-0072 label file has no hole-window rows")
+    if not all_rows:
+        raise ExhibitFail("TEST FAIL: D-0072 label file has no all-initcall rows")
+    return hole, all_rows, meta
+
+
+def lookup_initcall(rows: list[dict], symbol: str) -> dict:
+    hits = [r for r in rows if r["symbol"] == symbol]
+    if len(hits) != 1:
+        raise ExhibitFail(
+            f"TEST FAIL: want one {symbol} in initcall labels, got {len(hits)}"
+        )
+    return hits[0]
+
+
 def parse_printk(text: str) -> list[tuple[int, str, str]]:
     rows: list[tuple[int, str, str]] = []
     for raw in text.splitlines():
@@ -1198,8 +1281,89 @@ def parse_phases_serial(text: str) -> list[dict]:
     return rows
 
 
-def write_linux_decomposition(linux_text: str, whim_text: str) -> str:
-    """T4.8 instrumented serial vs Whimbrel dump. Kind, not magnitude."""
+def write_linux_decomposition(
+    linux_text: str,
+    whim_text: str,
+    labels_text: str,
+    fragment_text: str,
+    manifest_text: str,
+) -> str:
+    """T4.8 instrumented serial vs Whimbrel dump, plus D-0072 labels.
+
+    Kind, not magnitude. Diagnostic microseconds label the 327 ms
+    cell; they do not replace it.
+    """
+    hole, all_initcalls, label_meta = parse_initcall_label_file(labels_text)
+    want_sha = manifest_image_trimmed_sha(manifest_text)
+    if label_meta["image_sha"] != want_sha:
+        raise ExhibitFail(
+            "TEST FAIL: D-0072 label Image-trimmed sha256 "
+            f"{label_meta['image_sha']} != MANIFEST {want_sha}"
+        )
+    if "ignore_loglevel" not in label_meta["cmdline"]:
+        raise ExhibitFail(
+            "TEST FAIL: D-0072 label cmdline missing ignore_loglevel: "
+            f"{label_meta['cmdline']!r}"
+        )
+    if "initcall_debug" not in label_meta["cmdline"]:
+        raise ExhibitFail(
+            "TEST FAIL: D-0072 label cmdline missing initcall_debug"
+        )
+    if "10.2.1" not in label_meta["qemu"]:
+        raise ExhibitFail(
+            "TEST FAIL: D-0072 label qemu is not 10.2.1: "
+            f"{label_meta['qemu']!r}"
+        )
+    if hole[0]["rank"] != 1 or hole[0]["symbol"] != "trace_eval_sync":
+        raise ExhibitFail(
+            "TEST FAIL: hole rank 1 is not trace_eval_sync "
+            f"(rank {hole[0]['rank']} {hole[0]['symbol']})"
+        )
+    if len(hole) < 29:
+        raise ExhibitFail(
+            f"TEST FAIL: hole has {len(hole)} initcalls, want ≥ 29"
+        )
+    ranks_2_29 = hole[1:29]
+    ranks_2_29_us = sum(r["usecs"] for r in ranks_2_29)
+    if ranks_2_29_us >= 20_000:
+        raise ExhibitFail(
+            "TEST FAIL: hole ranks 2–29 combined "
+            f"{ranks_2_29_us} usecs, want < 20 ms"
+        )
+    of_serial = lookup_initcall(all_initcalls, "of_platform_serial_driver_init")
+    virtio_net = lookup_initcall(all_initcalls, "virtio_net_driver_init")
+    serial8250 = lookup_initcall(all_initcalls, "serial8250_init")
+    virtio_mmio = lookup_initcall(all_initcalls, "virtio_mmio_init")
+    hole_syms = {r["symbol"] for r in hole}
+    if of_serial["symbol"] in hole_syms:
+        raise ExhibitFail(
+            "TEST FAIL: of_platform_serial_driver_init is inside the "
+            "327 ms hole; the inversion claim would be wrong"
+        )
+    if virtio_net["symbol"] in hole_syms or virtio_mmio["symbol"] in hole_syms:
+        raise ExhibitFail(
+            "TEST FAIL: a virtio initcall is inside the 327 ms hole"
+        )
+    virtio_us = virtio_net["usecs"] + virtio_mmio["usecs"]
+    if virtio_us >= 15_000:
+        raise ExhibitFail(
+            f"TEST FAIL: virtio pair {virtio_us} usecs, want ~5 ms"
+        )
+    if of_serial["usecs"] < 10 * serial8250["usecs"]:
+        raise ExhibitFail(
+            "TEST FAIL: of_platform_serial is not ≫ serial8250_init "
+            f"({of_serial['usecs']} vs {serial8250['usecs']})"
+        )
+    if "CONFIG_FTRACE" in fragment_text:
+        raise ExhibitFail(
+            "TEST FAIL: linux-trimmed.fragment mentions FTRACE; "
+            "the missed-trim claim needs a rewrite"
+        )
+    if "CONFIG_SERIAL_OF_PLATFORM=y" not in fragment_text:
+        raise ExhibitFail(
+            "TEST FAIL: fragment missing CONFIG_SERIAL_OF_PLATFORM=y keep"
+        )
+
     printk = parse_printk(linux_text)
     if len(printk) < 100:
         raise ExhibitFail(
@@ -1290,6 +1454,28 @@ def write_linux_decomposition(linux_text: str, whim_text: str) -> str:
             "TEST FAIL: largest printk gap is not dns_resolver → clk-disable "
             f"({top[0][1]!r} → {top[0][2]!r})"
         )
+    serial8250_msg = next(
+        (msg for _ts, _raw, msg in printk if msg.startswith("Serial: 8250")),
+        None,
+    )
+    if serial8250_msg is None:
+        raise ExhibitFail("TEST FAIL: T4.8 serial missing Serial: 8250 banner")
+    tty_mmio_msg = next(
+        (
+            msg
+            for _ts, _raw, msg in printk
+            if "10000000.serial: ttyS0" in msg
+        ),
+        None,
+    )
+    if tty_mmio_msg is None:
+        raise ExhibitFail(
+            "TEST FAIL: T4.8 serial missing 10000000.serial: ttyS0"
+        )
+    gap1_ns = top[0][0]
+    hole_rank1_share = 100.0 * hole[0]["usecs"] * 1000.0 / gap1_ns
+    ranks_2_29_share = 100.0 * ranks_2_29_us * 1000.0 / gap1_ns
+    serial_ratio = of_serial["usecs"] / serial8250["usecs"]
 
     listen = stamps["listen"]
     resp = stamps["response"]
@@ -1327,23 +1513,28 @@ def write_linux_decomposition(linux_text: str, whim_text: str) -> str:
     lines = [
         "<!-- generated by scripts/report-exhibits.py — do not edit -->",
         "",
-        "Twenty named deltas against one 327 ms anonymous region. "
-        "Kind, not magnitude: Whimbrel's guest path is an owned "
-        "instrumentation of a single-purpose VM; Linux's is leftover "
-        "`KERN_INFO` from a general-purpose kernel whose own initcall "
-        "debugger did not reach the console.",
+        f"The virtio path Linux actually needs — `virtio_net_driver_init` "
+        f"plus `virtio_mmio_init` — costs **{fmt_us_ms1(virtio_us)}** "
+        "(UART-inflated; `ignore_loglevel` boot). The "
+        f"**{fmt_ms2(gap1_ns)}** T4.8 hole is not that path: "
+        f"`trace_eval_sync` is {hole_rank1_share:.1f}% of it, and "
+        "full-file the other giant is generic serial-bus probing "
+        f"(`of_platform_serial_driver_init` "
+        f"{fmt_us_ms1(of_serial['usecs'])}, UART-inflated). Kind, "
+        "not magnitude: named subsystems a single-purpose kernel "
+        "never runs, not \"Linux is slower.\"",
         "",
-        f"Source: `git show {SERIAL_REV}:results/serial/{{linux-trimmed-instrumented,whimbrel-fast}}-20260818T073023Z-1-t04.log` "
-        f"(T4.8 batch `20260818T073023Z-1`, "
-        "trial 4, measured kernel `1005399`, same QEMU). "
+        f"T4.8 source: `git show {SERIAL_REV}:results/serial/{{linux-trimmed-instrumented,whimbrel-fast}}-20260818T073023Z-1-t04.log` "
+        f"(batch `20260818T073023Z-1`, trial 4, measured kernel "
+        "`1005399`, same QEMU). Labels: "
+        f"`git show {LABEL_REV}:{LABEL_PATH}` "
+        "(same `Image-trimmed`, `ignore_loglevel`). "
         "**RISC-V under QEMU TCG software emulation.** Working-tree "
         "serials are not read. Regeneration: `just report-exhibits`.",
         "",
-        "This exhibit is not a per-initcall ranking and not a "
-        "cross-system table. Gap 1 stays anonymous until the D-0072 "
-        "diagnostic boot (`ignore_loglevel`, same `Image-trimmed`, "
-        "addresses from `System.map`). That boot is a labeling pass; "
-        "its UART-inflated durations do not replace cells here.",
+        "This exhibit is not a cross-system table and not a sixth "
+        "arm. Diagnostic durations **label** the "
+        f"{fmt_ms2(gap1_ns)} cell; they do not replace it.",
         "",
         "## Instrumentation limit",
         "",
@@ -1382,8 +1573,10 @@ def write_linux_decomposition(linux_text: str, whim_text: str) -> str:
         "socket); PLIC; 8250; `legacy console [ttyS0] enabled`; "
         f"`Run /init as init process` at {fmt_ms2(run_init_ns)}. "
         "Virtio-mmio probe and virtio-net ready are **not** on the "
-        "boot path — `virtio_net virtio0` and "
-        "`10008000.virtio_mmio` appear only at shutdown.",
+        "T4.8 printk boot path — `virtio_net virtio0` and "
+        "`10008000.virtio_mmio` appear only at shutdown. The "
+        "diagnostic boot names those initcalls outside the hole "
+        f"({fmt_us_ms1(virtio_us)} UART-inflated combined).",
         "",
         f"Printk-visible kernel is the span from the first timestamp "
         f"to `Run /init`: **{fmt_ms2(kernel_span)}**. The gaps "
@@ -1395,7 +1588,10 @@ def write_linux_decomposition(linux_text: str, whim_text: str) -> str:
     ]
     for i, (dur, src, dst, _t0, _t1) in enumerate(top, 1):
         note = (
-            "anonymous region; D-0072 diagnostic boot names it"
+            f"`trace_eval_sync` ({fmt_us_ms1(hole[0]['usecs'])} "
+            "UART-inflated on the ignore_loglevel boot) labels "
+            f"{hole_rank1_share:.1f}% of this {fmt_ms2(gap1_ns)} "
+            "cell; it does not replace it"
             if i == 1
             else ""
         )
@@ -1413,6 +1609,101 @@ def write_linux_decomposition(linux_text: str, whim_text: str) -> str:
             "it the log still names general-purpose work the trim did "
             "not remove: NFS, 9p, USB, ALSA, SDHCI, mousedev, HugeTLB, "
             "audit, RPC.",
+            "",
+            "## Gap 1 named",
+            "",
+            "The D-0072 `ignore_loglevel` boot of the same "
+            "`Image-trimmed` names the hole. Durations in this "
+            "section are UART-inflated (extra `KERN_DEBUG` on the "
+            f"console). They label the **{fmt_ms2(gap1_ns)}** T4.8 "
+            "cell; they do not replace it.",
+            "",
+            "| what | duration (UART-inflated; ignore_loglevel boot) | share of the T4.8 hole |",
+            "|---|---:|---:|",
+            f"| hole rank 1: `trace_eval_sync` | {fmt_us_ms1(hole[0]['usecs'])} | {hole_rank1_share:.1f}% of {fmt_ms2(gap1_ns)} |",
+            f"| hole ranks 2–29 combined ({len(ranks_2_29)} initcalls) | {fmt_us_ms1(ranks_2_29_us)} | {ranks_2_29_share:.1f}% of {fmt_ms2(gap1_ns)} |",
+            "",
+            "One initcall is essentially the whole anonymous region. "
+            f"Ranks 2–29 inside the hole sum to under 20 ms combined "
+            f"({fmt_us_ms1(ranks_2_29_us)}, UART-inflated).",
+            "",
+            "`trace_eval_sync` is `late_initcall_sync` in Linux 6.18 "
+            "`kernel/trace/trace.c` (`obj-$(CONFIG_TRACING) += trace.o`). "
+            "`trace_eval_init` (a `subsys_initcall`) queues "
+            "`eval_map_work_func` on a tracing workqueue; that work "
+            "walks `__start_ftrace_eval_maps` … `__stop_ftrace_eval_maps` "
+            "and rewrites trace-event print formats so userspace "
+            "parsers can decode `TRACE_DEFINE_ENUM` names. "
+            "`trace_eval_sync` destroys the workqueue and therefore "
+            "flushes the pass. This guest is one hart under TCG, so "
+            "the \"background\" work runs at sync time on the boot CPU "
+            "and shows up as one giant initcall.",
+            "",
+            "No tracing consumer is running. `/init` is a static musl "
+            "HTTP server; `PROC_FS` and `SYSFS` are unset, so tracefs "
+            "is not a usable ABI. The maps exist for a userspace that "
+            "is not here. `CONFIG_TRACE_EVAL_MAP_FILE` only keeps a "
+            "debugfs dump of the maps; it is not the gate for this "
+            "initcall.",
+            "",
+            "The user-visible compile gate is `menuconfig FTRACE` "
+            "(\"Tracers\"), which defaults y when "
+            "`CONFIG_DEBUG_KERNEL=y`. Buildroot's "
+            "`qemu_riscv64_virt_defconfig` uses the riscv "
+            "`defconfig` (`BR2_LINUX_KERNEL_USE_ARCH_DEFAULT_CONFIG`), "
+            "and that defconfig sets `DEBUG_KERNEL=y`. "
+            "`linux-trimmed.fragment` never unsets `FTRACE`, "
+            "`TRACING`, or `DEBUG_KERNEL`. `FTRACE` is not "
+            "EXPERT-gated, so `# CONFIG_FTRACE is not set` would have "
+            "stuck. That is a further trim we **missed**, not a keep "
+            "we documented. D-0062 already claims *a* minimal Linux, "
+            "not *the* minimal Linux; we did not rebuild "
+            "`Image-trimmed`.",
+            "",
+            "## Full-file context",
+            "",
+            "Ranked across the whole diagnostic boot, not inside the "
+            "hole. Every duration in this table is UART-inflated from "
+            "the `ignore_loglevel` boot; none of them replace a T4.8 "
+            "cell. `of_platform_serial_driver_init` finishes before "
+            "`dns_resolver registered` — it is not the "
+            f"{fmt_ms2(gap1_ns)} hole.",
+            "",
+            "| symbol | duration (UART-inflated; ignore_loglevel boot) | in the T4.8 hole? |",
+            "|---|---:|---|",
+            f"| `trace_eval_sync` | {fmt_us_ms1(hole[0]['usecs'])} | yes |",
+            f"| `of_platform_serial_driver_init` | {fmt_us_ms1(of_serial['usecs'])} | no |",
+            f"| `virtio_net_driver_init` | {fmt_us_ms1(virtio_net['usecs'])} | no |",
+            f"| `serial8250_init` | {fmt_us_ms1(serial8250['usecs'])} | no |",
+            f"| `virtio_mmio_init` | {fmt_us_ms1(virtio_mmio['usecs'])} | no |",
+            "",
+            f"`virtio_net_driver_init` + `virtio_mmio_init` = "
+            f"**{fmt_us_ms1(virtio_us)}** (UART-inflated). That is "
+            "the virtio path this comparison actually needs. The "
+            "dominant costs are a tracing-infrastructure sync pass "
+            "and generic serial-bus probing — work a single-purpose "
+            "kernel never runs.",
+            "",
+            f"`serial8250_init` (`CONFIG_SERIAL_8250`, kept) is the "
+            "8250/16550 core: `uart_register_driver` and the "
+            "ISA/legacy port table (`nr_uarts`). The T4.8 log prints "
+            f"`{md_cell(serial8250_msg)}` from that initcall. It does "
+            "not probe the QEMU virt DT UART.",
+            "",
+            "`of_platform_serial_driver_init` "
+            "(`CONFIG_SERIAL_OF_PLATFORM=y`, kept on purpose in "
+            "`linux-trimmed.fragment` so ttyS0 comes from the virt "
+            "board DT) is `module_platform_driver` → "
+            "`of_platform_serial_probe` in `drivers/tty/serial/8250/8250_of.c`: "
+            "ioremap, IRQ, `serial8250_register_8250_port` for "
+            "`10000000.serial`. That is the MMIO + console "
+            "registration the T4.8 log shows as "
+            f"`{md_cell(tty_mmio_msg)}`. The "
+            f"**{serial_ratio:.1f}×** gap (UART-inflated "
+            f"{fmt_us_ms1(of_serial['usecs'])} vs "
+            f"{fmt_us_ms1(serial8250['usecs'])}) is core-register "
+            "versus DT-probe, not two copies of the same work. Kept, "
+            "not missed.",
             "",
             "## `/init` stamps",
             "",
@@ -1437,7 +1728,9 @@ def write_linux_decomposition(linux_text: str, whim_text: str) -> str:
             "",
             "ready → accept is sub-millisecond: the SYN was already "
             "queued (confound A's announce). Virtio-net bring-up is "
-            "not in this table; it sits in the kernel, mostly in gap 1.",
+            "not in this table; the diagnostic names it outside gap 1 "
+            f"(`virtio_mmio_init` + `virtio_net_driver_init` = "
+            f"{fmt_us_ms1(virtio_us)}, UART-inflated).",
             "",
             "## Clock cross-check",
             "",
@@ -1479,12 +1772,16 @@ def write_linux_decomposition(linux_text: str, whim_text: str) -> str:
             "(the campaign median 6.43 ms lives in "
             "[phase-decomposition.md](phase-decomposition.md); this dump "
             "is one trial, used here for kind). Every interval has a "
-            "name. Linux never prints a virtio probe on the way up.",
+            "name. Linux's T4.8 printk never prints a virtio probe "
+            "on the way up; the diagnostic names that work outside "
+            "the hole.",
             "",
-            "That is the comparison: twenty named deltas against one "
-            "327 ms anonymous region of general-purpose `do_initcalls` "
-            "/ leftover probes, which a single-purpose VM does not do "
-            "and which this binary's debug facility could not name.",
+            "That is the comparison: twenty named deltas against "
+            "named general-purpose work a single-purpose VM does not "
+            "do — a tracing eval-map sync pass and leftover probes — "
+            "not an unnamed virtio tax. The T4.8 instrumented serial "
+            "could not name the hole; the diagnostic boot of the same "
+            "Image did.",
             "",
         ]
     )
@@ -1569,13 +1866,22 @@ def main() -> int:
         )
         linux_serial = git_show(SERIAL_REV, LINUX_SERIAL_PATH)
         whim_serial = git_show(SERIAL_REV, WHIMBREL_SERIAL_PATH)
+        labels_text = git_show(LABEL_REV, LABEL_PATH)
+        fragment_text = git_show(LABEL_REV, FRAGMENT_PATH)
+        manifest_text = git_show(LABEL_REV, MANIFEST_PATH)
         (OUT_DIR / "linux-decomposition.md").write_text(
-            write_linux_decomposition(linux_serial, whim_serial),
+            write_linux_decomposition(
+                linux_serial,
+                whim_serial,
+                labels_text,
+                fragment_text,
+                manifest_text,
+            ),
             encoding="utf-8",
         )
         print(
             f"TEST PASS: exhibits from {BASELINE_TAG} + {AFTER_REV} + "
-            f"{T48_REV[:12]} + {SERIAL_REV[:12]} → {OUT_DIR}"
+            f"{T48_REV[:12]} + {SERIAL_REV[:12]} + {LABEL_REV[:12]} → {OUT_DIR}"
         )
         print((OUT_DIR / "machine-spec.md").read_text(encoding="utf-8"))
         print((OUT_DIR / "phase-decomposition.md").read_text(encoding="utf-8"))
