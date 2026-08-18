@@ -330,8 +330,8 @@ safe/fast ratio against the ~12× boot ratio. Under this reading
 the D-0068 null is expected: there was never tens of ms of
 post-publish host work to reorder — true delivery is
 sub-millisecond. This is D-0070, pre-registered with a
-falsifiable pcap-internal test (below); it is a hypothesis until
-the bench-host pcap pass lands.
+falsifiable pcap-internal test (below) and **confirmed** by the
+bench-host pcap pass.
 
 The yield stays. Instrumentation off the measured path is
 defensible on principle even when it costs nothing (the flagship
@@ -339,26 +339,39 @@ edges moved by a fraction of a millisecond, inside stability). A
 `wfi` does not occupy TCG the way a post-publish spin would.
 Reverting would put DBCN back on the interval under test.
 
-**The discriminating test (D-0070)** is read-only over per-trial
-pcaps that already exist for T4.6 and both D-0068 campaigns — no
+**The discriminating test (D-0070)** was read-only over per-trial
+pcaps that already existed for T4.6 and both D-0068 campaigns — no
 new boots, no kernel or harness code. On one pcap clock, per
 trial: `W` = guest SYN/ACK − first slirp ARP request for the
 guest (accept-to-handshake wait); `D_ack` = ACK-of-response −
 HTTP frame; `D_fin` = client FIN − HTTP frame (the client closes
 after `recv`, so this bounds publish→client). Predictions:
 `D_fin` ≤ 5 ms, profile ratio < 2; `W` ≈ E3w→E4 − `D_fin`.
-Falsified if `D_fin` ≥ 10 ms or scales ≥ 2× with profile — in
-which case a real post-publish host mechanism exists and the
-next discriminator is a yield bracketing the full gap. A
-method check on this pod's gate pcap (not report-grade): the
-accept-time slirp ARP request sits unanswered for 28.5 ms until
-the guest's first TX; `D_ack` 36 µs; `D_fin` 212 µs; the wait is
-~99% of the would-be gap.
+Falsify lines: `D_fin` ≥ 10 ms, or scaling ≥ 2× with profile.
 
-E3w→E4 remains open as a *label* until that pass lands: ~31 ms
-of the ~52 ms honest number. It returns to threats-to-validity
-as an open item with a pre-registered resolution, not a solved
-one.
+**Outcome** (generated: [exhibits/d0070-pcap.md](exhibits/d0070-pcap.md);
+n=60 per config per campaign): `D_fin` 63–155 µs in all six
+campaign-configs; safe/fast ratio 0.41–0.91 — delivery does not
+scale with profile at all; `D_ack` 24–40 µs; `W_safe − W_fast`
+61.40 / 61.84 / 61.65 ms against the predicted ≈ 61.5 ms. One
+pre-registered line failed as written: `W + D_fin` under-reconstructs
+E3w→E4 by a constant −6.70 to −7.00 ms in every cell, profile-
+independent, IQRs under ~1 ms. That constant was diagnosed before
+anything was amended (D-0071): it is the slice of QEMU startup
+between the hostfwd listener coming up — where first-connect stamps,
+because the host kernel completes the client handshake into the
+listen backlog the moment `listen()` exists — and the main loop
+going live, when slirp first services the queued connection and
+emits the ARP that starts `W`'s clock. A one-clock mechanism check
+(polling filter-dump's incremental pcap writes against the client's
+own stamps) closed the accounting per boot to +0.05…+0.32 ms, and a
+late-connect control showed slirp forwards an accepted connection's
+SYN in 60–160 µs once startup is over. So the former "E3w→E4"
+decomposes with nothing left over: **QEMU startup (~6.8 ms) +
+waiting for our own guest to boot (`W`) + sub-millisecond delivery
+(`D_fin`)** — the first two already counted once, correctly, in
+E0→E4. E3w→E4 is retired as a reported metric; delivery is
+reported as `D_fin`.
 
 ### Ladder
 
@@ -367,7 +380,7 @@ one.
 | bump / lazy free-list | stop linking ~31k virgin frames; `free_count()` is bump arithmetic | 9.17 ms | −12.25 ms (−57%) | landed T4.4 (D-0065); batches `20260817T052349Z-1`/`-2`; subsumes D-0060. Secondary: later phases faster (warm data cache; matched pair) |
 | D-0060 allocated counter | `free_count = TOTAL − allocated` on the current list | — | — | declined-by-subsumption |
 | 2 MiB superpages (D-0059) | mixed-granularity identity map; level-aware verifier; grain-aware `assert_range` | 6.43 ms | −15.00 ms (−70% vs freeze); −2.74 ms (−30% vs T4.4) | **landed T4.6**; batches `20260817T061753Z-1`/`-2`; `tables_used`=5; paging 3.84 → 1.12 ms. Phase ranges over (D-0069); E2→E3g in range. Secondary: `freeze` slower (cold I-translation; matched pair) |
-| `virtq_init` skip discarded program+verify | first pass wiped by `net::init` reset; `fill_descriptors` stays | — | 842 µs = 13% of 6.43 ms; 5% bar is 322 µs | **eligible, not next.** Ceiling on the gain. Linux takes the honest number; E3w→E4 is open |
+| `virtq_init` skip discarded program+verify | first pass wiped by `net::init` reset; `fill_descriptors` stays | — | 842 µs = 13% of 6.43 ms; 5% bar is 322 µs | **eligible, not next.** Ceiling on the gain. Linux takes the honest number |
 
 ### Superpage outcome (D-0059; T4.6)
 
@@ -402,8 +415,10 @@ clears 5% of E2→E3g. D-0068 was the next *action* and has been
 measured: it did not move E0→E4. Linux is next. Fast E0→E4 is
 51.66 ms on the T4.6 batches; skipping the discarded virtqueue
 pass is ~0.8 ms of that (1.6%). virtq_init stays
-recorded-eligible. The floor is not declared. E3w→E4 is ~31 ms
-of that 52 ms and is open.
+recorded-eligible. The floor is not declared. The former ~31 ms
+"E3w→E4" of that 52 ms is resolved: QEMU startup + guest boot
+wait + sub-ms delivery (D-0070/D-0071), each counted once in
+E0→E4 — there is no separate host term to take.
 
 Leaf-count estimate from T4.4 exhaust `total=31823` → `__heap_end`
 ≈ `0x803B1000`: 62 × 2 MiB leaves on `0x80400000..0x88000000`;
@@ -433,10 +448,13 @@ move); DEBUGGING.md superpage first-response note.
 
 *(stub — T4.8 / T4.9)* Comparisons ride only on E0→first-connect and
 E0→E4. Whimbrel's row is [exhibits/edges.md](exhibits/edges.md).
-Linux and Unikraft cells stay empty until those tasks land. E3w→E4
-is ~31 ms of honest E0→E4 and is open (D-0066 / D-0068): dump
-placement did not take it. The comparison section must not treat
-that remainder as guest work.
+Linux and Unikraft cells stay empty until those tasks land. No
+E3w-derived column may appear here (D-0070): under hostfwd such a
+column would be each system's boot-to-listening time in disguise —
+for Linux, hundreds of ms of pure confound. E0→E4 counts each
+system's boot once, correctly. E0→first-connect (~18.5 ms,
+guest-independent) is a same-QEMU control: if a row's value
+differs, that flags the run, not the system.
 
 ---
 
@@ -449,10 +467,11 @@ maintained in [threats-to-validity.md](threats-to-validity.md).
    page-table build) and MMIO-dense phases (virtio) are taxed
    differently than on silicon. Every claim carries "under QEMU TCG".
 2. **slirp is the TCP peer**, not a wire. E3w−E3g prices virtio+slirp.
-   E3w→E4 prices hostfwd delivery plus client recv, not guest compute
-   (D-0066). After D-0068 it is still ~31 ms of ~52 ms; D-0070
-   pre-registers the hypothesis that it is mostly an E3w anchoring
-   artifact, with a pcap-internal test pending on the bench host.
+   True hostfwd delivery plus client recv is bounded by `D_fin` at
+   63–155 µs ([exhibits/d0070-pcap.md](exhibits/d0070-pcap.md)).
+   The former "E3w→E4" is retired: QEMU startup (D-0071) plus the
+   accepted connection waiting for the guest to boot (D-0070),
+   mislabeled by E3w's anchoring construction.
 3. **Client retry granularity is 1.000 ms measured** (persistent
    process; see machine-spec `client_granularity_ns`). That cadence
    does not apply after `connect()`. Fork-per-attempt curl was
@@ -477,7 +496,8 @@ maintained in [threats-to-validity.md](threats-to-validity.md).
     moved it after a yield so DBCN is not on publish→E4. Two N-trials
     produced no E0→E4 improvement
     ([dump-placement.md](exhibits/dump-placement.md)). The yield
-    stays on principle. It did not solve E3w→E4.
+    stays on principle. The null was later explained: there was no
+    post-publish host work for it to move (D-0070).
 11. **Host variance.** Dedicated native host, performance governor,
     SMT off, boost off, steal 0 on all recorded trials of the freeze,
     T4.4, T4.6, and both D-0068 invocations, two interleaved batches
@@ -485,14 +505,17 @@ maintained in [threats-to-validity.md](threats-to-validity.md).
     two independent campaigns. The KVM pod failed the criterion and
     is not cited.
 12. **E3w fidelity.** filter-dump timestamps are a QEMU realtime clock
-    that does not match Python `time.time_ns()`. `e0_to_e3w_ns` is
-    first-connect plus the pcap-relative SYN/ACK→HTTP interval.
-    E3w→E4 therefore inherits that construction (D-0066) — and the
-    anchor itself is under test: with hostfwd, connect-success is
-    QEMU's host-side accept, not the guest handshake, so the
-    construction plausibly folds firmware + boot-to-net-init into
-    "E3w→E4" (D-0070, pre-registered; pcap-internal test pending).
-    No E3w-derived column may appear in a cross-system table.
+    that does not match Python `time.time_ns()` — measured as a
+    per-boot offset of −30 to −846 ms on the pod, so no absolute
+    `pcap_epoch − e0_wall` quantity is usable (D-0071).
+    `e0_to_e3w_ns` was first-connect plus the pcap-relative
+    SYN/ACK→HTTP interval; its anchor ("first-connect ≈ SYN/ACK")
+    was tested and is false under hostfwd — connect-success is the
+    host kernel accepting into QEMU's listen backlog during startup,
+    not the guest handshake (D-0070, confirmed). E3w-derived metrics
+    are retired in favor of pcap-internal intervals on one clock
+    (`W`, `D_ack`, `D_fin`). No E3w-derived column may appear in a
+    cross-system table.
 13. **Reservation vs working set** (D-0030).
 14. **Estimate bias (D-0069).** Stated as methodology prose, not only
     here. Three-for-three, all optimistic (predicted too fast):
@@ -518,27 +541,34 @@ maintained in [threats-to-validity.md](threats-to-validity.md).
     occupancy surface is guest work after a guest-side stamp moving
     a host-observed edge. D-0068 tested the PHASE dump as that
     occupant: two N-trials, no E4 movement. The dump stays off the
-    interval on principle. **E3w→E4 is open:** ~31 ms of the ~52 ms
-    honest number, unexplained, and it already moved with rungs that
-    did not touch the dump. Linux and Unikraft share slirp/hostfwd;
+    interval on principle. Linux and Unikraft share slirp/hostfwd;
     they will not share a PHASE dump. If measured runs stopped
     printing PHASE, the decomposition and E0→E4 would come from
     different boots — that would be its own line.
+17. **A derived metric double-counted guest boot under a
+    host-sounding name (D-0070/D-0071).** "E3w→E4" folded QEMU
+    startup (~6.8 ms) and boot-to-net-init wait (~24/~85 ms) into a
+    term labeled host-side delivery. It survived a pre-registered
+    audit and four measurement campaigns, and was caught only
+    because it moved with kernel rungs a host-side term should not
+    respond to. The honest headline (E0→E4, two direct client-clock
+    stamps) was never wrong — each piece was counted once there.
+    The lesson sits beside D-0069's: an unexplained constant must
+    not keep a plausible-sounding name.
 
 ---
 
 ## Future work
 
-Next: the D-0070 pcap pass on the bench host (read-only over
-existing trial pcaps; decides whether E3w→E4 is an anchoring
-artifact or real post-publish host delay), then the Linux baseline
-(D-0062). The bracket-yield diagnostic is the fallback only if
-D-0070 is falsified. `virtq_init` remains eligible at 13% of
-6.43 ms and is not the next action. D-0060 is
-declined-by-subsumption. `-bios none` (D-0061). Unikraft spike
-(D-0063). T4.3b audit cleanup. Harness per-batch result files
-(D-0067) — spec in `results/README.md`; the bench host implements
-the write path.
+Next: the Linux baseline (D-0062). The D-0070 pcap pass landed
+(confirmed; residual explained by D-0071); the bracket-yield
+diagnostic is moot. The harness fix — retire `e0_to_e3w_ns`,
+record `w_ns`/`d_ack_ns`/`d_fin_ns` per trial — is designed in
+D-0071 and implemented on the bench host alongside per-batch
+result files (D-0067; spec in `results/README.md`). `virtq_init`
+remains eligible at 13% of 6.43 ms and is not the next action.
+D-0060 is declined-by-subsumption. `-bios none` (D-0061).
+Unikraft spike (D-0063). T4.3b audit cleanup.
 
 ---
 
@@ -549,4 +579,6 @@ the write path.
 - [Phase decomposition exhibit](exhibits/phase-decomposition.md)
 - [Edges exhibit](exhibits/edges.md)
 - [Dump placement exhibit](exhibits/dump-placement.md)
+- [D-0070 pcap pass exhibit](exhibits/d0070-pcap.md) (generated on
+  the bench host; committed from there)
 - [Machine-spec block](exhibits/machine-spec.md)

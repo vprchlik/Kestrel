@@ -2200,7 +2200,9 @@ D-0011 onward are working decisions made under those constraints.
   dominated by firmware (~24 ms class) and E3w→E4 (D-0066 / D-0068);
   D-0061 is the firmware candidate by the ladder's own rule. The
   next *action* is the Linux baseline, not another E2→E3g rung.
-  E3w→E4 is open.
+  E3w→E4 was open when this was written; D-0070/D-0071 later
+  resolved it as a mislabeling (QEMU startup + guest boot wait),
+  not a host term a rung could take.
 
 ## D-0059: 2 MiB superpages for the RAM interior (amends D-0026)
 - Date: 2026-08-16 — Status: accepted (measured 2026-08-17; batches
@@ -2683,7 +2685,10 @@ D-0011 onward are working decisions made under those constraints.
   of 9.17 ms, which was that entry's re-evaluation condition.
 
 ## D-0066: E3w→E4 is a host-side remainder, not an E4 stamp artifact
-- Date: 2026-08-17 — Status: accepted
+- Date: 2026-08-17 — Status: amended 2026-08-18 (D-0070 confirmed +
+  D-0071: the term was a mislabeling, not a delivery remainder;
+  retired as a reported metric — see the amendment at the end of
+  this entry)
 - **Decision:** after T4.4, fast E3w→E4 is 33.87 ms (IQR 432 µs, both
   batches, n=60) — the largest single term in honest E0→E4 (54.52 ms).
   E0→E3w is 20.74 ms (the HTTP frame in the filter-dump); E4 is 54.52 ms
@@ -2722,6 +2727,23 @@ D-0011 onward are working decisions made under those constraints.
   E3w→E4 is an open threats item (~31 ms of ~52 ms), not a solved
   one. TAP / passt / `TCP_NODELAY` on hostfwd remain host-side
   candidates, not 5%-bar kernel rungs.
+- **Amendment (2026-08-18, D-0070 confirmed + D-0071):** "the largest
+  single term in honest E0→E4" was real arithmetic on a mislabeled
+  quantity. The pcap pass decomposed it completely:
+  E3w→E4 = S + W + D_recv, where S is the QEMU-startup slice between
+  hostfwd listener-up (where first-connect stamps) and main-loop-live
+  (where slirp emits the ARP; ~6.8 ms on the bench host, D-0071),
+  W is the already-accepted connection waiting for the guest to boot
+  to net-init (~24 ms fast / ~85 ms safe), and true post-publish
+  delivery is bounded by `D_fin` at 63–155 µs. Nothing in the term
+  was post-publish host work; S and W are time already counted once,
+  correctly, inside E0→E4. The safe-vs-fast scaling that implicated
+  "QEMU occupancy after publish" was W scaling with boot length.
+  E3w→E4 is retired as a reported metric; delivery is reported as
+  `D_fin` (generated). TAP / passt / `TCP_NODELAY` are no longer
+  candidates for a term that does not exist. This entry stays as the
+  record of what the number looked like before the anchor was
+  questioned.
 
 ## D-0067: Per-batch result files (harness recommendation)
 - Date: 2026-08-17 — Status: accepted (approved; design only — the
@@ -2921,9 +2943,11 @@ D-0011 onward are working decisions made under those constraints.
   that lands *low* would break the sign and reopen this.
 
 ## D-0070: E3w→E4 is hypothesized to be an E3w anchoring artifact
-- Date: 2026-08-18 — Status: proposed (hypothesis pre-registered with
-  its discriminator; the bench host runs the pcap pass; no report
-  claim changes until it lands)
+- Date: 2026-08-18 — Status: **confirmed** (bench-host pcap pass,
+  2026-08-18, read-only over T4.6 and both D-0068 campaigns, zero
+  new boots; the one prediction that failed as written — the
+  W + D_fin reconstruction — is a profile-independent constant
+  explained and closed by D-0071)
 - **Decision (hypothesis):** the open ~31 ms fast / ~93 ms safe
   E3w→E4 term is not host-side post-publish delivery. It is the
   time an already-accepted hostfwd connection waits for the guest
@@ -3035,8 +3059,125 @@ D-0011 onward are working decisions made under those constraints.
   frame), so a stack that stays wire-silent until after listening
   defers its own handshake by up to one ARP exchange — µs-class,
   stated, not corrected.
-- Revisit trigger: the bench-host pcap pass (fills `W`, `D_ack`,
-  `D_fin`; either confirms or falsifies); or any harness change
-  that re-anchors E3w (D-0067 territory, bench host owns it).
+- **Outcome (bench-host pcap pass, 2026-08-18; generated exhibit
+  `report/exhibits/d0070-pcap.md`, medians over n=60 per config per
+  campaign):** `D_fin` 63–155 µs across all six campaign-configs
+  (prediction ≤ 5 ms; falsify line was ≥ 10 ms). Safe/fast `D_fin`
+  ratio 0.41–0.91 — real post-publish delivery does not scale with
+  profile at all (falsify line was ≥ 2×). `D_ack` 24–40 µs.
+  `W_safe − W_fast` = 61.40 / 61.84 / 61.65 ms per campaign against
+  the predicted ≈ 61.5 ms. The clock-rate crosscheck
+  |pcap(SYN/ACK→HTTP) − guest(E3g−established)| was 143–145 µs fast
+  (within the ~0.3 ms note) and ~0.58 ms safe (over it; stated, not
+  load-bearing — the safe interval spans ~10.9 ms of post-handshake
+  boot). The reconstruction line failed as written: per-trial
+  `(W + D_fin) − (E3w→E4)` was −6.70 to −7.00 ms in **all six**
+  cells (IQRs under ~1 ms), a constant that does not scale with
+  profile. That residual is not a boot term; it is the pre-ARP
+  QEMU-startup slice, diagnosed and closed in D-0071. With it, the
+  ~31 ms fast / ~93 ms safe "host-side" term decomposes completely:
+  QEMU startup remainder (~6.8 ms) + accepted-connection wait for
+  the guest (W) + sub-ms delivery (`D_fin`). Outcome meaning 1
+  applies: D-0066 amended, E3w→E4 retired as a reported metric,
+  true delivery reported as `D_fin` (generated), no QEMU/slirp
+  mechanism to chase, D-0068's yield stays on principle.
+- Revisit trigger: any harness change that re-anchors E3w
+  (D-0067 territory, bench host owns it).
+
+## D-0071: The D-0070 residual is the pre-ARP QEMU-startup slice
+- Date: 2026-08-18 — Status: accepted (mechanism demonstrated on the
+  pod with a one-clock per-boot accounting that closes to well under
+  the pre-registered 1 ms; the bench-host magnitude is derived
+  arithmetic from report-grade artifacts)
+- **Decision:** the −6.70 to −7.00 ms reconstruction residual in the
+  D-0070 pcap pass is the slice of QEMU startup between the hostfwd
+  listener coming up and the main loop going live. Name it **S**.
+  Algebra first: in `residual = (W + D_fin) − (E3w→E4)` the
+  pcap-internal SYN/ACK→HTTP interval cancels exactly, leaving
+  `residual = pcap(ARP→FIN) − host(first_connect→E4)` — a difference
+  of two same-trial spans, immune to clock-rate error. A negative
+  constant therefore lives at one of the two ends: either the ARP is
+  emitted after first-connect (front) or the client FIN lands before
+  E4 (back). The back end is µs by construction:
+  `scripts/bench-client.py` stamps E4 at the first `recv` chunk and
+  `close()`s immediately after the body — measured client-side
+  close-after-E4 is ~5 µs. The front end is where QEMU startup can
+  hide: `first_connect` stamps when the **host kernel** completes the
+  client handshake into the listen backlog — that happens the moment
+  `listen()` exists during netdev init, with QEMU still mid-startup
+  and no `accept()` call required — while slirp only services the
+  queued connection (and emits the ARP that starts W's clock) after
+  machine realize, firmware + kernel ROM load, and `vm_start` put the
+  main loop in charge. S is that remaining-startup slice: host-native
+  work, profile-independent, constant per host and QEMU build.
+- **Evidence (pod, mechanism-grade, not report numbers):**
+  1. **Campaign-shape replication on leftover data:** the four
+     Aug 16 pod batches (264 trials; `client.json` spans + pcap
+     spans; no e0 needed) give residual medians −7.6 to −8.1 ms,
+     profile-independent while W differs by ~60 ms — same shape as
+     the bench host's −6.8 ms on different hardware and QEMU.
+  2. **One-clock split:** ten instrumented boots (5 per profile)
+     polling the pcap file size on the client's own monotonic clock.
+     filter-dump writes each frame as captured, so the first size
+     transition past the 24-byte global header timestamps the ARP's
+     capture. front := t(first frame write) − first_connect was
+     4.6–5.8 ms, and **per boot, front + residual = +0.05 to
+     +0.32 ms** — the front slice accounts for the entire residual
+     to within the µs-scale FIN tail, in both profiles, and tracks
+     the residual's boot-to-boot jitter. The header write itself
+     lands within ~0.1 ms of first-connect: listener-up and
+     filter-dump attach are the same startup phase (netdev init).
+  3. **Late-connect control:** three boots with the client starting
+     300 ms after spawn (main loop live, guest already serving).
+     slirp forwards the SYN 60–160 µs after connect; the full
+     request completes in ~2 ms. No fixed per-accept cost — the
+     slice exists only when the connection lands during startup.
+  4. **The epoch route is dead, as recorded:** filter-dump's
+     absolute pcap timestamps differ from Python `time.time_ns()`
+     by −30 to −846 ms *varying per boot* (pod QEMU 8.2.2) —
+     confirming the D-0043 / `bench.py` docstring finding and
+     ruling out any `pcap_epoch − e0_wall` diagnostic.
+- **Bench-host magnitude:** S = −residual − ε ≈ 6.6–7.0 ms across
+  the six campaign-configs (ε = FIN-after-E4 tail, ~0.1 ms). This is
+  arithmetic on the report-grade CSVs and pcaps combined with the
+  mechanism above; S itself is a per-host constant and is never a
+  report number.
+- **Alternatives considered as the residual's mechanism:**
+  clock-rate drift (rejected: the residual is constant across a
+  31 ms fast span and a 93 ms safe span; a rate error scales with
+  span; measured rate agreement is ~1%). Client-side lag between
+  FIN and E4 (rejected: E4 precedes the FIN and the close tail is
+  ~5 µs; the front accounts per boot). A fixed slirp per-accept
+  cost (rejected by the late-connect control). ARP emission gated
+  on guest RX readiness (rejected: the ARP is pcap frame 1, written
+  long before the guest's first TX).
+- **Consequences:**
+  1. E3w→E4 decomposes with nothing left over:
+     **S (~6.8 ms QEMU startup) + W (guest boot wait) + D_recv
+     (≤ `D_fin`, 63–155 µs)**. No unexplained constant remains under
+     any name. D-0066 is amended; E3w→E4 is retired as a reported
+     metric; delivery is reported as `D_fin` (generated).
+  2. **Methodology finding:** a derived metric silently
+     double-counted guest boot — and QEMU's own startup — under a
+     host-sounding name. It survived a pre-registered audit and four
+     measurement campaigns (freeze, T4.4, T4.6, D-0068), and was
+     caught only because it moved with rungs it should not have
+     (D-0070 evidence item 2). The corollary to D-0069: an
+     unexplained constant must not keep a plausible-sounding name;
+     "host-side remainder" was doing the work that "measured
+     delivery" could not. Threats item 16 carries this.
+  3. **Harness fix (design only here; the bench host implements —
+     D-0055/D-0067 discipline; `scripts/bench.py` untouched in this
+     tree):** drop `e0_to_e3w_ns` — its anchoring assumption
+     ("first-connect ≈ SYN/ACK") is dead. Record per-trial
+     pcap-internal columns `w_ns`, `d_ack_ns`, `d_fin_ns` using the
+     D-0070 filters (one pcap clock; fail loudly when a frame is
+     missing). Keep `e0_to_first_connect_ns` as the same-QEMU
+     control. Exhibits report `D_fin` as delivery; no E3w-derived
+     column anywhere (cross-system rule already in D-0070).
+- Revisit trigger: a bench-host instrumented mechanism check (the
+  pcap-write poll, ~10 boots) if anyone wants S measured rather than
+  derived there; or any QEMU/host change on the bench machine, which
+  may move S and with it nothing else.
 
 

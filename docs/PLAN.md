@@ -1646,8 +1646,10 @@ pass, leftover page_build, and ARP wait. Ladder is **not** closed
 measured: two invocations, E3w→E4 untouched, occupancy hypothesis
 not confirmed, yield kept. Next *action* is the Linux baseline.
 E0→E4 is 51.66 ms on the T4.6 batches; virtq_init is ~0.8 ms of
-that (1.6%). E3w→E4 is ~31 ms of that 52 ms and is open. Do not
-take virtq_init next.
+that (1.6%). The former ~31 ms "E3w→E4" of that 52 ms is resolved
+(D-0070/D-0071): QEMU startup + guest boot wait + sub-ms delivery,
+each already counted once in E0→E4 — no separate host term exists.
+Do not take virtq_init next.
 **`virtq_init` (finding 4):** remains eligible at 13% of 6.43 ms;
 **not** bundled with `DRIVER_OK`. Ceiling on the gain: skip the
 discarded pass, keep `fill_descriptors`.
@@ -1703,12 +1705,12 @@ config, quiet-vs-instrumented delta shown). Same QEMU binary, machine,
 single CPU, default 128 MiB, same netdev/hostfwd/filter-dump.
 E3w→E4 dump placement (D-0068) landed and was measured: the dump
 is off the publish→E4 path on principle and did not take the ~31 ms
-term. D-0070 pre-registers the anchoring-artifact hypothesis (the
-term is mostly the accepted connection waiting for the guest, not
-host work); its pcap pass runs before this row. Whichever way it
-lands: cross-system tables carry no E3w-derived columns, E0→E4 is
-the comparison (two direct client-clock stamps, unconfounded by
-boot length), and E0→first-connect is a same-QEMU control.
+term. D-0070 (confirmed) explained why: the term was the accepted
+connection waiting for the guest plus QEMU's own startup slice
+(D-0071), not host work; true delivery is `D_fin` at 63–155 µs.
+Cross-system tables carry no E3w-derived columns, E0→E4 is the
+comparison (two direct client-clock stamps, unconfounded by boot
+length), and E0→first-connect is a same-QEMU control.
 
 - **Acceptance:** `just bench-linux` produces both configs' rows through
   the same harness; pcap shows the same handshake/response shape; the

@@ -7,9 +7,11 @@ item is mitigated-and-measured or stated.
 1. **TCG ≠ hardware.** Compute-dense phases and MMIO-dense phases are
    taxed differently than on silicon. Every claim carries "under QEMU TCG".
 2. **slirp is a peer**, not a wire. E3w−E3g prices virtio+slirp, not a NIC.
-   E3w→E4 prices hostfwd delivery plus client recv (D-0066). After
-   D-0068 it is still ~31 ms of ~52 ms; D-0070 pre-registers the
-   anchoring-artifact hypothesis with a pcap-internal test pending.
+   True hostfwd delivery plus client recv is bounded by `D_fin` at
+   63–155 µs (D-0070 pcap pass, `report/exhibits/d0070-pcap.md`).
+   The former "E3w→E4" term is retired: it was QEMU startup (D-0071)
+   plus the accepted connection waiting for the guest to boot
+   (D-0070), mislabeled by E3w's anchoring construction.
 3. **Client granularity.** Persistent process. Measured median on the
    T4.3 freeze is **1.000 ms** (see `report/exhibits/machine-spec.md`
    `client_granularity_ns`). That cadence is connect-retry only; it
@@ -24,7 +26,8 @@ item is mitigated-and-measured or stated.
    edges-exhibit row (~5.5 µs fast-boot). D-0068 moved
    `print_after_response` after a yield. Two N-trials produced no
    E0→E4 improvement (`report/exhibits/dump-placement.md`). The yield
-   stays on principle. It did not solve E3w→E4.
+   stays on principle. The null was later explained: there was no
+   post-publish host work for it to move (D-0070).
 9. **Host variance.** Report numbers are the dedicated Ubuntu 26.04
    host (7800X3D, 8 cores SMT off, boost off, performance governor,
    QEMU 10.2.1, steal 0). Freeze, T4.4, T4.6, and both D-0068
@@ -34,15 +37,18 @@ item is mitigated-and-measured or stated.
    not cited. Steal=0 is necessary, not sufficient (USER_HZ=100) —
    recorded as a surviving T4.1 finding.
 10. **E3w fidelity.** filter-dump pcap timestamps are a QEMU realtime
-    clock that does not match Python `time.time_ns()`. `e0_to_e3w_ns` is
-    first-connect (monotonic from E0) plus the pcap-relative SYN/ACK→HTTP
-    interval, not `pcap_epoch - e0_wall`. E3w→E4 inherits that
-    construction (D-0066) — and the anchor is under test: with
-    hostfwd, connect-success is QEMU's host-side accept, not the
-    guest handshake, so the construction plausibly folds firmware +
-    boot-to-net-init into "E3w→E4" (D-0070, pre-registered).
-    No E3w-derived column may appear in a cross-system table;
-    E0→first-connect is a same-QEMU control, not a comparison.
+    clock that does not match Python `time.time_ns()` — measured on
+    the pod as a per-boot offset of −30 to −846 ms, so no absolute
+    `pcap_epoch − e0_wall` quantity is ever usable (D-0071 evidence).
+    `e0_to_e3w_ns` was first-connect plus the pcap-relative
+    SYN/ACK→HTTP interval; the anchor ("first-connect ≈ SYN/ACK")
+    was tested and is false under hostfwd: connect-success is the
+    host kernel accepting into QEMU's listen backlog during startup,
+    not the guest handshake (D-0070, confirmed). E3w-derived metrics
+    are retired; pcap-internal intervals on one clock (`W`, `D_ack`,
+    `D_fin`) replace them. No E3w-derived column may appear in a
+    cross-system table; E0→first-connect is a same-QEMU control,
+    not a comparison.
 11. **Reservation vs working set** (D-0030).
 12. **Pre-M4 harness fail-open (finding 31, T4.0b receipt).**
     `scripts/boot-test.sh` ran under `set -u` only; a failed `cargo build`
@@ -73,8 +79,18 @@ item is mitigated-and-measured or stated.
     is the cache/translation surface. The occupancy surface is guest
     work after a guest-side stamp moving a host-observed edge. D-0068
     tested the PHASE dump as that occupant: two N-trials, no E4
-    movement. The dump stays off the interval on principle. E3w→E4
-    is open (~31 ms of ~52 ms). Linux and Unikraft share slirp/hostfwd
-    and will not share a PHASE dump. If measured runs ever stopped
-    printing PHASE, the decomposition and E0→E4 would come from
-    different boots — that would be its own line.
+    movement. The dump stays off the interval on principle. Linux and
+    Unikraft share slirp/hostfwd and will not share a PHASE dump. If
+    measured runs ever stopped printing PHASE, the decomposition and
+    E0→E4 would come from different boots — that would be its own
+    line.
+17. **A derived metric double-counted guest boot under a
+    host-sounding name (D-0070/D-0071).** "E3w→E4" folded QEMU
+    startup (~6.8 ms) and boot-to-net-init wait (~24/~85 ms) into a
+    term labeled host-side delivery. It survived a pre-registered
+    audit and four measurement campaigns, and was caught only
+    because it moved with kernel rungs a host-side term should not
+    respond to. The honest headline (E0→E4, two direct client-clock
+    stamps) was never wrong — each piece was counted once there.
+    Lesson recorded next to D-0069's: an unexplained constant must
+    not keep a plausible-sounding name.

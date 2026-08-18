@@ -41,7 +41,12 @@ files exist. The T4.3 freeze rows live in tag `baseline-t4.3`
 columns and the T4.6 CSV commit for after-ladder and Δ. D-0068
 dump-placement is a third exhibit from those plus the two
 yield-then-dump CSV commits. It does not read the working tree, so
-a local `just bench` leftover cannot become an exhibit. Machine-spec
+a local `just bench` leftover cannot become an exhibit.
+`just d0070-pcap-pass` generates the fourth exhibit
+(`report/exhibits/d0070-pcap.md`): CSVs via `git show` of the three
+campaign commits, per-trial pcaps from `results/trials/` — those are
+gitignored and exist only on the bench host, so the exhibit is
+generated and committed from there. It fails closed anywhere else. Machine-spec
 baseline header comes from
 `git show baseline-t4.3:results/baseline-summary.txt`; the
 after-ladder (superpages) block comes from the T4.6 CSV fields, not

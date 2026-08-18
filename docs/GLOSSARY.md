@@ -112,12 +112,17 @@ from a task (cause 2) therefore dumps in firmware, not in our handler
 E2 = kernel entry (`rdtime` at `_start`); E3g = `rdtime` at response-TX
 publish; E3w = pcap timestamp of that frame (constructed on the E0
 timeline as first-connect plus the pcap-relative SYN/ACK→HTTP
-interval); E4 = first byte at the client. E4−E3w is the host-side
-remainder after the frame is in the filter-dump (D-0066), not a µs
-loopback. The PHASE dump yields once after `wait_tx`, then prints
-(D-0068). Two N-trials left E3w→E4 untouched; D-0070 pre-registers
-that the term is mostly an E3w anchoring artifact (hostfwd accept
-≠ guest handshake), pcap test pending.
+interval); E4 = first byte at the client. "E4−E3w" is retired as a
+reported metric: the pcap pass (D-0070, confirmed) showed the
+construction's anchor is false under hostfwd — connect-success is
+the host kernel accepting into QEMU's listen backlog, not the guest
+handshake — so the term was QEMU startup (D-0071's S, ~6.8 ms) plus
+the accepted connection waiting for the guest to boot to net-init
+(W), both already counted once in E0→E4. True publish→client
+delivery is bounded by `D_fin` at 63–155 µs. The PHASE dump yields
+once after `wait_tx`, then prints (D-0068); the D-0068 null was
+this in disguise — there was never tens of ms of post-publish host
+work to reorder.
 T3.12(a) measured the E2 offset as 0, so `_start` *is* the OpenSBI phase.
 Headline E2→E3g uses a client retrying before E0; `just test`'s
 curl-after-`HTTP READY` E3g is harness wait (D-0043).
