@@ -729,7 +729,8 @@ bench-whimbrel:
     bash scripts/bench.sh whimbrel
 
 # T4.8 five-arm campaign. Requires bench/linux/artifacts + MANIFEST.
-# This pod does not run it (D-0055).
+# This pod does not run it (D-0055). D-0073 / T4.8b uses the same
+# recipe after linux-build produces a new Image-trimmed.
 bench-t48:
     bash scripts/bench.sh t48
 
@@ -749,9 +750,10 @@ bench-summary:
 
 # T4.3 / T4.4 / T4.6 / T4.8: regenerate report exhibits from git objects.
 # Baseline: tag baseline-t4.3. After-ladder / Δ: T4.6 CSV commit.
-# Cross-system: T4.8 CSV commit ffb7ac7. Linux decomposition: serial
-# pin d705ecb plus D-0072 labels 93ab617. Working-tree CSVs / serials
-# are not read (D-0067).
+# Cross-system: T4.8 CSV commit ffb7ac7 (frozen pre-FTRACE; D-0073
+# does not retarget this). Linux decomposition: serial pin d705ecb
+# plus D-0072 labels 93ab617. Working-tree CSVs / serials are not
+# read (D-0067). T4.8b is not generated until those CSVs exist.
 report-exhibits:
     python3 scripts/report-exhibits.py
 
@@ -775,8 +777,11 @@ d0070-pcap-pass:
 d0070-pcap-pass-selftest:
     python3 scripts/d0070-pcap-pass.py selftest
 
-# T4.8 / D-0062: pin, fetch, and build Linux baseline artifacts on the
-# dedicated host. Prints five verification blocks. Never inside a batch.
+# T4.8 / D-0062 / D-0073: pin, fetch, and build Linux baseline
+# artifacts on the dedicated host. Prints five verification blocks
+# plus D-0073 3b. Reuse of Image-trimmed is fragment-stamp gated.
+# Stock hash must stay the T4.8 pin; trimmed must move. Never
+# inside a batch. T4.8b runs this before just bench-t48.
 linux-build:
     bash scripts/linux-build.sh
 

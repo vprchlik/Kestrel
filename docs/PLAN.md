@@ -1716,6 +1716,17 @@ length), and E0→first-connect is a same-QEMU control.
   the same harness; pcap shows the same handshake/response shape; the
   build regenerates from a committed script + pinned tarball hash.
 
+### T4.8b — Act on the FTRACE miss — S
+D-0073. Same five-arm campaign as T4.8 (`just bench-t48`) on a new
+`Image-trimmed` with `# CONFIG_FTRACE is not set` plus the T4.8
+printk leftovers. T4.8 pins stay the before; the before/after is
+the finding. PLAN T4.9 remains the Unikraft spike.
+
+- **Acceptance:** `just linux-build` on the bench host produces a
+  new `Image-trimmed` (hash ≠ T4.8) and an unchanged `Image-stock`;
+  `just bench-t48` records T4.8b; exhibit pins `ffb7ac7` /
+  `d705ecb` / `93ab617` are not retargeted.
+
 ### T4.9 — Unikraft spike — M
 Pin the PR #1698 branch commit and kraftkit version (D-0063). **Go** =
 the HTTP example builds for qemu/riscv64 at the pin, boots on our pinned

@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
-# T4.8 / D-0062: Linux baseline build on the dedicated host.
+# T4.8 / T4.8b / D-0062 / D-0073: Linux baseline build on the dedicated host.
 #
 # Inputs: bench/linux/{PIN,buildroot.fragment,linux-trimmed.fragment,
 # server.c,initramfs.spec}. One buildroot tree plus one out-of-tree
 # kernel dir. Prints five verification blocks; a build that cannot is
 # a fail. Never runs inside a batch and never records a hash into PIN.
+#
+# D-0073 / T4.8b: a fragment change must rebuild Image-trimmed. Reuse
+# is gated on a sha256 stamp of linux-trimmed.fragment, not merely on
+# the Image existing. Image-stock must keep the T4.8 hash (do not
+# rebuild stock; the version string is dated).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -19,6 +24,9 @@ BUILD="$LINUX_DIR/build"
 ARTIFACTS="$LINUX_DIR/artifacts"
 MANIFEST="$LINUX_DIR/MANIFEST"
 NEED_FREE_BYTES=$((35 * 1000 * 1000 * 1000))
+# T4.8 MANIFEST pins. Stock must not move. Trimmed must move after D-0073.
+T48_STOCK_SHA=fa0f4315766866e7ce02e15f7bda78fdb73da69d4b9c8ae4f156b769a25eaf62
+T48_TRIM_SHA=fe821d1d5fcc0c8d4474504c48d3024e0991c37ba74d40c675a0158b61e44fa2
 
 die() {
     echo "TEST FAIL: $*" >&2
@@ -238,10 +246,18 @@ build_stock_linux() {
 
 build_trimmed_linux() {
     local jobs="${BR2_JLEVEL:-$(nproc)}"
+    local frag_sha stamp
     TRIM_O="$BUILD/linux-trimmed"
-    if [[ -f "$ARTIFACTS/Image-trimmed" && -f "$BUILD/trimmed.config" && -f "$BUILD/merge_config.out" ]]; then
+    frag_sha="$(sha256sum "$FRAG_TRIM" | awk '{print $1}')"
+    stamp="$BUILD/trimmed.fragment.sha256"
+    if [[ "${FORCE_TRIMMED_REBUILD:-}" != "1" \
+        && -f "$ARTIFACTS/Image-trimmed" \
+        && -f "$BUILD/trimmed.config" \
+        && -f "$BUILD/merge_config.out" \
+        && -f "$stamp" \
+        && "$(cat "$stamp")" == "$frag_sha" ]]; then
         TRIM_IMAGE="$ARTIFACTS/Image-trimmed"
-        echo "linux-build: reusing $TRIM_IMAGE (skip trimmed rebuild)" >&2
+        echo "linux-build: reusing $TRIM_IMAGE (fragment sha unchanged)" >&2
         # D-0072: System.map is the offline initcall labeler. Copy it
         # if the O= tree still has it and the artifact was never saved.
         if [[ ! -f "$ARTIFACTS/System.map-trimmed" ]]; then
@@ -287,6 +303,7 @@ build_trimmed_linux() {
     cp -a "$TRIM_IMAGE" "$ARTIFACTS/Image-trimmed"
     cp -a "$TRIM_O/System.map" "$ARTIFACTS/System.map-trimmed"
     cp -a "$TRIM_O/.config" "$BUILD/trimmed.config"
+    echo "$frag_sha" > "$BUILD/trimmed.fragment.sha256"
 }
 
 check_merge_warnings() {
@@ -387,6 +404,68 @@ for sym, want_s, got_s in failed:
 PY
 }
 
+assert_d0073_unsets() {
+    python3 - "$BUILD/trimmed.config" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+cfg = Path(sys.argv[1]).read_text()
+final = {}
+for line in cfg.splitlines():
+    m = re.match(r"CONFIG_([A-Z0-9_]+)=(.*)$", line)
+    if m:
+        final[m.group(1)] = m.group(2).strip()
+        continue
+    m = re.match(r"# CONFIG_([A-Z0-9_]+) is not set", line)
+    if m:
+        final[m.group(1)] = "unset"
+
+# D-0073: these must not be y. Absent/unset is a pass (menu vanished).
+must_not_be_y = (
+    "FTRACE",
+    "NETWORK_FILESYSTEMS",
+    "NFS_FS",
+    "NET_9P",
+    "9P_FS",
+    "USB_SUPPORT",
+    "USB",
+    "SOUND",
+    "SND",
+    "MMC",
+    "INPUT_MOUSEDEV",
+    "INPUT_MOUSE",
+    "HID",
+    "HUGETLBFS",
+    "AUDIT",
+    "BPF_SYSCALL",
+    "ACPI",
+    "PNP",
+    "LEGACY_PTYS",
+    "UNIX98_PTYS",
+    "RTC_CLASS",
+    "RTC_DRV_GOLDFISH",
+    "WATCHDOG",
+)
+print("===== 3b. D-0073 leftovers must not be y =====")
+failed = []
+for sym in must_not_be_y:
+    got = final.get(sym, "absent")
+    ok = got != "y"
+    status = "PASS" if ok else "FAIL"
+    print(f"CONFIG_{sym}: final {got}  {status}")
+    if not ok:
+        failed.append(sym)
+if failed:
+    sys.stderr.write(
+        "TEST FAIL: D-0073 leftover still y: "
+        + ", ".join(f"CONFIG_{s}" for s in failed)
+        + "\n"
+    )
+    sys.exit(1)
+PY
+}
+
 build_init_and_cpio() {
     local gcc="${CROSS_COMPILE}gcc" strip="${CROSS_COMPILE}strip" spec tmp
     echo "linux-build: static musl /init" >&2
@@ -443,6 +522,8 @@ EOF
 
     requested_vs_final
 
+    assert_d0073_unsets
+
     echo "===== 4. diffconfig stock → trimmed ====="
     if [[ -x "$LINUX_SRC/scripts/diffconfig" ]]; then
         "$LINUX_SRC/scripts/diffconfig" "$BUILD/stock.config" "$BUILD/trimmed.config"
@@ -458,6 +539,12 @@ EOF
     printf '%-42s %12s  %s\n' bench/linux/artifacts/init "$init_b" "$init_h"
     echo "----- MANIFEST -----"
     cat "$MANIFEST"
+    if [[ "$stock_h" != "$T48_STOCK_SHA" ]]; then
+        die "Image-stock sha256=$stock_h want $T48_STOCK_SHA (T4.8 pin; stock must not move)"
+    fi
+    if [[ "$trim_h" == "$T48_TRIM_SHA" ]]; then
+        die "Image-trimmed sha256 still $T48_TRIM_SHA (fragment change did not produce a new Image)"
+    fi
     echo "TEST PASS: linux-build"
 }
 

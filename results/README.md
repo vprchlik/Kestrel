@@ -328,14 +328,20 @@ D-0067's `--after-batches`).
   batches `20260818T073023Z-1` / `20260818T073023Z-2`, measured
   kernel `1005399`. Cross-system table:
   `report/exhibits/cross-system.md`. New-schema Whimbrel edges
-  append to `report/exhibits/edges.md`.
+  append to `report/exhibits/edges.md`. **Frozen as the
+  pre-FTRACE before (D-0073).** Do not retarget to T4.8b.
 - **Linux decomposition pin:** `d705ecb8c67350519f9ce4653a4685a89e20e1d4`
   (`results/serial/` T4.8 batch-1 trial 4). **D-0072 label pin:**
   `93ab617676672f6db7a1d076389f9a049678192a`
   (`linux-trimmed-ignore-loglevel-20260818T084831Z-initcalls.txt`).
   Generated `report/exhibits/linux-decomposition.md`. Not a
   cross-system table. Diagnostic durations are UART-inflated
-  labels for the 327 ms cell; they do not replace it.
+  labels for the 327 ms cell; they do not replace it. These
+  pins stay the pre-FTRACE exhibit. T4.8b gets a new pin and a
+  before/after exhibit when CSVs exist; do not overwrite this
+  one.
+- **T4.8b:** not a pin yet. Spec under D-0073 below. Same
+  generator must not invent T4.8b cells from the working tree.
 
 ### Cross-system tables (T4.8 / T4.9, and any table that has more
 than one `system` value)
@@ -409,7 +415,10 @@ as D-0067 / D-0071.
    not annotated in the fragment** — a symbol kconfig re-enables
    through dependencies is recorded in a fragment comment, never
    silently accepted. One buildroot tree plus one kernel build dir,
-   not two buildroot trees.
+   not two buildroot trees. D-0073: reuse is gated on a sha256
+   stamp of the fragment, not merely on `Image-trimmed` existing.
+   After D-0073, stock hash must still be the T4.8 pin and
+   trimmed hash must have moved (see T4.8b spec).
 5. `server.c` → static musl binary with the SDK toolchain; strip.
 6. Build `usr/gen_init_cpio` from the kernel tree; assemble
    `rootfs.cpio` from `initramfs.spec`. Uncompressed.
@@ -838,6 +847,158 @@ The exhibit generator reads the label pin
 Diagnostic microseconds annotate gap 1 of
 `report/exhibits/linux-decomposition.md`; they do not replace the
 327 ms T4.8 cell.
+
+## Bench-host spec (D-0073 / T4.8b): fragment change + `just linux-build` + five-arm re-run
+
+Approved. This pod does not run `just linux-build` or `just
+bench-t48`. The dedicated host executes the sequence below. Read
+the projection **before** the rebuild starts; do not invent a
+quiet-row saving from the diagnostic microseconds after the fact.
+
+T4.8 stays the before (`ffb7ac7`, serial `d705ecb`, labels
+`93ab617`, `Image-trimmed` `fe821d1d…`, `Image-stock`
+`fa0f4315…`). T4.8b is the after. PLAN T4.9 remains Unikraft.
+Do not retarget the T4.8 pins. Do not overwrite
+`report/exhibits/linux-decomposition.md` with T4.8b numbers; the
+before/after *is* the finding.
+
+### Pre-registered projection (quiet-row `trimmed` E0→E4)
+
+T4.8 trimmed median is **759.79 ms** (IQR 2.61 ms).
+`trace_eval_sync` is **222.6 ms UART-inflated** on the
+`ignore_loglevel` boot.
+
+**Named fixed component** mixed into that 222.6 ms: ignore_loglevel
+UART (console drain of this initcall's `KERN_DEBUG` lines and any
+nested printk) plus TCG occupancy from the rest of that noisy
+boot. That component is **not** in quiet E0→E4 (`loglevel=0`).
+The eval-map walk itself is real TCG compute; the split is
+unmeasured.
+
+**Refuse** the point prediction `759.79 − 222.6 = 537.19 ms`.
+D-0069: 222.6 ms is a diagnostic wall time, not a quiet-row
+saving. Do not sum the other diagnostic usecs (pty 33.8, alsa
+16.5, mousedev 13.8, watchdog 8.0, nfs, …) onto 222.6 and
+subtract either.
+
+**Orientation range (not a falsifier):** T4.8b trimmed E0→E4
+**540–740 ms**. Low end = diagnostic usecs were almost all real
+compute (D-0069-unpadded, likely too fast). High end = almost
+all of 222.6 was UART and the other unsets are also small on
+the quiet row. Expected: a clearly detectable drop vs 759.79,
+not 222.6 ms on the nose.
+
+**Falsifiers (load-bearing; stop, do not publish a saving):**
+
+1. T4.8b trimmed E0→E4 ≥ 759.79 ms — no improvement. Diagnose
+   `trimmed.config` (`FTRACE` still y?) first.
+2. T4.8b trimmed ≥ T4.8b stock (existing D-0062 tripwire).
+3. `Image-trimmed` sha256 still
+   `fe821d1d5fcc0c8d4474504c48d3024e0991c37ba74d40c675a0158b61e44fa2`
+   — rebuild skipped.
+4. `Image-stock` sha256 ≠
+   `fa0f4315766866e7ce02e15f7bda78fdb73da69d4b9c8ae4f156b769a25eaf62`
+   — stock moved; T4.8 is no longer the before.
+5. SYN-grid / RST / first-connect / `LINUX INIT OK` as T4.8.
+
+### Fragment (already in tree)
+
+`bench/linux/linux-trimmed.fragment` D-0073 section. Parents
+only (`NETWORK_FILESYSTEMS`, `USB_SUPPORT`, `SOUND`, `MMC`,
+`RTC_CLASS`, …). Do not also unset children in the fragment
+(merge_config "redundant by fragment" is FAIL unless annotated).
+`linux-build` block 3b still asserts the children are not y.
+
+Keeps: `SERIAL_8250`, `SERIAL_OF_PLATFORM`, virtio-mmio/net,
+IPv4 TCP, initramfs, `DEVTMPFS`, `FUTEX`, `MODULES=y`,
+`DEBUG_KERNEL` (cut the child `FTRACE`, not the parent default).
+
+Likely merge-override stickers: **ACPI**, **HID**. Annotate if
+they come back (`# merge-override SYM: …`). Do not silently
+accept. `FORCE_TRIMMED_REBUILD=1` does not override that.
+
+### `just linux-build` deltas vs T4.8
+
+Reuse of `Image-trimmed` is gated on
+`bench/linux/build/trimmed.fragment.sha256` matching
+`sha256(linux-trimmed.fragment)`, plus the Image / `.config` /
+`merge_config.out` existing. `FORCE_TRIMMED_REBUILD=1` forces
+a rebuild. Existence of `Image-trimmed` alone is not enough
+(that is the skip that would have left `fe821d1d…` in place).
+
+**Do not rebuild `Image-stock`.** The T4.8 version string is
+dated (`#1 Tue Aug 18 02:43:03 EDT 2026`). If
+`bench/linux/artifacts/Image-stock` is missing, restore it from
+the T4.8 artifact; a fresh stock compile will fail the hash
+pin even with an identical config. `linux-build` reuses stock
+when the file exists, then **FAIL**s if its sha256 is not
+`fa0f4315…`, and **FAIL**s if trimmed is still `fe821d1d…`.
+
+Block 3b (`D-0073 leftovers must not be y`) runs after
+requested-vs-final. Absent/unset is a pass (menu vanished).
+
+Do not rewrite MANIFEST hashes in this tree until this build
+has run. After it runs, commit the new MANIFEST (trimmed hash
+will move; stock must not). Artifacts stay gitignored.
+
+### Second-look (after merge, before the campaign)
+
+Walk the **actual** `bench/linux/build/trimmed.config`. This
+pod reconstructed candidates from printk; kconfig is the
+arbiter. If a T4.8-printk leftover is still y and unused by
+`/init`, amend the fragment, annotate any merge-override, and
+`FORCE_TRIMMED_REBUILD=1 just linux-build` **before**
+`just bench-t48`. Finding leftovers one N-trial later is the
+thing this pass exists to avoid.
+
+Grep at least: `FTRACE`, `NFS`, `9P`, `USB`, `SOUND`/`SND`,
+`MMC`/`SDHCI`, `MOUSEDEV`, `HUGETLB`, `AUDIT`, `SUNRPC`,
+`ACPI`, `PNP`, `RTC`, `WATCHDOG`, `BPF_SYSCALL`. The deferred
+list in the fragment (VT, DEBUG_FS, FB, PINCTRL, I2C/SPI/GPIO,
+thermal, cpuidle, LSM) is named, not forgotten: unset in this
+pass only if the second-look shows y *and* obviously unused
+*and* not a no-boot risk.
+
+The T4.8 hole window (`dns_resolver` → `clk-disable`) may move
+or vanish once NFS / DNS_RESOLVER go away. That is T4.8b
+labeling, not a retarget of the T4.8 exhibit.
+
+### Sequence on the bench host
+
+1. Confirm `sha256sum bench/linux/artifacts/Image-stock` is
+   `fa0f4315…`. Restore, do not rebuild, if it is not.
+2. `just linux-build` (fragment stamp change rebuilds trimmed;
+   `FORCE_TRIMMED_REBUILD=1` if an old Image is sitting next to
+   a hand-written stamp). Read the five verification blocks
+   plus 3b. `TEST PASS: linux-build` is required.
+3. Confirm `Image-trimmed` ≠ `fe821d1d…` and `FTRACE` is not y
+   in `trimmed.config`.
+4. Second-look `trimmed.config` (above). Amend+rebuild if needed.
+5. `just test-linux image=trimmed` and `just test-linux image=stock`.
+   Same boot gate as T4.8 (`LINUX INIT OK`, 92-byte RESP,
+   SYN-grid, no RST, QEMU exit 0).
+6. Commit the new `bench/linux/MANIFEST` (and only that hash
+   change for Linux artifacts). Do not retarget exhibit pins.
+7. `just bench-t48` — same five arms as T4.8
+   (`release-fast-boot`, `release-default`, `trimmed`, `stock`,
+   `trimmed-instrumented`). Interleaved, n=60 recorded, two
+   batches, same host controls. This *is* T4.8b; the recipe
+   name is unchanged.
+8. Commit T4.8b CSVs / serials. New pin. Do **not** change
+   `T48_REV` / `SERIAL_REV` / `LABEL_REV` in
+   `scripts/report-exhibits.py`. T4.8b gets its own pin and a
+   before/after exhibit when those objects exist. Do not
+   generate T4.8b table cells by hand.
+9. Optional: one `ignore_loglevel` boot of the **new**
+   `Image-trimmed` to confirm `trace_eval_sync` is gone. New
+   label pin, new System.map, still not a sixth arm, still not
+   a replacement of `93ab617`.
+
+### What this pod already did
+
+Fragment + `linux-build` reuse/hash gates + D-0073 + this spec
++ the T4.8 exhibit frozen as the before. No Image, no T4.8b
+CSV, no MANIFEST rewrite.
 
 ## `runs.csv` — one row per trial
 

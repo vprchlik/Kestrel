@@ -2,7 +2,7 @@
 
 The virtio path Linux actually needs — `virtio_net_driver_init` plus `virtio_mmio_init` — costs **4.9 ms** (UART-inflated; `ignore_loglevel` boot). The **327.24 ms** T4.8 hole is not that path: `trace_eval_sync` is 68.0% of it, and full-file the other giant is generic serial-bus probing (`of_platform_serial_driver_init` 163.0 ms, UART-inflated). Kind, not magnitude: named subsystems a single-purpose kernel never runs, not "Linux is slower."
 
-T4.8 source: `git show d705ecb8c67350519f9ce4653a4685a89e20e1d4:results/serial/{linux-trimmed-instrumented,whimbrel-fast}-20260818T073023Z-1-t04.log` (batch `20260818T073023Z-1`, trial 4, measured kernel `1005399`, same QEMU). Labels: `git show 93ab617676672f6db7a1d076389f9a049678192a:results/serial/linux-trimmed-ignore-loglevel-20260818T084831Z-initcalls.txt` (same `Image-trimmed`, `ignore_loglevel`). **RISC-V under QEMU TCG software emulation.** Working-tree serials are not read. Regeneration: `just report-exhibits`.
+T4.8 source: `git show d705ecb8c67350519f9ce4653a4685a89e20e1d4:results/serial/{linux-trimmed-instrumented,whimbrel-fast}-20260818T073023Z-1-t04.log` (batch `20260818T073023Z-1`, trial 4, measured kernel `1005399`, same QEMU). Labels: `git show 93ab617676672f6db7a1d076389f9a049678192a:results/serial/linux-trimmed-ignore-loglevel-20260818T084831Z-initcalls.txt` (same `Image-trimmed`, `ignore_loglevel`). **RISC-V under QEMU TCG software emulation.** Working-tree serials are not read. Regeneration: `just report-exhibits`. This is the T4.8 / pre-FTRACE Image. D-0073 / T4.8b is the after; those pins are not these.
 
 This exhibit is not a cross-system table and not a sixth arm. Diagnostic durations **label** the 327.24 ms cell; they do not replace it.
 
@@ -55,7 +55,7 @@ One initcall is essentially the whole anonymous region. Ranks 2–29 inside the 
 
 No tracing consumer is running. `/init` is a static musl HTTP server; `PROC_FS` and `SYSFS` are unset, so tracefs is not a usable ABI. The maps exist for a userspace that is not here. `CONFIG_TRACE_EVAL_MAP_FILE` only keeps a debugfs dump of the maps; it is not the gate for this initcall.
 
-The user-visible compile gate is `menuconfig FTRACE` ("Tracers"), which defaults y when `CONFIG_DEBUG_KERNEL=y`. Buildroot's `qemu_riscv64_virt_defconfig` uses the riscv `defconfig` (`BR2_LINUX_KERNEL_USE_ARCH_DEFAULT_CONFIG`), and that defconfig sets `DEBUG_KERNEL=y`. `linux-trimmed.fragment` never unsets `FTRACE`, `TRACING`, or `DEBUG_KERNEL`. `FTRACE` is not EXPERT-gated, so `# CONFIG_FTRACE is not set` would have stuck. That is a further trim we **missed**, not a keep we documented. D-0062 already claims *a* minimal Linux, not *the* minimal Linux; we did not rebuild `Image-trimmed`.
+The user-visible compile gate is `menuconfig FTRACE` ("Tracers"), which defaults y when `CONFIG_DEBUG_KERNEL=y`. Buildroot's `qemu_riscv64_virt_defconfig` uses the riscv `defconfig` (`BR2_LINUX_KERNEL_USE_ARCH_DEFAULT_CONFIG`), and that defconfig sets `DEBUG_KERNEL=y`. The T4.8 `linux-trimmed.fragment` (this pin) never unsets `FTRACE`, `TRACING`, or `DEBUG_KERNEL`. `FTRACE` is not EXPERT-gated, so `# CONFIG_FTRACE is not set` would have stuck. That is a further trim we **missed** on this Image, not a keep we documented. D-0062 already claims *a* minimal Linux, not *the* minimal Linux. **This exhibit stays the before.** D-0073 acts on the miss with a new Image and a T4.8b five-arm campaign. Do not retarget `ffb7ac7` / `d705ecb` / `93ab617`.
 
 ## Full-file context
 

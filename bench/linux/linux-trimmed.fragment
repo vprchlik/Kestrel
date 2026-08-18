@@ -88,6 +88,52 @@ CONFIG_FUTEX=y
 # CGROUPS: no controllers, no userspace to configure them
 # CONFIG_CGROUPS is not set
 
+## Off: D-0073 — named miss plus printk-visible leftovers
+# FTRACE: menuconfig Tracers; defaults y if DEBUG_KERNEL; not EXPERT.
+# D-0072 named trace_eval_sync as 68% of the 327 ms hole. Missed trim.
+# CONFIG_FTRACE is not set
+# NETWORK_FILESYSTEMS: parent of NFS / 9p / SUNRPC (T4.8 printk + RPC).
+# CONFIG_NETWORK_FILESYSTEMS is not set
+# USB_SUPPORT: host USB / usbhid. No USB on this virt path.
+# CONFIG_USB_SUPPORT is not set
+# SOUND: ALSA. T4.8: "No soundcards found."
+# CONFIG_SOUND is not set
+# MMC: SDHCI / dwmmc. No card, no BLOCK backing.
+# CONFIG_MMC is not set
+# INPUT_MOUSEDEV: "mousedev: PS/2 mouse device common for all mice"
+# CONFIG_INPUT_MOUSEDEV is not set
+# INPUT_MOUSE: psmouse and friends; no mice on this machine.
+# CONFIG_INPUT_MOUSE is not set
+# HID: leftover HID core once USB is off.
+# CONFIG_HID is not set
+# HUGETLBFS: HugeTLB registered 2 MiB, pre-allocated 0. Unused.
+# CONFIG_HUGETLBFS is not set
+# AUDIT: netlink audit initialized disabled. No LSM consumer here.
+# CONFIG_AUDIT is not set
+# BPF_SYSCALL: hole is full of bpf_* initcalls; /init never bpf().
+# CONFIG_BPF_SYSCALL is not set
+# ACPI: T4.8 "ACPI: Interpreter disabled." DT boot, not ACPI.
+# CONFIG_ACPI is not set
+# PNP: "PnP ACPI: disabled"
+# CONFIG_PNP is not set
+# LEGACY_PTYS: BSD ptys; not EXPERT-gated; default y; unused.
+# CONFIG_LEGACY_PTYS is not set
+# UNIX98_PTYS: EXPERT-gated default y (unlike FTRACE). EXPERT is already
+# on. pty_init was 33.8 ms UART-inflated on the diagnostic boot.
+# CONFIG_UNIX98_PTYS is not set
+# RTC: goldfish_rtc registered as rtc0 and set the wall clock. /init
+# uses CLOCK_MONOTONIC (riscv clocksource), not rtc0.
+# CONFIG_RTC_CLASS is not set
+# WATCHDOG: watchdog_init was 8.0 ms UART-inflated. No watchdog userspace.
+# CONFIG_WATCHDOG is not set
+
+# Deferred this pass (named so they are not found one at a time):
+# VT, DEBUG_FS, FB, PINCTRL, I2C / SPI / GPIO, thermal, cpuidle,
+# LSM (SELinux / AppArmor). Either already off (SYSFS unset), not
+# obviously unused without a no-boot risk, or idle-path rather than a
+# named leftover. Second-look the actual trimmed.config before the
+# campaign.
+
 # SBI SRST poweroff needs no explicit symbol on the pinned kernel;
 # the boot gate proves it, and if the pinned version disagrees, the
 # needed symbol joins this list with a comment.

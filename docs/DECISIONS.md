@@ -2617,9 +2617,9 @@ D-0011 onward are working decisions made under those constraints.
   `FTRACE` is not EXPERT-gated, so `# CONFIG_FTRACE is not set`
   would have stuck. That is a miss, not a documented keep.
   `CONFIG_SERIAL_OF_PLATFORM=y` remains a keep (ttyS0 from DT).
-  We still claim *a* minimal Linux, not *the* minimal Linux. Do
-  not rebuild `Image-trimmed` to chase this; a new Image is a new
-  comparison.
+  We still claim *a* minimal Linux, not *the* minimal Linux.
+  **Superseded in part by D-0073:** the miss is acted on (new
+  Image, T4.8b campaign). T4.8 stays the before.
 
 ## D-0063: Unikraft spike — go/no-go and the no-core-patches line
 - Date: 2026-08-16 — Status: accepted
@@ -3384,5 +3384,124 @@ D-0011 onward are working decisions made under those constraints.
   gap vs `serial8250_init` is DT-probe vs core-register. The
   comparison claim is named subsystems a single-purpose kernel
   never runs, not "Linux is slower."
+
+## D-0073: Act on the FTRACE miss; T4.8b is before/after, not a silent replace
+- Date: 2026-08-18 — Status: accepted (projection pre-registered;
+  bench-host rebuild + campaign not yet run)
+- **Decision:** rebuild `Image-trimmed` with `# CONFIG_FTRACE is
+  not set` plus the other non-EXPERT (and already-EXPERT-visible)
+  leftovers named below, then re-run the five-arm campaign as
+  **T4.8b**. Keep T4.8 (`ffb7ac7`, serial `d705ecb`, labels
+  `93ab617`) as the pre-FTRACE result. Do not retarget those
+  pins. The finding is the before/after: a diagnostic pass named
+  a cost, we removed it, here's what it bought. PLAN T4.9 remains
+  the Unikraft spike; this is still the T4.8 Linux-baseline
+  family.
+- **Why now:** the trimmed row is a good-faith floor attempt.
+  Leaving a named, non-EXPERT-gated symbol that accounts for the
+  largest identified cost undercuts that claim. "We ran out of
+  patience" is not an answer.
+- **Fragment sweep (this pod has no trimmed `.config`; candidates
+  reconstructed from the T4.8 printk, the D-0072 label file, the
+  riscv `defconfig`, and Linux 6.18.7 Kconfig).** Unset if (a) y
+  on the T4.8 Image, (b) the prompt is not EXPERT-gated *or*
+  EXPERT is already on and the leftover is obviously unused, (c)
+  a static musl HTTP `/init` over virtio-mmio does not need it.
+  One pass: FTRACE dominated a gap; the printk also named NFS,
+  9p, USB, ALSA, SDHCI, mousedev, HugeTLB, audit, RPC, ACPI,
+  goldfish RTC.
+
+  Non-EXPERT (the FTRACE class):
+  - `FTRACE` — the named miss (`menuconfig`, `default y if
+    DEBUG_KERNEL`)
+  - `NETWORK_FILESYSTEMS` — parent of NFS / 9p / SUNRPC
+  - `USB_SUPPORT` — USB / usbhid
+  - `SOUND` — ALSA ("No soundcards found.")
+  - `MMC` — SDHCI
+  - `INPUT_MOUSEDEV`, `INPUT_MOUSE` — mousedev / psmouse
+  - `HID`
+  - `HUGETLBFS`
+  - `AUDIT`
+  - `BPF_SYSCALL` — hole full of `bpf_*` initcalls; `/init` never
+    `bpf()`
+  - `ACPI` — "Interpreter disabled"; DT boot
+  - `PNP` — "PnP ACPI: disabled"
+  - `LEGACY_PTYS` — default y, not EXPERT-gated
+  - `RTC_CLASS` — goldfish_rtc registered as rtc0 and set the
+    wall clock; `/init` uses `CLOCK_MONOTONIC`
+  - `WATCHDOG` — `watchdog_init` 8.0 ms UART-inflated
+
+  EXPERT-gated, EXPERT already y, same "obviously unused":
+  - `UNIX98_PTYS` — `pty_init` 33.8 ms UART-inflated
+
+  Keeps unchanged: serial (`SERIAL_8250`, `SERIAL_OF_PLATFORM`),
+  virtio-mmio + virtio-net, IPv4 TCP, initramfs, `DEVTMPFS`,
+  `FUTEX`, `MODULES=y`, `DEBUG_KERNEL` (cutting the child, not
+  the parent default). `of_platform_serial_driver_init` vs
+  `serial8250_init` is core registration versus DT probe of
+  `10000000.serial` (82.5×, UART-inflated); still a keep.
+
+  Deferred this pass (named so they are not found one at a time):
+  VT, DEBUG_FS (likely already off with SYSFS), FB, PINCTRL
+  (virt DT; do not discover a no-boot on the campaign), I2C /
+  SPI / GPIO (`gpio_keys` was 86 µs UART-inflated), thermal /
+  cpuidle (idle path), LSM (SELinux / AppArmor; likely already
+  n). Second-look the actual `trimmed.config` before T4.8b; if a
+  T4.8-printk leftover is still y and unused, amend and rebuild
+  then, not after N-trials.
+- **Projection (quiet-row `trimmed` E0→E4), pre-registered before
+  T4.8b runs.** T4.8 trimmed median is 759.79 ms (IQR 2.61 ms).
+  `trace_eval_sync` is 222.6 ms **UART-inflated** on the
+  `ignore_loglevel` boot. D-0069 applies: do not treat that
+  duration as a quiet-row saving.
+
+  Named fixed component mixed into the 222.6 ms: ignore_loglevel
+  UART (console drain of this initcall's `KERN_DEBUG` lines and
+  any nested printk) plus TCG occupancy from the rest of that
+  noisy boot. That component is **not** in quiet E0→E4
+  (`loglevel=0`). The eval-map walk itself is real TCG compute;
+  the split is unmeasured (quiet row hides `initcall_debug`).
+
+  Refused point prediction: 759.79 − 222.6 = 537.19 ms. That
+  subtracts a diagnostic wall time from a quiet median.
+
+  The other unsets add more real work (NFS, ALSA, mousedev, PTY,
+  RTC, watchdog, …) whose diagnostic usecs are similarly
+  UART-inflated. Do not sum those usecs onto 222.6 and subtract
+  from 759.79 either.
+
+  **Orientation range (not a falsifier):** T4.8b trimmed E0→E4
+  **540–740 ms**. The low end is "diagnostic usecs were almost
+  all real compute" (D-0069-unpadded, likely too fast). The high
+  end is "almost all of 222.6 was UART, other unsets also small
+  on the quiet row." Expected: a clearly detectable drop vs
+  759.79, not 222.6 ms on the nose.
+
+  **Falsifiers (load-bearing):**
+  1. T4.8b trimmed E0→E4 ≥ T4.8 trimmed 759.79 ms — no
+     improvement. The named miss was UART-only on the quiet row,
+     or the unset did not stick. Diagnose `trimmed.config`
+     (`FTRACE` still y?) before any "we removed 222 ms" claim.
+     Do not publish a saving.
+  2. Existing D-0062 tripwire: T4.8b trimmed ≥ T4.8b stock.
+  3. `Image-trimmed` sha256 still `fe821d1d…` — rebuild skipped.
+  4. `Image-stock` sha256 ≠ `fa0f4315…` — stock moved; T4.8 is
+     no longer the before. Restore the T4.8 `Image-stock`; do
+     not rebuild it (the version string is dated).
+  5. SYN-grid / RST / first-connect / `LINUX INIT OK` as T4.8.
+- **Consequences:** spec in `results/README.md` (D-0073).
+  `linux-build` refuses to reuse `Image-trimmed` when the
+  fragment sha changed, and fails if stock hash moved or trimmed
+  hash did not. `just report-exhibits` keeps generating the T4.8
+  Linux decomposition from `d705ecb` + `93ab617`; those pins do
+  not follow HEAD. T4.8b CSVs get a new pin and a before/after
+  exhibit when they exist. Optional post-T4.8b
+  `ignore_loglevel` boot confirms `trace_eval_sync` is gone; it
+  is still not a sixth arm. The T4.8 hole window
+  (`dns_resolver` → `clk-disable`) may move or vanish; do not
+  retarget the T4.8 exhibit to a new window.
+- Revisit when T4.8b numbers exist, or if a merge-override forces
+  a fragment annotation (ACPI/HID are the likely stickers).
+
 
 

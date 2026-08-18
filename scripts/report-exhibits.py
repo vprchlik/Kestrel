@@ -6,10 +6,12 @@ run; they are not an append-only history. Baseline columns therefore
 come from tag `baseline-t4.3` via `git show`, after-ladder / Δ
 columns from the T4.6 superpage CSV commit, D-0068 dump-placement
 from its two CSV commits, the T4.8 cross-system table from that
-campaign's CSV commit, the Linux decomposition from the T4.8
+campaign's CSV commit (frozen as the pre-FTRACE before; D-0073
+does not retarget it), the Linux decomposition from the T4.8
 serial pin (`d705ecb`), and D-0072 hole labels from the
 `ignore_loglevel` pin (`93ab617`). HEAD may hold a later batch;
-pins do not follow it. The working-tree files are not read — a
+pins do not follow it. T4.8b is not generated until those CSVs
+exist. The working-tree files are not read — a
 local `just bench` leftover cannot become an exhibit.
 
 Never type the numbers this script prints.
@@ -52,6 +54,9 @@ D68_RUN2_BATCHES = frozenset({"20260818T014549Z-1", "20260818T014549Z-2"})
 
 # T4.8 five-arm CSV commit. Measured kernel is git_sha 1005399 (not
 # this object). New schema: w_ns / d_ack_ns / d_fin_ns, no e0_to_e3w_ns.
+# Frozen as the pre-FTRACE (D-0073) before. Do not retarget to T4.8b.
+# T4.8b gets a new pin and a before/after exhibit when CSVs exist;
+# do not invent those cells here.
 T48_REV = "ffb7ac71234e953ae51339a3e1f5e17ba8c3f1b3"
 T48_SHA_PREFIX = "1005399"
 T48_BATCHES = frozenset({"20260818T073023Z-1", "20260818T073023Z-2"})
@@ -66,6 +71,7 @@ WHIMBREL_SERIAL_PATH = (
 )
 # D-0072 diagnostic labels. UART-inflated; they annotate the T4.8
 # 327 ms cell, they do not replace it. Not a sixth campaign arm.
+# Frozen with T48_REV / SERIAL_REV as the pre-FTRACE exhibit.
 LABEL_REV = "93ab617676672f6db7a1d076389f9a049678192a"
 LABEL_PATH = (
     "results/serial/"
@@ -1354,6 +1360,9 @@ def write_linux_decomposition(
             "TEST FAIL: of_platform_serial is not ≫ serial8250_init "
             f"({of_serial['usecs']} vs {serial8250['usecs']})"
         )
+    # LABEL_REV fragment is the T4.8 Image. It must not mention FTRACE:
+    # this exhibit records the miss. HEAD may unset FTRACE (D-0073);
+    # this function reads git_show(LABEL_REV), not HEAD.
     if "CONFIG_FTRACE" in fragment_text:
         raise ExhibitFail(
             "TEST FAIL: linux-trimmed.fragment mentions FTRACE; "
@@ -1530,7 +1539,9 @@ def write_linux_decomposition(
         f"`git show {LABEL_REV}:{LABEL_PATH}` "
         "(same `Image-trimmed`, `ignore_loglevel`). "
         "**RISC-V under QEMU TCG software emulation.** Working-tree "
-        "serials are not read. Regeneration: `just report-exhibits`.",
+        "serials are not read. Regeneration: `just report-exhibits`. "
+        "This is the T4.8 / pre-FTRACE Image. D-0073 / T4.8b is "
+        "the after; those pins are not these.",
         "",
         "This exhibit is not a cross-system table and not a sixth "
         "arm. Diagnostic durations **label** the "
@@ -1652,13 +1663,16 @@ def write_linux_decomposition(
             "`qemu_riscv64_virt_defconfig` uses the riscv "
             "`defconfig` (`BR2_LINUX_KERNEL_USE_ARCH_DEFAULT_CONFIG`), "
             "and that defconfig sets `DEBUG_KERNEL=y`. "
-            "`linux-trimmed.fragment` never unsets `FTRACE`, "
-            "`TRACING`, or `DEBUG_KERNEL`. `FTRACE` is not "
-            "EXPERT-gated, so `# CONFIG_FTRACE is not set` would have "
-            "stuck. That is a further trim we **missed**, not a keep "
-            "we documented. D-0062 already claims *a* minimal Linux, "
-            "not *the* minimal Linux; we did not rebuild "
-            "`Image-trimmed`.",
+            "The T4.8 `linux-trimmed.fragment` (this pin) never "
+            "unsets `FTRACE`, `TRACING`, or `DEBUG_KERNEL`. "
+            "`FTRACE` is not EXPERT-gated, so "
+            "`# CONFIG_FTRACE is not set` would have stuck. That "
+            "is a further trim we **missed** on this Image, not a "
+            "keep we documented. D-0062 already claims *a* minimal "
+            "Linux, not *the* minimal Linux. **This exhibit stays "
+            "the before.** D-0073 acts on the miss with a new Image "
+            "and a T4.8b five-arm campaign. Do not retarget "
+            "`ffb7ac7` / `d705ecb` / `93ab617`.",
             "",
             "## Full-file context",
             "",

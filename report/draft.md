@@ -16,7 +16,9 @@ cross-system** from `ffb7ac7` (measured kernel `1005399`, batches
 from the T4.8 serial pin `d705ecb` (batch-1 trial 4). See
 [exhibits/phase-decomposition.md](exhibits/phase-decomposition.md)
 caption and D-0067. `HEAD` may hold a later batch; it is not
-the after-ladder pin.
+the after-ladder pin. T4.8 Linux decomposition pins stay
+`d705ecb` + `93ab617` after D-0073; T4.8b is a new pin, not a
+retarget.
 
 Conditions, stated once: QEMU TCG, `virt` machine, `-bios default`,
 slirp as the TCP peer, dedicated Ubuntu 26.04 host, boost off. Not
@@ -521,7 +523,12 @@ hobbling Linux. The published config is
 could likely do better — we claim *a* minimal Linux, not *the*
 minimal Linux (D-0062). The D-0072 labels named one miss: `FTRACE`
 defaults y from `DEBUG_KERNEL`, the fragment never unsets it, and
-`trace_eval_sync` is 68% of the 327 ms hole.
+`trace_eval_sync` is 68% of the 327 ms hole. That is the T4.8
+Image. D-0073 acts on the miss (`# CONFIG_FTRACE is not set` plus
+the printk leftovers); T4.8b is the after. The T4.8 exhibit stays
+the before — a diagnostic pass named a cost, we removed it, and
+the campaign will show what it bought. Do not treat 222.6 ms as a
+quiet-row saving (D-0069); the pre-registered range is 540–740 ms.
 
 ### Linux boot decomposition
 
@@ -550,10 +557,12 @@ instrumented by its own debug facility. No sixth arm.
 pass (`late_initcall_sync` flushing `eval_map_work_func`). No
 tracing consumer is running (`/init` is a static musl HTTP
 server; `PROC_FS`/`SYSFS` unset). `FTRACE` defaults y when
-`DEBUG_KERNEL=y`; the fragment never unsets it. That is a missed
-trim, not a documented keep. `CONFIG_SERIAL_OF_PLATFORM` stays a
-keep: `serial8250_init` is 2.0 ms UART-inflated (core register,
-"4 ports"); `of_platform_serial_driver_init` is the DT probe of
+`DEBUG_KERNEL=y`; the T4.8 fragment never unsets it. That is a
+missed trim on **this** Image, not a documented keep. D-0073
+rebuilds trimmed and re-runs as T4.8b; this decomposition stays
+the before. `CONFIG_SERIAL_OF_PLATFORM` stays a keep:
+`serial8250_init` is 2.0 ms UART-inflated (core register, "4
+ports"); `of_platform_serial_driver_init` is the DT probe of
 `10000000.serial` (82.5×, UART-inflated).
 
 The printk-visible kernel to `Run /init` is 617.58 ms. The top
@@ -601,9 +610,12 @@ maintained in [threats-to-validity.md](threats-to-validity.md).
    trim removed real work. Config published:
    `bench/linux/linux-trimmed.fragment`. A Linux boot-time
    specialist could likely do better; we claim *a* minimal Linux,
-   not *the* minimal Linux. `FTRACE` is a recorded miss: it
-   defaults y from `DEBUG_KERNEL`, the fragment never unsets it,
-   and `trace_eval_sync` is 68% of the 327 ms hole.
+   not *the* minimal Linux. On the T4.8 Image, `FTRACE` is a
+   recorded miss: it defaults y from `DEBUG_KERNEL`, the fragment
+   never unsets it, and `trace_eval_sync` is 68% of the 327 ms
+   hole. D-0073 acts on that miss (new Image, T4.8b campaign);
+   the T4.8 numbers still include it. The miss is not left as
+   "we ran out of patience."
 9. **Unikraft pin** (D-0063) — stated when that row exists.
 10. **Instrumentation observer effect.** Stamp overhead is a generated
     row in [exhibits/edges.md](exhibits/edges.md) (5.5 µs on
@@ -681,8 +693,9 @@ maintained in [threats-to-validity.md](threats-to-validity.md).
     ([linux-decomposition.md](exhibits/linux-decomposition.md)).
     Gap 1 is `trace_eval_sync` (222.6 ms UART-inflated, 68% of the
     327.24 ms cell, which those microseconds label and do not
-    replace). Not a sixth comparison arm. `FTRACE` is a missed
-    trim (D-0062: *a* minimal Linux, not *the* minimal Linux).
+    replace). Not a sixth comparison arm. On this Image `FTRACE`
+    is a missed trim (D-0062: *a* minimal Linux, not *the*
+    minimal Linux). D-0073 acts on it; T4.8b is the after.
 
 ---
 
@@ -691,8 +704,8 @@ maintained in [threats-to-validity.md](threats-to-validity.md).
 Unikraft spike (D-0063). `virtq_init` remains eligible at 13% of
 6.43 ms and is not the next action. D-0060 is
 declined-by-subsumption. `-bios none` (D-0061). T4.3b audit
-cleanup. `FTRACE` is a recorded miss on the Linux trim; unsetting
-it would be a new Image, not a relabel of T4.8.
+cleanup. T4.8b (D-0073) is the FTRACE act-on, spec'd, not yet
+run on the bench host; the T4.8 exhibit stays the before.
 
 ---
 
