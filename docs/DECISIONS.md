@@ -3001,7 +3001,6 @@ D-0011 onward are working decisions made under those constraints.
   the three CSV objects and reads `results/trials/<batch>/…/qemu.pcap`.
   Missing pcaps fail closed — they are gitignored; do not substitute
   a cloud-pod leftover. Per trial, on the single pcap clock:
-  the single pcap clock:
   - `W` := t(first guest SYN/ACK) − t(first slirp ARP request for
     10.0.2.15) — accept-to-handshake wait.
     (`arp.opcode==1 && arp.src.proto_ipv4==10.0.2.2 &&
@@ -3166,15 +3165,17 @@ D-0011 onward are working decisions made under those constraints.
      unexplained constant must not keep a plausible-sounding name;
      "host-side remainder" was doing the work that "measured
      delivery" could not. Threats item 16 carries this.
-  3. **Harness fix (design only here; the bench host implements —
-     D-0055/D-0067 discipline; `scripts/bench.py` untouched in this
-     tree):** drop `e0_to_e3w_ns` — its anchoring assumption
-     ("first-connect ≈ SYN/ACK") is dead. Record per-trial
-     pcap-internal columns `w_ns`, `d_ack_ns`, `d_fin_ns` using the
-     D-0070 filters (one pcap clock; fail loudly when a frame is
-     missing). Keep `e0_to_first_connect_ns` as the same-QEMU
-     control. Exhibits report `D_fin` as delivery; no E3w-derived
-     column anywhere (cross-system rule already in D-0070).
+  3. **Harness fix:** design only in this tree; the dedicated host
+     implements it (D-0055 / D-0067 discipline). `scripts/bench.py`
+     is not edited here. The interface is the **Bench-host spec
+     (D-0071)** section of `results/README.md`. In short: drop
+     `e0_to_e3w_ns`; record per-trial `w_ns`, `d_ack_ns`, `d_fin_ns`
+     from the D-0070 filters on one pcap clock; keep
+     `e0_to_first_connect_ns` as a same-QEMU control (a deviation
+     fails the run, it is not a system difference); put S in the
+     batch header, not in every `runs.csv` row. No cross-system
+     table may carry an E3w-derived column. Historical git objects
+     keep the old schema; do not rewrite them.
 - Revisit trigger: a bench-host instrumented mechanism check (the
   pcap-write poll, ~10 boots) if anyone wants S measured rather than
   derived there; or any QEMU/host change on the bench machine, which

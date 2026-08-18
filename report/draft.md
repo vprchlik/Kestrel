@@ -562,13 +562,15 @@ maintained in [threats-to-validity.md](threats-to-validity.md).
 
 Next: the Linux baseline (D-0062). The D-0070 pcap pass landed
 (confirmed; residual explained by D-0071); the bracket-yield
-diagnostic is moot. The harness fix — retire `e0_to_e3w_ns`,
-record `w_ns`/`d_ack_ns`/`d_fin_ns` per trial — is designed in
-D-0071 and implemented on the bench host alongside per-batch
-result files (D-0067; spec in `results/README.md`). `virtq_init`
-remains eligible at 13% of 6.43 ms and is not the next action.
-D-0060 is declined-by-subsumption. `-bios none` (D-0061).
-Unikraft spike (D-0063). T4.3b audit cleanup.
+diagnostic is moot. The harness fix — drop `e0_to_e3w_ns`, record
+`w_ns` / `d_ack_ns` / `d_fin_ns` per trial, keep first-connect as
+a control, put S in the batch header — is specified in
+`results/README.md` (Bench-host spec (D-0071)) and implemented on
+the bench host; this tree does not edit `scripts/bench.py`.
+Per-batch result files (D-0067) share that write path.
+`virtq_init` remains eligible at 13% of 6.43 ms and is not the
+next action. D-0060 is declined-by-subsumption. `-bios none`
+(D-0061). Unikraft spike (D-0063). T4.3b audit cleanup.
 
 ---
 

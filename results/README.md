@@ -52,6 +52,13 @@ baseline header comes from
 after-ladder (superpages) block comes from the T4.6 CSV fields, not
 from `results/summary.txt`.
 
+New batches after D-0071 drop `e0_to_e3w_ns` and record `w_ns` /
+`d_ack_ns` / `d_fin_ns` at trial time; the generator keeps reading
+old-schema git objects for freeze / T4.6 / D-0068 and does not
+grow a new-schema path until those CSVs exist as git objects
+(Bench-host spec (D-0071) below). Working-tree leftovers still
+cannot become an exhibit.
+
 Do not treat `results/summary.txt` as a report artifact; it is
 gitignored and may be a leftover from a local run.
 
@@ -95,8 +102,12 @@ trial's two batches; the T4.4 rows live in
 `results/batches/20260817T052349Z-{1,2}/` once copied, and the
 freeze rows remain in tag `baseline-t4.3`.
 
-Schema of those CSVs does not change (columns above). Per-batch
-copies are the same schema, one `batch_id` per directory.
+Schema of those CSVs **through D-0068** is the historical table
+below (`e0_to_e3w_ns` present). D-0071 amends the schema for
+**new** batches: drop `e0_to_e3w_ns`, add `w_ns` / `d_ack_ns` /
+`d_fin_ns`. Do not rewrite freeze / T4.4 / T4.6 / D-0068 git
+objects. Per-batch copies of a given batch keep that batch's
+schema. Mixed schema inside one `runs.csv` is a fail.
 
 ### Generator interface (once the files exist)
 
@@ -123,7 +134,228 @@ half-wired `--after-batches` that falls back to HEAD is fail-open.
 This pod does not run `just bench`. The bench host runs N-trials
 and is the first writer of `results/batches/`.
 
+## Bench-host spec (D-0071) — implement there, not in this tree
+
+Approved. Do **not** change `scripts/bench.py` in this repository;
+the dedicated host owns the harness write path (D-0055). This
+section is the interface. `scripts/d0070-pcap-pass.py` is the
+reference extract (`extract_pcap`); the harness uses that
+implementation — import it, or split the extract into a shared
+module both call. A third copy of the filters is a fail.
+
+The D-0070 pass over already-recorded pcaps is closed. New batches
+record the intervals at trial time so a future campaign does not
+depend on gitignored pcaps surviving on one disk.
+
+### What changes in `runs.csv`
+
+Drop **`e0_to_e3w_ns`**. Its docstring assumption ("first-connect ≈
+SYN/ACK") is false under hostfwd (D-0070). Keeping the column
+would keep a number whose name still sounds like a wire edge.
+
+Add three per-trial columns, all on **one pcap clock**
+(`frame.time_relative`, `tcp.relative_sequence_numbers:FALSE`):
+
+| column | definition | tshark |
+|---|---|---|
+| `w_ns` | t(first guest SYN/ACK) − t(first slirp ARP request for 10.0.2.15) | ARP: `arp.opcode==1 && arp.src.proto_ipv4==10.0.2.2 && arp.dst.proto_ipv4==10.0.2.15`. SYN/ACK: `tcp.srcport==80 && tcp.flags==0x012`. |
+| `d_ack_ns` | t(first pure ACK from slirp of the 92 B payload+FIN) − t(HTTP frame) | HTTP: `tcp && ip.src == 10.0.2.15 && tcp.srcport == 80 && tcp.len > 0 && tcp.flags.syn == 0 && frame contains "HTTP/1.0 200 OK"`. ACK: `tcp && ip.src == 10.0.2.2 && ip.dst == 10.0.2.15 && tcp.dstport == 80 && tcp.flags.syn == 0 && tcp.flags.fin == 0 && tcp.flags.reset == 0 && tcp.flags.ack == 1 && tcp.len == 0 && tcp.ack == <HTTP tcp.nxtseq> && frame.number > <HTTP frame>`. |
+| `d_fin_ns` | t(first client FIN toward :80) − t(HTTP frame) | `tcp && ip.dst == 10.0.2.15 && tcp.dstport == 80 && tcp.flags.fin == 1 && frame.number > <HTTP frame>`. Upper bound on publish→client-recv; the bench client `close()`s after `recv`. |
+
+Keep **`e0_to_first_connect_ns`**. It is a same-QEMU **control**,
+not a comparison column. Under hostfwd it measures listener-up
+during QEMU netdev init (~18.5 ms on this host, guest-independent).
+A deviation flags a broken run, not a difference between systems.
+
+Keep `e0_to_e4_ns` (headline), `e0_mono_ns`, `e0_wall_ns`
+(diagnostic only; still never `pcap_epoch − e0_wall`), `attempts`,
+`pcap_path`. `phases.csv` is unchanged.
+
+Column order after the host-spec block:
+
+```
+e0_mono_ns
+e0_wall_ns
+e0_to_first_connect_ns
+e0_to_e4_ns
+w_ns
+d_ack_ns
+d_fin_ns
+attempts
+pcap_path
+```
+
+`e0_to_e3w_ns` is absent. A writer that still emits it, or a reader
+that computes `e0_to_e4_ns − e0_to_e3w_ns` on a new-schema file, is
+wrong.
+
+### Fail closed
+
+Every recorded trial (warmup included: a missing frame is a broken
+boot, not a skip):
+
+- pcap missing or empty
+- any of ARP / SYN/ACK / HTTP / pure ACK / client FIN missing
+- SYN/ACK before ARP, HTTP before SYN/ACK, ACK or FIN before HTTP
+- for `system=whimbrel`: HTTP `tcp.len` ≠ 92 (the committed body).
+  Other systems record the same columns without the length pin —
+  their body is not 92 B.
+- for `system=whimbrel`: `d_fin_ns` ≥ 10 ms (D-0070 falsify line,
+  now a harness invariant). Linux / Unikraft record `d_fin_ns`
+  without that tripwire; a large value there is data.
+- negative `w_ns` / `d_ack_ns` / `d_fin_ns`
+
+Do not fall back to `e0_to_e3w_ns` construction. Do not substitute
+a different pcap. Do not silently drop the trial.
+
+**First-connect control.** After the batch, on recorded rows:
+
+- `|median(e0_to_first_connect_ns)_safe − median(…)_fast| > 1 ms`
+  → `TEST FAIL`: listener-up scaled with the guest profile; the
+  control is broken.
+- When a cross-system batch exists, the same 1 ms bound across
+  `system` values. A miss fails the **run**. It does not become a
+  table cell that looks like "Linux connects slower."
+
+### S — batch header, not a `runs.csv` column
+
+S is the pre-ARP QEMU-startup slice (listener-up → main-loop-live).
+It is a **per-host, per-QEMU-build constant**. It does not scale
+with the guest profile. It is never a report number.
+
+**Do not add `s_ns` to `runs.csv`.** A per-trial column would invite
+median / IQR / stability / rung-delta treatment — the exact path
+by which "E3w→E4" acquired a host-sounding name (D-0071
+methodology finding). S is not an input to any per-trial formula
+the reader needs. Contrast `client_granularity_ns`, which *is*
+copied onto every row because it interprets `attempts`.
+
+**Record S in the batch header** (`results/summary.txt` and
+`results/batches/<batch_id>/summary.txt`), next to `qemu_hash`:
+
+```
+s_ns=<median> iqr=<iqr> n=<recorded>
+s_ns_fast=<median> s_ns_safe=<median>
+```
+
+Compute per recorded trial, internally, from stamps the harness
+already has — not from a new clock:
+
+```
+s_trial_ns = (e0_to_e4_ns − e0_to_first_connect_ns)
+           − (t_fin − t_arp)
+           = (e0_to_e4_ns − e0_to_first_connect_ns)
+           − (w_ns + synack_to_http_ns + d_fin_ns)
+```
+
+`synack_to_http_ns` is an extract internal (`extract_pcap` already
+returns it). It is **not** a CSV column. `t_fin − t_arp` is one
+pcap clock; `e0_to_e4 − e0_to_first_connect` is the client
+monotonic clock. The mixed-clock remainder is S plus the µs
+FIN-after-E4 tail. That is a diagnostic, not a first-class edge.
+
+Fail closed on the header:
+
+- `|s_ns_fast − s_ns_safe| > 1 ms` → `TEST FAIL` (S scaled with
+  profile; D-0071 is reopened).
+- Pool both configs for the headline `s_ns`. A QEMU or host change
+  is allowed to move S on the *next* batch; that is the revisit
+  trigger, and the header is the grain that shows it.
+
+Do not copy S into `results/baseline-summary.txt` unless the freeze
+is retaken on a new machine. The freeze object stays frozen.
+
+### Stability and summary
+
+`metric_table` / `just bench-summary` / two-batch stability:
+
+- drop `e0_to_e3w_ns`
+- add `w_ns` (tens of ms; participates in the ≥ 1 ms stability
+  rule)
+- add `d_ack_ns` and `d_fin_ns` (sub-ms on Whimbrel; the existing
+  "skip if both medians < 1 ms" rule leaves them out of the
+  stability pair, which is correct — they are not a host-drift
+  check)
+- keep `e0_to_first_connect_ns` and `e0_to_e4_ns`
+
+Selftest fixtures that currently plant `e0_to_e3w_ns` plant the
+new columns instead. A selftest row that still has `e0_to_e3w_ns`
+must fail.
+
+### Historical objects
+
+Freeze (`baseline-t4.3`), T4.4 (`867e28f`), T4.6 (`c40945c`), and
+both D-0068 CSV commits keep `e0_to_e3w_ns`. Do not rewrite them.
+`just d0070-pcap-pass` remains the read-only reconstruction of
+`w` / `d_ack` / `d_fin` from those campaigns' gitignored pcaps;
+it is not the writer for new batches.
+
+Schema detection (generator and summarizer):
+
+- `e0_to_e3w_ns` present, `w_ns` absent → old schema
+- `w_ns`, `d_ack_ns`, `d_fin_ns` present, `e0_to_e3w_ns` absent →
+  new schema
+- both, or neither → `TEST FAIL`
+
+### Exhibit generator
+
+Until a new-schema CSV exists as a git object, **do not** change
+`scripts/report-exhibits.py`. A half-wired reader that falls back
+to `e0_to_e3w_ns` is fail-open (same rule as D-0067's
+`--after-batches`).
+
+Once the first new-schema pin exists:
+
+- Detect schema from the CSV header, per pin. Do not assume HEAD.
+- **Old-schema pins** (freeze, T4.6, D-0068): keep generating
+  dump-placement and the historical edges table, including
+  E0→E3w / E3w→E4, with an explicit caption that those metrics
+  are retired (D-0070 / D-0071) and retained only as the record
+  of the mislabeling. Values still come from `git show` of those
+  objects, never from the working tree.
+- **New-schema pins:** the edges exhibit reports, per config,
+  median / IQR / min of:
+  - `E0→first-connect` — control, labeled as such
+  - `E0→E4` — headline
+  - `E2→E3g` — guest
+  - `D_fin` (`d_fin_ns`) — delivery bound
+  - `W` (`w_ns`) — guest-boot wait, Whimbrel-only decomposition
+  - `D_ack` (`d_ack_ns`)
+  - stamp overhead
+  Never E0→E3w. Never E3w→E4. Never `e0_to_e4 − e0_to_e3w`.
+- Working-tree `results/runs.csv` is still not an exhibit source.
+
+### Cross-system tables (T4.8 / T4.9, and any table that has more
+than one `system` value)
+
+**No cross-system table may carry an E3w-derived column.** That
+means none of: `e0_to_e3w_ns`, E0→E3w, E3w→E4, or any cell
+computed from them. Under hostfwd those quantities are each
+system's boot-to-listening time in disguise (hundreds of ms of
+Linux, not delivery).
+
+**`W` is not E3w-derived but is the same trap** — it is the
+accepted connection waiting for the guest. It is a Whimbrel
+decomposition column only. It does not appear next to a Linux or
+Unikraft row.
+
+**`E0→E4` is the comparison.** Two direct client-clock stamps.
+Each system's boot is counted once, correctly.
+
+**`e0_to_first_connect_ns` is a control, not a comparison.** If
+Linux's value differs from Whimbrel's on the same QEMU/hostfwd
+shape, that flags a broken run (listener-up is no longer
+guest-independent, or the batch mixed QEMUs). It is not "Linux
+connects slower." The generator omits it from comparison columns
+and, if it is printed at all, labels it control.
+
+`D_fin` may appear on a cross-system table only as the same pcap
+definition (client FIN − HTTP frame) on both rows, never derived
+from E3w. If a system's pcap shape does not have that FIN, the
+cell is empty, not guessed.
+
 ## `runs.csv` — one row per trial
+
 
 | column | meaning |
 |---|---|
@@ -153,15 +385,21 @@ and is the first writer of `results/batches/`.
 | `steal_ticks` | `/proc/stat` aggregate `cpu` steal column, delta across the trial |
 | `steal_ns` | `steal_ticks * 1e9 / SC_CLK_TCK` (10 ms/tick when USER_HZ=100) |
 | `e0_mono_ns` | `time.monotonic_ns()` immediately before QEMU exec |
-| `e0_wall_ns` | `time.time_ns()` at the same moment (diagnostic; not used for E3w) |
-| `e0_to_first_connect_ns` | first successful `connect` − E0 (monotonic) |
-| `e0_to_e3w_ns` | first-connect + pcap-relative (HTTP − SYN/ACK). QEMU dump wall ≠ Python realtime. |
-| `e0_to_e4_ns` | first response byte − E0 (monotonic) |
+| `e0_wall_ns` | `time.time_ns()` at the same moment (diagnostic; never `pcap_epoch − e0_wall`) |
+| `e0_to_first_connect_ns` | first successful `connect` − E0 (monotonic). Same-QEMU **control**, not a comparison: listener-up during netdev init. A deviation fails the run (D-0071). |
+| `e0_to_e3w_ns` | **historical schema only** (through D-0068). first-connect + pcap-relative (HTTP − SYN/ACK). Retired: the anchor is false under hostfwd (D-0070). Absent from D-0071 batches. |
+| `e0_to_e4_ns` | first response byte − E0 (monotonic). Headline. |
+| `w_ns` | **D-0071.** pcap: guest SYN/ACK − first slirp ARP for 10.0.2.15. Guest-boot wait. Not a cross-system column. |
+| `d_ack_ns` | **D-0071.** pcap: slirp pure ACK of payload+FIN − HTTP frame. |
+| `d_fin_ns` | **D-0071.** pcap: client FIN − HTTP frame. Delivery bound. |
 | `attempts` | client connect attempts until first-connect |
 | `pcap_path` | repo-relative filter-dump path |
 
 The summarizer refuses to aggregate if `dirty=1`, if `qemu_version` is not
 unique, if `git_sha` is not unique, or if there are zero recorded rows.
+New-schema batches are also refused if `e0_to_e3w_ns` is present, if any
+of `w_ns` / `d_ack_ns` / `d_fin_ns` is missing, or if the first-connect
+control or S profile-independence check fails (D-0071 spec above).
 
 ## `phases.csv` — one row per trial × phase
 
