@@ -3526,6 +3526,27 @@ D-0011 onward are working decisions made under those constraints.
   (selftest covers the RTC_CLASS false positive). The
   `RTC_CLASS` intent note now names `RTC_CLASS`; that is
   readability, not the gate.
+- **Amendment (2026-08-18 — three not-in-final cases):** the
+  split over-fired the other way: 300+ FAILs, almost all
+  stock `=y` symbols that vanished because we unset their
+  parent. merge_config diffs concatenated stock+fragment
+  against the final `.config`, so `SCSI_MOD` / `NFS_FS` /
+  `USB_XHCI_HCD` / `SND_PCM` / `RTC_LIB` / `SECURITY_SELINUX`
+  report as "requested =y, final absent" even though none of
+  them are in the fragment.
+
+  Three cases, discriminated on fragment membership:
+  1. fragment unset → final y — survival, annotate or abort
+  2. fragment unset → final absent — menu vanished, success
+  3. requested =y → final absent, **not** in the fragment —
+     dependent drop, success, informational (count, not 300
+     FAIL lines)
+
+  A dependent drop that removes something we need is a keep
+  failure, not a cascade to annotate. Block 3c asserts serial /
+  virtio / IPv4 TCP / initramfs / `DEVTMPFS` / `FUTEX` are y
+  on the final `.config`. Selftest covers all three cases plus
+  the keeps check.
 
 
 

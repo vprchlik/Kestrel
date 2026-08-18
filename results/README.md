@@ -411,11 +411,14 @@ as D-0067 / D-0071.
 4. Trimmed kernel from the same pinned kernel source, out-of-tree
    `O=` build with the tree's SDK cross-toolchain,
    `linux-trimmed.fragment` merged via `merge_config.sh` →
-   `Image-trimmed`. **Fail on "Value requested for … not in final
-   .config" when the symbol survived**, unless the fragment has
-   `# merge-override SYM:` — kconfig re-enabled it. **"Redefined
-   by fragment" is informational** (the fragment is doing its
-   job) and does not require annotation. One buildroot tree plus
+   `Image-trimmed`. **Three "not in final .config" cases**, not
+   one: (1) fragment unset → final y is a survival (`# merge-override
+   SYM:` or abort); (2) fragment unset → final absent is a vanished
+   menu (success); (3) stock =y, symbol not in the fragment, final
+   absent is a dependent drop (success, no annotation). **"Redefined
+   by fragment" is informational.** D-0062 keeps (serial, virtio,
+   IPv4 TCP, initramfs, DEVTMPFS, FUTEX) are asserted y on the
+   final `.config` as their own check. One buildroot tree plus
    one kernel build dir, not two buildroot trees. D-0073: reuse
    is gated on a sha256 stamp of the fragment, not merely on
    `Image-trimmed` existing. After D-0073, stock hash must still
@@ -447,16 +450,26 @@ what the fragment intended. The recipe prints, in order:
      changed (or restated) stock. Every trim line that does work
      emits this. No annotation.
    - `Value requested for CONFIG_X not in final .config` —
-     after alldefconfig, requested ≠ actual. If the symbol
-     survived (`=y` / `=m` / a value), abort unless
-     `# merge-override SYM:`. If the request was unset and
-     actual is empty, the menu vanished: successful unset, not
-     a survival.
-   Intent notes (`# FTRACE:`) are not merge-overrides. That was
-   the old gate: thirty redefined lines "passed as annotated"
-   because the note happened to contain the symbol name;
-   `RTC_CLASS` (note said `RTC:`) failed closed on a false
-   positive.
+     merge_config diffs concatenated stock+fragment against the
+     final `.config`, so this is not "what the fragment asked."
+     Three cases, discriminated on whether X is a kconfig line
+     in `linux-trimmed.fragment`:
+     1. Fragment requested unset → final =y — real survival.
+        Abort unless `# merge-override SYM:`. (EFI)
+     2. Fragment requested unset → final absent — menu vanished.
+        Success.
+     3. Requested =y → final absent, X **not** in the fragment —
+        dependent drop from a parent we unset (SCSI_MOD after
+        BLOCK, NFS_FS after NETWORK_FILESYSTEMS, USB_XHCI_HCD,
+        SND_PCM, RTC_LIB, SECURITY_SELINUX, …). Success,
+        informational, no annotation. Summarized as a count,
+        not 300 FAIL lines.
+     Requested =y → final absent, X **is** in the fragment: a
+     keep we asked for is gone. Abort. The D-0062 keeps list is
+     a separate check on the final `.config` (block 3c), not
+     this cascade.
+   Intent notes (`# FTRACE:`) are not merge-overrides and do
+   not put a symbol in the fragment.
 3. **Requested-vs-final table:** every line of
    `linux-trimmed.fragment` against the trimmed final `.config` —
    `CONFIG_X: requested y, final y` / `requested unset, final
@@ -464,9 +477,19 @@ what the fragment intended. The recipe prints, in order:
    a `# merge-override SYM:` line (a dependency re-enable) aborts
    the build:
    `TEST FAIL: merge override not annotated: CONFIG_X requested
-   unset, final y`. This is the same survival rule as the
-   merge_config "not in final .config" classifier, applied to
-   the final `.config` directly.
+   unset, final y`. This is case 1 on the fragment lines (a
+   symbol we asked to unset that came back). Dependent drops of
+   symbols we never named are not this table.
+3b. **D-0073 leftovers must not be y** (FTRACE, NFS, USB, …).
+   Absent/unset is a pass.
+3c. **D-0062 keeps must be y** on the final `.config`: serial
+   (`TTY`, `SERIAL_8250`, `SERIAL_8250_CONSOLE`,
+   `SERIAL_OF_PLATFORM`, `PRINTK`), virtio-mmio/net
+   (`NETDEVICES`, `VIRTIO_MENU`, `VIRTIO_MMIO`, `VIRTIO_NET`),
+   IPv4 TCP (`NET`, `INET`), initramfs (`BLK_DEV_INITRD`,
+   `BINFMT_ELF`), `DEVTMPFS`, `FUTEX`. A cascade that removes
+   one of these is a lost keep, caught here, not by annotating
+   SCSI_MOD.
 4. **Config diff summary:** the kernel tree's `scripts/diffconfig`
    between the stock final `.config` and the trimmed final
    `.config` — the complete end-to-end delta, intended trims plus

@@ -779,11 +779,12 @@ d0070-pcap-pass-selftest:
 
 # T4.8 / D-0062 / D-0073: pin, fetch, and build Linux baseline
 # artifacts on the dedicated host. Prints five verification blocks
-# plus D-0073 3b. Reuse of Image-trimmed is fragment-stamp gated.
+# plus D-0073 3b and D-0062 keeps 3c. Reuse of Image-trimmed is fragment-stamp gated.
 # Stock hash must stay the T4.8 pin; trimmed must move. Never
 # inside a batch. T4.8b runs this before just bench-t48.
-# merge_config "redefined by fragment" is informational;
-# "not in final .config" survival needs merge-override.
+# merge_config "redefined by fragment" is informational.
+# "not in final .config": three cases (survival / vanished /
+# dependent drop). Keeps are asserted on the final .config.
 linux-build:
     python3 scripts/linux-merge-warnings.py selftest
     bash scripts/linux-build.sh

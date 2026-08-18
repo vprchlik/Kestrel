@@ -286,10 +286,15 @@ build_trimmed_linux() {
         cat "$BUILD/merge_config.out" >&2
         die "merge_config.sh failed for trimmed kernel"
     }
-    check_merge_warnings "$FRAG_TRIM" "$BUILD/merge_config.out"
     # Gate block 3 before compiling: a dependency re-enable is a fragment
-    # annotation, not a 20-minute surprise after Image.
+    # annotation, not a 20-minute surprise after Image. Copy .config
+    # first so the keeps check sees the final file.
     cp -a "$TRIM_O/.config" "$BUILD/trimmed.config"
+    check_merge_warnings "$FRAG_TRIM" "$BUILD/merge_config.out"
+    assert_keeps > "$BUILD/keeps.out" || {
+        cat "$BUILD/keeps.out" >&2
+        die "D-0062 keep missing from trimmed.config"
+    }
     requested_vs_final > "$BUILD/requested_vs_final.out" || {
         cat "$BUILD/requested_vs_final.out" >&2
         die "requested-vs-final failed after merge (annotate the fragment, do not skip)"
@@ -307,19 +312,18 @@ build_trimmed_linux() {
 }
 
 check_merge_warnings() {
-    # Was: any "redefined by fragment" / "redundant by fragment" line
-    # aborted unless a fragment comment contained the bare symbol
-    # name. Intent notes counted (`# FTRACE:`), so thirty trim lines
-    # "passed as annotated" and RTC_CLASS (note said `RTC:`) did not.
-    # That conflates the fragment doing its job with kconfig refusing
-    # the request.
-    #
-    # Now: redefined/redundant are informational. "not in final
-    # .config" where the symbol survived requires `# merge-override
-    # SYM:` or abort (scripts/linux-merge-warnings.py).
+    # Three "not in final .config" cases (scripts/linux-merge-warnings.py):
+    # 1. fragment unset → final y: survival, merge-override or abort
+    # 2. fragment unset → final absent: menu vanished, success
+    # 3. stock =y, not in fragment, final absent: dependent drop, success
+    # Redefined/redundant stay informational. Keeps are a separate check.
     local frag="$1" log="$2"
     python3 "$ROOT/scripts/linux-merge-warnings.py" "$frag" "$log" \
         || die "merge_config.sh reported an unannotated value that did not stick"
+}
+
+assert_keeps() {
+    python3 "$ROOT/scripts/linux-merge-warnings.py" keeps "$BUILD/trimmed.config"
 }
 
 requested_vs_final() {
@@ -505,6 +509,8 @@ EOF
     requested_vs_final
 
     assert_d0073_unsets
+
+    assert_keeps
 
     echo "===== 4. diffconfig stock → trimmed ====="
     if [[ -x "$LINUX_SRC/scripts/diffconfig" ]]; then

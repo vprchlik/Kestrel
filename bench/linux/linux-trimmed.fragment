@@ -11,9 +11,14 @@
 #   # merge-override SYM: <why it came back>
 # merge_config.sh "redefined by fragment" is the fragment doing its
 # job; linux-build prints it and does not require annotation.
-# "Value requested for … not in final .config" after alldefconfig
-# is the silent-trim-failure case: annotate or the recipe aborts.
-# requested-vs-final is the same rule on the final .config.
+# "Value requested for … not in final .config" has three cases:
+#   fragment unset → final y: survival; annotate or abort
+#   fragment unset → final absent: menu vanished; success
+#   stock =y, not in this fragment, final absent: dependent drop;
+#   success, no annotation (SCSI_MOD after BLOCK, …)
+# requested-vs-final is case 1 on the fragment lines. Keeps
+# (serial, virtio, IPv4 TCP, initramfs, DEVTMPFS, FUTEX) are
+# asserted y on the final .config as their own check.
 # Intent notes (`# FTRACE:`) are not merge-overrides.
 
 # EXPERT: unhides BLOCK, PROC_FS, SYSFS, KALLSYMS, NAMESPACES
