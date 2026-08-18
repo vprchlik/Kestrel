@@ -2972,7 +2972,11 @@ D-0011 onward are working decisions made under those constraints.
   after E4, exactly where the dump no longer matters.
 - **Pre-registered discriminator (bench host; read-only over
   already-recorded per-trial pcaps of T4.6 and both D-0068
-  campaigns; zero new boots, no harness change):** per trial, on
+  campaigns; zero new boots, no harness change):**
+  `just d0070-pcap-pass` (`scripts/d0070-pcap-pass.py`) `git show`s
+  the three CSV objects and reads `results/trials/<batch>/…/qemu.pcap`.
+  Missing pcaps fail closed — they are gitignored; do not substitute
+  a cloud-pod leftover. Per trial, on the single pcap clock:
   the single pcap clock:
   - `W` := t(first guest SYN/ACK) − t(first slirp ARP request for
     10.0.2.15) — accept-to-handshake wait.

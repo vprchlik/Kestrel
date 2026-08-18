@@ -749,6 +749,15 @@ bench-summary:
 report-exhibits:
     python3 scripts/report-exhibits.py
 
+# D-0070 read-only tshark pass over recorded T4.6 / D-0068 pcaps.
+# git show of those CSV objects; results/trials/ must already exist.
+# Does not boot QEMU and does not change scripts/bench.py.
+d0070-pcap-pass:
+    python3 scripts/d0070-pcap-pass.py
+
+d0070-pcap-pass-selftest:
+    python3 scripts/d0070-pcap-pass.py selftest
+
 # Disassemble the kernel (extra flags as one quoted arg).
 objdump flags="-d": build
     cargo objdump -- {{flags}}
