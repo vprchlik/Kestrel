@@ -301,12 +301,10 @@ Schema detection (generator and summarizer):
 
 ### Exhibit generator
 
-Until a new-schema CSV exists as a git object, **do not** change
-`scripts/report-exhibits.py`. A half-wired reader that falls back
-to `e0_to_e3w_ns` is fail-open (same rule as D-0067's
-`--after-batches`).
-
-Once the first new-schema pin exists:
+The first new-schema pin exists (`ffb7ac7`, T4.8). Schema is
+detected from the CSV header, per pin. A reader that falls back
+to `e0_to_e3w_ns` on a new-schema file is fail-open (same rule as
+D-0067's `--after-batches`).
 
 - Detect schema from the CSV header, per pin. Do not assume HEAD.
 - **Old-schema pins** (freeze, T4.6, D-0068): keep generating
@@ -326,6 +324,11 @@ Once the first new-schema pin exists:
   - stamp overhead
   Never E0→E3w. Never E3w→E4. Never `e0_to_e4 − e0_to_e3w`.
 - Working-tree `results/runs.csv` is still not an exhibit source.
+- **T4.8 pin:** `ffb7ac71234e953ae51339a3e1f5e17ba8c3f1b3`,
+  batches `20260818T073023Z-1` / `20260818T073023Z-2`, measured
+  kernel `1005399`. Cross-system table:
+  `report/exhibits/cross-system.md`. New-schema Whimbrel edges
+  append to `report/exhibits/edges.md`.
 
 ### Cross-system tables (T4.8 / T4.9, and any table that has more
 than one `system` value)

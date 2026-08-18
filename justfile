@@ -747,10 +747,10 @@ bench-fp-ab:
 bench-summary:
     bash scripts/bench.sh summarize --stability
 
-# T4.3 / T4.4: regenerate report exhibits from two git objects.
-# Baseline columns: tag baseline-t4.3. After-ladder / Δ: HEAD.
-# Fails closed if those objects are not the freeze / T4.4 batches.
-# Working-tree CSVs are not read (D-0067).
+# T4.3 / T4.4 / T4.6 / T4.8: regenerate report exhibits from git objects.
+# Baseline: tag baseline-t4.3. After-ladder / Δ: T4.6 CSV commit.
+# Cross-system: T4.8 CSV commit ffb7ac7. Working-tree CSVs are not
+# read (D-0067).
 report-exhibits:
     python3 scripts/report-exhibits.py
 

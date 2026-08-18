@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Generate the M4 report exhibits from two git revisions (D-0064 / D-0067).
+"""Generate the M4 report exhibits from named git objects (D-0064 / D-0067 / D-0071).
 
 The harness overwrites `results/runs.csv` and `results/phases.csv` per
 run; they are not an append-only history. Baseline columns therefore
-come from tag `baseline-t4.3` via `git show`, and after-ladder / Δ
-columns come from the T4.6 superpage CSV commit via `git show` (not
-necessarily `HEAD`: a later non-rung batch may sit at HEAD). The
-working-tree files are not read — a local `just bench` leftover cannot
-become an exhibit.
+come from tag `baseline-t4.3` via `git show`, after-ladder / Δ
+columns from the T4.6 superpage CSV commit, D-0068 dump-placement
+from its two CSV commits, and the T4.8 cross-system table from that
+campaign's CSV commit. HEAD may hold a later batch; pins do not
+follow it. The working-tree files are not read — a local `just bench`
+leftover cannot become an exhibit.
 
 Never type the numbers this script prints.
 `just report-exhibits` regenerates report/exhibits/.
@@ -45,6 +46,21 @@ D68_RUN1_BATCHES = frozenset({"20260818T013740Z-1", "20260818T013740Z-2"})
 D68_RUN2_REV = "4755fa3fe2cf98ded4dd333fa81ca66a2b811cfe"
 D68_RUN2_SHA_PREFIX = "59e07032"
 D68_RUN2_BATCHES = frozenset({"20260818T014549Z-1", "20260818T014549Z-2"})
+
+# T4.8 five-arm CSV commit. Measured kernel is git_sha 1005399 (not
+# this object). New schema: w_ns / d_ack_ns / d_fin_ns, no e0_to_e3w_ns.
+T48_REV = "ffb7ac71234e953ae51339a3e1f5e17ba8c3f1b3"
+T48_SHA_PREFIX = "1005399"
+T48_BATCHES = frozenset({"20260818T073023Z-1", "20260818T073023Z-2"})
+T48_N_PER_ARM = 60
+T48_ARM_ORDER = (
+    ("whimbrel", "release-fast-boot"),
+    ("whimbrel", "release-default"),
+    ("linux", "trimmed"),
+    ("linux", "trimmed-instrumented"),
+    ("linux", "stock"),
+)
+CONTROL_TOL_NS = 1_000_000
 
 SAFE = "release-default"
 FAST = "release-fast-boot"
@@ -185,12 +201,45 @@ def fmt_delta(ns: float) -> str:
     return sign + fmt_ns(abs(ns))
 
 
+def fmt_ratio(num: float, den: float) -> str:
+    if den == 0:
+        raise ExhibitFail("TEST FAIL: ratio denominator is 0")
+    return f"{num / den:.1f}×"
+
+
 def md_cell(s: str) -> str:
     return s.replace("|", "\\|")
 
 
 def recorded(rows: list[dict]) -> list[dict]:
     return [r for r in rows if int(r["warmup"]) == 0]
+
+
+def runs_schema(fieldnames) -> str:
+    fields = set(fieldnames)
+    has_e3w = "e0_to_e3w_ns" in fields
+    new_cols = {"w_ns", "d_ack_ns", "d_fin_ns"}
+    has_new = new_cols <= fields
+    if has_e3w and has_new:
+        raise ExhibitFail(
+            "TEST FAIL: mixed runs.csv schema "
+            "(e0_to_e3w_ns and w_ns/d_ack_ns/d_fin_ns both present)"
+        )
+    if has_e3w:
+        extra = new_cols & fields
+        if extra:
+            raise ExhibitFail(
+                "TEST FAIL: mixed runs.csv schema "
+                f"(e0_to_e3w_ns with partial new columns {sorted(extra)})"
+            )
+        return "old"
+    if has_new:
+        return "new"
+    raise ExhibitFail(
+        "TEST FAIL: incomplete runs.csv schema "
+        "(need e0_to_e3w_ns without w_ns/d_ack_ns/d_fin_ns, "
+        "or w_ns/d_ack_ns/d_fin_ns without e0_to_e3w_ns)"
+    )
 
 
 def validate(
@@ -201,6 +250,11 @@ def validate(
     label: str,
 ) -> None:
     rec = recorded(runs)
+    if runs_schema(runs[0].keys()) != "old":
+        raise ExhibitFail(
+            f"TEST FAIL: {label} is not old-schema "
+            "(historical pins keep e0_to_e3w_ns; T4.8 is a different pin)"
+        )
     batches = {r["batch_id"] for r in runs}
     if batches != want_batches:
         raise ExhibitFail(
@@ -268,6 +322,148 @@ def validate(
         )
 
 
+def parse_linux_manifest(text: str) -> dict[str, str]:
+    artifacts: dict[str, str] = {}
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        if len(parts) == 3 and parts[0] == "artifact":
+            artifacts[parts[1]] = parts[2]
+    want = ("Image-stock", "Image-trimmed", "rootfs.cpio", "init")
+    missing = [n for n in want if n not in artifacts]
+    if missing:
+        raise ExhibitFail(f"TEST FAIL: MANIFEST missing {missing}")
+    return artifacts
+
+
+def validate_t48(runs: list[dict], phases: list[dict]) -> None:
+    label = "T4.8"
+    if runs_schema(runs[0].keys()) != "new":
+        raise ExhibitFail(f"TEST FAIL: {label} is not new-schema")
+    rec = recorded(runs)
+    batches = {r["batch_id"] for r in runs}
+    if batches != T48_BATCHES:
+        raise ExhibitFail(
+            f"TEST FAIL: {label} batch_id set {sorted(batches)} "
+            f"want {sorted(T48_BATCHES)}"
+        )
+    shas = {r["git_sha"] for r in rec}
+    if len(shas) != 1:
+        raise ExhibitFail(f"TEST FAIL: {label} mixed git_sha {sorted(shas)}")
+    sha = next(iter(shas))
+    if not sha.startswith(T48_SHA_PREFIX):
+        raise ExhibitFail(
+            f"TEST FAIL: {label} git_sha {sha} does not start with "
+            f"{T48_SHA_PREFIX}"
+        )
+    if any(int(r["dirty"]) != 0 for r in rec):
+        raise ExhibitFail(f"TEST FAIL: dirty-tree row in {label}")
+    want_cfgs = {cfg for _sys, cfg in T48_ARM_ORDER}
+    cfgs = {r["config"] for r in rec}
+    if cfgs != want_cfgs:
+        raise ExhibitFail(
+            f"TEST FAIL: {label} configs {sorted(cfgs)} want {sorted(want_cfgs)}"
+        )
+    for sys, cfg in T48_ARM_ORDER:
+        n = sum(1 for r in rec if r["config"] == cfg)
+        if n != T48_N_PER_ARM:
+            raise ExhibitFail(
+                f"TEST FAIL: {label} {cfg} has {n} recorded trials, "
+                f"want {T48_N_PER_ARM} (30 × 2 batches)"
+            )
+        systems = {r["system"] for r in rec if r["config"] == cfg}
+        if systems != {sys}:
+            raise ExhibitFail(
+                f"TEST FAIL: {label} {cfg} system {sorted(systems)} want {sys}"
+            )
+    steal = [int(r["steal_ticks"]) for r in rec]
+    if any(s != 0 for s in steal):
+        raise ExhibitFail(
+            f"TEST FAIL: nonzero steal_ticks in recorded {label} "
+            f"(nonzero={sum(1 for s in steal if s != 0)}/{len(steal)})"
+        )
+    if len(rec) != T48_N_PER_ARM * len(T48_ARM_ORDER):
+        raise ExhibitFail(
+            f"TEST FAIL: {label} has {len(rec)} recorded trials, "
+            f"want {T48_N_PER_ARM * len(T48_ARM_ORDER)}"
+        )
+    for field, want in (
+        ("virt", "none"),
+        ("governor", "performance"),
+        ("smt_control", "off"),
+        ("cpufreq_boost", "0"),
+    ):
+        vals = {r[field] for r in rec}
+        if vals != {want}:
+            raise ExhibitFail(
+                f"TEST FAIL: {label} {field} values {sorted(vals)} "
+                f"want {{{want!r}}}"
+            )
+    man = parse_linux_manifest(git_show(T48_REV, "bench/linux/MANIFEST"))
+    for cfg, image in (
+        ("stock", "Image-stock"),
+        ("trimmed", "Image-trimmed"),
+        ("trimmed-instrumented", "Image-trimmed"),
+    ):
+        got = {r["kernel_sha256"] for r in rec if r["config"] == cfg}
+        if got != {man[image]}:
+            raise ExhibitFail(
+                f"TEST FAIL: {label} {cfg} kernel_sha256 {sorted(got)} "
+                f"want MANIFEST {image}={man[image]}"
+            )
+    conn_meds = []
+    for _sys, cfg in T48_ARM_ORDER:
+        vals = [
+            float(r["e0_to_first_connect_ns"])
+            for r in rec
+            if r["config"] == cfg
+        ]
+        conn_meds.append(statistics.median(vals))
+    span = max(conn_meds) - min(conn_meds)
+    if span > CONTROL_TOL_NS:
+        raise ExhibitFail(
+            f"TEST FAIL: {label} first-connect medians span {span:.0f} ns "
+            f"(> 1 ms): {conn_meds}"
+        )
+    e4 = {
+        cfg: statistics.median(
+            [float(r["e0_to_e4_ns"]) for r in rec if r["config"] == cfg]
+        )
+        for _sys, cfg in T48_ARM_ORDER
+    }
+    if e4["trimmed"] >= e4["stock"]:
+        raise ExhibitFail(
+            f"TEST FAIL: {label} trimmed E0→E4 {e4['trimmed']:.0f} ns ≥ "
+            f"stock {e4['stock']:.0f} ns (tripwire; trimmed is not published)"
+        )
+    rec_keys = {(r["batch_id"], r["trial"], r["config"]) for r in rec}
+    linux_ph = [
+        p
+        for p in phases
+        if int(p["warmup"]) == 0 and p.get("system") == "linux"
+    ]
+    if linux_ph:
+        raise ExhibitFail(
+            f"TEST FAIL: {label} has {len(linux_ph)} Linux PHASE rows "
+            "(Linux writes none)"
+        )
+    e3g = [
+        p
+        for p in phases
+        if int(p["warmup"]) == 0
+        and p["phase"] == "E3g"
+        and p["config"] in {FAST, SAFE}
+        and (p["batch_id"], p["trial"], p["config"]) in rec_keys
+    ]
+    if len(e3g) != 120:
+        raise ExhibitFail(
+            f"TEST FAIL: {label} has {len(e3g)} recorded Whimbrel E3g rows, "
+            "want 120"
+        )
+
+
 def phase_deltas(
     rec_runs: list[dict], phases: list[dict], config: str
 ) -> dict[str, list[float]]:
@@ -328,6 +524,7 @@ def write_machine_spec(
     base_rec: list[dict],
     after_rec: list[dict],
     baseline_summary: str,
+    t48_rec: list[dict] | None = None,
 ) -> str:
     header: list[str] = []
     for line in baseline_summary.splitlines():
@@ -353,6 +550,18 @@ def write_machine_spec(
         f"batches:               {', '.join(sorted(AFTER_BATCHES))}",
         f"source:                git show {AFTER_REV}:results/runs.csv",
     ]
+    t48_block: list[str] = []
+    if t48_rec:
+        t48_block = [
+            "",
+            "## T4.8 five-arm campaign",
+            "",
+            *csv_field_block(t48_rec, f"T4.8 {T48_REV[:12]}"),
+            f"rev:                   {T48_REV}",
+            f"n_recorded:            {len(t48_rec)}",
+            f"batches:               {', '.join(sorted(T48_BATCHES))}",
+            f"source:                git show {T48_REV}:results/runs.csv",
+        ]
     return (
         "<!-- generated by scripts/report-exhibits.py — do not edit -->\n\n"
         + "\n".join(header)
@@ -360,6 +569,8 @@ def write_machine_spec(
         + "\n".join(extra)
         + "\n"
         + "\n".join(after_block)
+        + "\n"
+        + "\n".join(t48_block)
         + "\n"
     )
 
@@ -488,6 +699,41 @@ def edge_vals(
     return out
 
 
+def edge_vals_new(
+    rec: list[dict], phases: list[dict], config: str
+) -> dict[str, list[float]]:
+    """New-schema edges. Never E0→E3w / E3w→E4."""
+    cfg_rows = [r for r in rec if r["config"] == config]
+    rec_keys = {(r["batch_id"], r["trial"]) for r in cfg_rows}
+    e3g: list[float] = []
+    overhead: list[float] = []
+    for p in phases:
+        if int(p["warmup"]) != 0:
+            continue
+        if p["config"] != config:
+            continue
+        if (p["batch_id"], p["trial"]) not in rec_keys:
+            continue
+        if p["phase"] == "E3g":
+            e3g.append(float(p["ns_since_e2"]))
+        if p["phase"] == "stamp_b":
+            overhead.append(float(p["delta_ns"]))
+    out: dict[str, list[float]] = {
+        "E0→first-connect (control)": [
+            float(r["e0_to_first_connect_ns"]) for r in cfg_rows
+        ],
+        "E0→E4": [float(r["e0_to_e4_ns"]) for r in cfg_rows],
+        "D_fin": [float(r["d_fin_ns"]) for r in cfg_rows],
+        "D_ack": [float(r["d_ack_ns"]) for r in cfg_rows],
+    }
+    if cfg_rows and cfg_rows[0].get("system") == "whimbrel":
+        out["W"] = [float(r["w_ns"]) for r in cfg_rows]
+        out["E2→E3g"] = e3g
+        if overhead:
+            out["stamp overhead (`stamp_b`−`stamp_a`)"] = overhead
+    return out
+
+
 def append_edge_table(
     lines: list[str],
     rec: list[dict],
@@ -534,6 +780,8 @@ def write_edges(
     base_phases: list[dict],
     after_rec: list[dict],
     after_phases: list[dict],
+    t48_rec: list[dict] | None = None,
+    t48_phases: list[dict] | None = None,
 ) -> str:
     lines = [
         "<!-- generated by scripts/report-exhibits.py — do not edit -->",
@@ -541,7 +789,9 @@ def write_edges(
         "Host-observed edges and guest E2→E3g. Warmup excluded, both "
         "batches of each freeze pooled (n=60 recorded per config). "
         "E3w is first-connect plus the pcap-relative SYN/ACK→HTTP "
-        "interval (D-0043); E3w→E4 is `e0_to_e4_ns − e0_to_e3w_ns`.",
+        "interval (D-0043); E3w→E4 is `e0_to_e4_ns − e0_to_e3w_ns`. "
+        "Those two metrics are retired (D-0070 / D-0071) and retained "
+        "here only as the record of the mislabeling.",
         "",
         f"Baseline sourced from `git show {BASELINE_TAG}:results/"
         "{runs,phases}.csv`. After-ladder sourced from "
@@ -559,6 +809,214 @@ def write_edges(
         after_rec,
         after_phases,
         f"### After-ladder ({LADDER_LABEL}, `{AFTER_REV[:12]}`)",
+    )
+    if t48_rec is not None and t48_phases is not None:
+        lines.extend(
+            [
+                f"### T4.8 Whimbrel arms (`{T48_REV[:12]}`, new schema)",
+                "",
+                "Same host and QEMU as the cross-system campaign; three "
+                "Linux arms interleaved. `csum=off` / TSO-family off on "
+                "the shared virtio-net-device args (no-op for Whimbrel). "
+                "E0→first-connect is a control. W is guest-boot wait "
+                "(SYN/ACK − slirp ARP), Whimbrel-only — it does not "
+                "appear on the cross-system table. Never E0→E3w / E3w→E4.",
+                "",
+                "| config | metric | n | median | IQR | min |",
+                "|---|---|---:|---:|---:|---:|",
+            ]
+        )
+        metric_order = (
+            "E0→first-connect (control)",
+            "E0→E4",
+            "E2→E3g",
+            "D_fin",
+            "W",
+            "D_ack",
+            "stamp overhead (`stamp_b`−`stamp_a`)",
+        )
+        for cfg in (FAST, SAFE):
+            vals = edge_vals_new(t48_rec, t48_phases, cfg)
+            for metric in metric_order:
+                if metric not in vals:
+                    continue
+                med, iq, mn = stat(vals[metric])
+                lines.append(
+                    f"| {cfg} | {metric} | {len(vals[metric])} | "
+                    f"{fmt_ns(med)} | {fmt_ns(iq)} | {fmt_ns(mn)} |"
+                )
+        lines.append("")
+    return "\n".join(lines)
+
+
+def cfg_median(rec: list[dict], config: str, field: str) -> float:
+    vals = [float(r[field]) for r in rec if r["config"] == config]
+    if not vals:
+        raise ExhibitFail(f"TEST FAIL: no {field} rows for {config}")
+    return statistics.median(vals)
+
+
+def cfg_iqr(rec: list[dict], config: str, field: str) -> float:
+    vals = [float(r[field]) for r in rec if r["config"] == config]
+    return iqr(vals)
+
+
+def write_cross_system(
+    t48_rec: list[dict],
+    t48_phases: list[dict],
+    t46_rec: list[dict],
+    t46_phases: list[dict],
+) -> str:
+    """T4.8 comparison table. No E3w-derived column. No W next to Linux."""
+    e4 = {
+        cfg: cfg_median(t48_rec, cfg, "e0_to_e4_ns") for _sys, cfg in T48_ARM_ORDER
+    }
+    fast_e4 = e4[FAST]
+    trim_e4 = e4["trimmed"]
+    stock_e4 = e4["stock"]
+    instr_e4 = e4["trimmed-instrumented"]
+    t48_e2 = e2e3g_median(t48_rec, t48_phases, FAST)
+    t46_e2 = e2e3g_median(t46_rec, t46_phases, FAST)
+    conn = {
+        cfg: cfg_median(t48_rec, cfg, "e0_to_first_connect_ns")
+        for _sys, cfg in T48_ARM_ORDER
+    }
+    conn_span = max(conn.values()) - min(conn.values())
+    linux_w_trim = cfg_median(t48_rec, "trimmed", "w_ns")
+    linux_w_trim_iqr = cfg_iqr(t48_rec, "trimmed", "w_ns")
+    lines = [
+        "<!-- generated by scripts/report-exhibits.py — do not edit -->",
+        "",
+        "T4.8 five-arm campaign. **RISC-V under QEMU TCG software "
+        "emulation** (not x86, not KVM hardware virtualization). "
+        f"Source: `git show {T48_REV}:results/{{runs,phases}}.csv` "
+        f"(batches `{sorted(T48_BATCHES)[0]}` / "
+        f"`{sorted(T48_BATCHES)[1]}`, measured kernel "
+        f"`{T48_SHA_PREFIX}`, n={T48_N_PER_ARM} recorded per arm, "
+        "warmup excluded). Working-tree CSVs are not read. "
+        "Regeneration: `just report-exhibits`.",
+        "",
+        "E0→E4 is the comparison: two direct client-clock stamps. "
+        "No E3w-derived column (D-0070 / D-0071). W is not in this "
+        "table — it is the accepted connection waiting for the guest, "
+        "and a cell next to Linux would be boot-wait in disguise. "
+        "Whimbrel W lives in [edges.md](edges.md) (T4.8 section). "
+        "E0→first-connect is a same-QEMU **control**, not a "
+        "comparison. D_fin is the same pcap definition on every row "
+        "(client FIN − HTTP frame). Linux guest decomposition "
+        "(printk / initcall_debug) is not this exhibit.",
+        "",
+        "### Comparison (E0→E4)",
+        "",
+        "| system | config | n | E0→E4 median | IQR | min | D_fin median |",
+        "|---|---|---:|---:|---:|---:|---:|",
+    ]
+    for sys, cfg in T48_ARM_ORDER:
+        rows = [r for r in t48_rec if r["config"] == cfg]
+        e4s = [float(r["e0_to_e4_ns"]) for r in rows]
+        dfins = [float(r["d_fin_ns"]) for r in rows]
+        med, iq, mn = stat(e4s)
+        dmed = statistics.median(dfins)
+        lines.append(
+            f"| {sys} | {cfg} | {len(rows)} | {fmt_ns(med)} | "
+            f"{fmt_ns(iq)} | {fmt_ns(mn)} | {fmt_ns(dmed)} |"
+        )
+    lines.extend(
+        [
+            "",
+            "Ratios below are E0→E4 medians on **RISC-V under QEMU TCG "
+            "software emulation**, same host, same QEMU, both arms. "
+            "Published unikernel figures (2–3 ms) and Firecracker's "
+            "~125 ms Linux boot are x86 with KVM hardware "
+            "virtualization, where absolute times run roughly 5–10× "
+            "lower. Those absolute numbers are not comparable to the "
+            "medians in this table; the ratio is, because the "
+            "emulation penalty applies to both arms.",
+            "",
+            f"- `release-fast-boot` / `trimmed` = "
+            f"**{fmt_ratio(trim_e4, fast_e4)}**",
+            f"- `release-fast-boot` / `stock` = "
+            f"**{fmt_ratio(stock_e4, fast_e4)}**",
+            "",
+            "This is what a single-purpose VM's structure buys under "
+            "those conditions, not a \"fastest\" claim. Whimbrel's "
+            f"guest work is E2→E3g "
+            f"{fmt_ns(t48_e2)} in this campaign "
+            "([phase-decomposition.md](phase-decomposition.md) is "
+            "the after-ladder breakdown of that interval).",
+            "",
+            "### Control (E0→first-connect)",
+            "",
+            "Listener-up during QEMU netdev init. Guest-independent. "
+            "A miss fails the run; it is not \"Linux connects slower.\"",
+            "",
+            "| system | config | n | median | IQR | min |",
+            "|---|---|---:|---:|---:|---:|",
+        ]
+    )
+    for sys, cfg in T48_ARM_ORDER:
+        rows = [r for r in t48_rec if r["config"] == cfg]
+        vals = [float(r["e0_to_first_connect_ns"]) for r in rows]
+        med, iq, mn = stat(vals)
+        lines.append(
+            f"| {sys} | {cfg} | {len(rows)} | {fmt_ns(med)} | "
+            f"{fmt_ns(iq)} | {fmt_ns(mn)} |"
+        )
+    lines.extend(
+        [
+            "",
+            f"Span of medians: {fmt_ns(conn_span)} (bound 1 ms).",
+            "",
+            "### Trim and observer cost (Linux, same campaign)",
+            "",
+            "| comparison | Δ E0→E4 (median − median) | what it is |",
+            "|---|---:|---|",
+            f"| `stock` − `trimmed` | {fmt_ns(stock_e4 - trim_e4)} | "
+            "trim removed real work; tripwire did not fire |",
+            f"| `trimmed-instrumented` − `trimmed` | "
+            f"{fmt_ns(instr_e4 - trim_e4)} | "
+            "`loglevel=7 printk.time=1 initcall_debug` on the same "
+            "`Image-trimmed` binary |",
+            "",
+            "The published Linux row is `trimmed`. Config: "
+            "`bench/linux/linux-trimmed.fragment` merged onto "
+            "`qemu_riscv64_virt_defconfig` (Buildroot 2026.02.3, "
+            "kernel 6.18.7, `bench/linux/PIN`). Same Image hash on "
+            "`trimmed` and `trimmed-instrumented` "
+            "(MANIFEST `Image-trimmed`).",
+            "",
+            "### Confound A evidence (Linux W, not a comparison)",
+            "",
+            f"`trimmed` W median {fmt_ns(linux_w_trim)}, IQR "
+            f"{fmt_ns(linux_w_trim_iqr)}. An IQR of a few "
+            "milliseconds at ~700 ms is incompatible with SYN "
+            "arrival snapped to slirp's ≥1 s RTO grid. The campaign "
+            "published: SYN-grid and RST gates fail-closed per Linux "
+            "trial, including warmup.",
+            "",
+            "### S is per system, never pooled across systems",
+            "",
+            "S (pre-ARP QEMU-startup slice) is a batch-header "
+            "diagnostic, not a `runs.csv` column and not a report "
+            "number (D-0071). It is per host and per guest-image "
+            "size: Whimbrel safe and fast may be pooled with each "
+            "other (profile-independent on one ELF); they must not "
+            "be pooled with Linux (Image load lands in S, D-0062). "
+            "A five-arm pooled S, and a wide IQR on that pool, is "
+            "two populations — not noise. Whimbrel's S in this "
+            "campaign's header stays at the ~6.8 ms constant of "
+            "[d0070-pcap.md](d0070-pcap.md) (S := −residual).",
+            "",
+            "### E2→E3g held across campaign shape",
+            "",
+            f"T4.8 `release-fast-boot` E2→E3g median {fmt_ns(t48_e2)}. "
+            f"T4.6 after-ladder (dump-placement / edges pin "
+            f"`{AFTER_REV[:12]}`) {fmt_ns(t46_e2)} "
+            f"(Δ {fmt_delta(t48_e2 - t46_e2)}). Three extra Linux "
+            "arms were interleaved in T4.8. This is reproducibility "
+            "across a different campaign shape, not a new rung.",
+            "",
+        ]
     )
     return "\n".join(lines)
 
@@ -681,12 +1139,24 @@ def main() -> int:
         validate(
             after_runs, after_phases, AFTER_BATCHES, AFTER_SHA_PREFIX, "after"
         )
+        t48_runs = read_csv_text(
+            git_show(T48_REV, "results/runs.csv"),
+            f"{T48_REV}:results/runs.csv",
+        )
+        t48_phases = read_csv_text(
+            git_show(T48_REV, "results/phases.csv"),
+            f"{T48_REV}:results/phases.csv",
+        )
+        validate_t48(t48_runs, t48_phases)
         base_rec = recorded(base_runs)
         after_rec = recorded(after_runs)
+        t48_rec = recorded(t48_runs)
         e2e3g_after_fast = e2e3g_median(after_rec, after_phases, FAST)
         OUT_DIR.mkdir(parents=True, exist_ok=True)
         (OUT_DIR / "machine-spec.md").write_text(
-            write_machine_spec(base_rec, after_rec, baseline_summary),
+            write_machine_spec(
+                base_rec, after_rec, baseline_summary, t48_rec=t48_rec
+            ),
             encoding="utf-8",
         )
         (OUT_DIR / "phase-decomposition.md").write_text(
@@ -700,20 +1170,35 @@ def main() -> int:
             encoding="utf-8",
         )
         (OUT_DIR / "edges.md").write_text(
-            write_edges(base_rec, base_phases, after_rec, after_phases),
+            write_edges(
+                base_rec,
+                base_phases,
+                after_rec,
+                after_phases,
+                t48_rec=t48_rec,
+                t48_phases=t48_phases,
+            ),
             encoding="utf-8",
         )
         (OUT_DIR / "dump-placement.md").write_text(
             write_dump_placement(),
             encoding="utf-8",
         )
+        (OUT_DIR / "cross-system.md").write_text(
+            write_cross_system(
+                t48_rec, t48_phases, after_rec, after_phases
+            ),
+            encoding="utf-8",
+        )
         print(
-            f"TEST PASS: exhibits from {BASELINE_TAG} + {AFTER_REV} → {OUT_DIR}"
+            f"TEST PASS: exhibits from {BASELINE_TAG} + {AFTER_REV} + "
+            f"{T48_REV[:12]} → {OUT_DIR}"
         )
         print((OUT_DIR / "machine-spec.md").read_text(encoding="utf-8"))
         print((OUT_DIR / "phase-decomposition.md").read_text(encoding="utf-8"))
         print((OUT_DIR / "edges.md").read_text(encoding="utf-8"))
         print((OUT_DIR / "dump-placement.md").read_text(encoding="utf-8"))
+        print((OUT_DIR / "cross-system.md").read_text(encoding="utf-8"))
         return 0
     except ExhibitFail as e:
         print(e, file=sys.stderr)

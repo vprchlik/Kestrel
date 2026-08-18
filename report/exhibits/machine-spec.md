@@ -31,3 +31,19 @@ rev:                   c40945cdb71b5aef68c5e72e292a718b66ec651e
 n_recorded:            120
 batches:               20260817T061753Z-1, 20260817T061753Z-2
 source:                git show c40945cdb71b5aef68c5e72e292a718b66ec651e:results/runs.csv
+
+## T4.8 five-arm campaign
+
+# T4.8 ffb7ac71234e (CSV fields; not results/summary.txt)
+qemu_version=QEMU emulator version 10.2.1 (Debian 1:10.2.1+ds-1ubuntu3.2)
+qemu_hash=89a99b20357ac92b2c6a533fe79d6fab6b507784858299f7109651f2d524d274
+git_sha=1005399346bfc4907b23e8093d81416d3c1664ae dirty=0
+host_kernel=7.0.0-29-generic
+cpu_model=AMD Ryzen 7 7800X3D 8-Core Processor
+governor=performance smt_control=off cpufreq_boost=0 virt=none steal_start_ticks=0 loadavg_1m=0.52
+client_granularity_ns=1000101
+shuffle_seed=1787038223882718600
+rev:                   ffb7ac71234e953ae51339a3e1f5e17ba8c3f1b3
+n_recorded:            300
+batches:               20260818T073023Z-1, 20260818T073023Z-2
+source:                git show ffb7ac71234e953ae51339a3e1f5e17ba8c3f1b3:results/runs.csv

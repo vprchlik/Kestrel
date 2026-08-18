@@ -1,18 +1,20 @@
 # Floor-finding: boot to first HTTP byte on a RISC-V unikernel
 
 Draft-early skeleton (T4.3 / D-0064; T4.4 and T4.6 ladder rows
-filled). Every quantitative claim in Results is generated from CSV
-by `scripts/report-exhibits.py`. Regeneration: `just report-exhibits`.
-Do not type table cells.
+filled; T4.8 cross-system filled). Every quantitative claim in
+Results is generated from CSV by `scripts/report-exhibits.py`.
+Regeneration: `just report-exhibits`. Do not type table cells.
 
 The harness overwrites `results/runs.csv` and `results/phases.csv` per
 run. The exhibit generator therefore reads git objects, not the
 working tree: **baseline columns** from tag `baseline-t4.3` (measured
 kernel `35861f3`), **after-ladder and Δ** from the T4.6 superpage CSV
 commit (measured kernel `76830e13`), **D-0068 dump-placement** from
-that commit plus the two yield-then-dump CSV commits. See
+that commit plus the two yield-then-dump CSV commits, **T4.8
+cross-system** from `ffb7ac7` (measured kernel `1005399`, batches
+`20260818T073023Z-1` / `20260818T073023Z-2`). See
 [exhibits/phase-decomposition.md](exhibits/phase-decomposition.md)
-caption and D-0067. `HEAD` may hold a later non-rung batch; it is not
+caption and D-0067. `HEAD` may hold a later batch; it is not
 the after-ladder pin.
 
 Conditions, stated once: QEMU TCG, `virt` machine, `-bios default`,
@@ -30,10 +32,13 @@ E2→E3g median of the fast-boot configuration reported in
 profile is flat: no phase exceeds 19% of 6.43 ms. The T4.3 freeze
 had been two walks of the frame free list; T4.4 collapsed those;
 T4.6 mixed-granularity paging took the next 42%. Safe vs fast is
-still a large factor. Cross-system rows (Linux, Unikraft) are empty
-until T4.8/T4.9. The largest single term in the honest E0→E4
-number is host-side (E3w→E4; D-0066). D-0068 moved the PHASE dump
-off that interval and did not change the term.
+still a large factor. T4.8 fills the Linux row: on RISC-V under
+QEMU TCG software emulation, same host, fast-boot E0→E4 is 14.5×
+the trimmed Linux baseline and 18.1× stock
+([exhibits/cross-system.md](exhibits/cross-system.md)). Unikraft
+is empty until T4.9. The honest E0→E4 number counts QEMU startup,
+guest boot wait, and sub-ms delivery once each (D-0070/D-0071);
+E3w→E4 is retired.
 
 ---
 
@@ -72,7 +77,8 @@ attributed delta. Statistics: median and IQR; min shown as the
 observed floor bound; means never. Stability: two interleaved
 30-trial batches, per-metric medians within max(2%, 200 µs) for
 every metric ≥ 1 ms. The criterion passed on this host for both
-configs on the freeze, T4.4, T4.6, and both D-0068 invocations; it
+configs on the freeze, T4.4, T4.6, and both D-0068 invocations, and
+for all five arms of T4.8; it
 failed on the KVM pod, so that pod's numbers are not cited here.
 
 **Reproducibility beyond interleaved batches.** D-0055's stability
@@ -83,6 +89,18 @@ reports the pairwise relative disagreement. Two campaigns
 reproducing is a stronger claim than one campaign splitting, and
 the generated figure is inside max(2%, 200 µs) on every compared
 median.
+
+**T4.8 campaign shape.** The five-arm run interleaved two Whimbrel
+profiles with three Linux arms (trimmed, stock, trimmed-instrumented),
+two shuffled batches, steal 0 on all 300 recorded trials, stability
+PASS on every arm. Whimbrel's own guest number held:
+`release-fast-boot` E2→E3g is 6.43 ms in that campaign, matching
+the T4.6 after-ladder pin (Δ +550 ns;
+[exhibits/cross-system.md](exhibits/cross-system.md)). That is
+reproducibility across a different campaign shape — three extra
+systems in the shuffle — not a new rung. Host-observed T4.8
+Whimbrel edges (new schema: E0→E4, W, D_fin, D_ack, no E3w) are
+the T4.8 section of [exhibits/edges.md](exhibits/edges.md).
 
 **Baseline freeze.** Tag `baseline-t4.3` (CSV freeze commit `bce55a2`).
 Measured kernel git SHA `35861f3`. Batches `20260817T041311Z-1` and
@@ -175,8 +193,9 @@ path is correct even when the measured cost is zero. E3w→E4 remains
 open — see Results.
 
 Exhibit tables: [phase decomposition](exhibits/phase-decomposition.md)
-(D-0064 centerpiece columns), [edges](exhibits/edges.md), and
-[dump placement](exhibits/dump-placement.md).
+(D-0064 centerpiece columns), [edges](exhibits/edges.md),
+[dump placement](exhibits/dump-placement.md), and
+[cross-system](exhibits/cross-system.md).
 
 ---
 
@@ -185,6 +204,7 @@ Exhibit tables: [phase decomposition](exhibits/phase-decomposition.md)
 The centerpiece is [exhibits/phase-decomposition.md](exhibits/phase-decomposition.md).
 Host-observed edges: [exhibits/edges.md](exhibits/edges.md). D-0068
 dump placement: [exhibits/dump-placement.md](exhibits/dump-placement.md).
+Cross-system: [exhibits/cross-system.md](exhibits/cross-system.md).
 Figures in the findings below are those generated tables, in prose.
 
 ### Two walks, one root cause (T4.3 freeze)
@@ -446,15 +466,59 @@ move); DEBUGGING.md superpage first-response note.
 
 ### Cross-system
 
-*(stub — T4.8 / T4.9)* Comparisons ride only on E0→first-connect and
-E0→E4. Whimbrel's row is [exhibits/edges.md](exhibits/edges.md).
-Linux and Unikraft cells stay empty until those tasks land. No
-E3w-derived column may appear here (D-0070): under hostfwd such a
-column would be each system's boot-to-listening time in disguise —
-for Linux, hundreds of ms of pure confound. E0→E4 counts each
-system's boot once, correctly. E0→first-connect (~18.5 ms,
-guest-independent) is a same-QEMU control: if a row's value
-differs, that flags the run, not the system.
+Generated from `ffb7ac7` (batches `20260818T073023Z-1` /
+`20260818T073023Z-2`, n=60 recorded per arm):
+[exhibits/cross-system.md](exhibits/cross-system.md). No E3w-derived
+column. W is not next to a Linux row. E0→first-connect is a control
+(medians 18.78–18.83 ms, span 56.3 µs). Pre-registered gates held:
+no SYN-grid failure, no RST, first-connect bound, trimmed-vs-stock
+tripwire did not fire. Linux `trimmed` W is 718.53 ms with a 2.95 ms
+IQR — smooth, not snapped to a 1 s grid — so confound A's announce
+mitigation did what it was registered to do.
+
+On RISC-V under QEMU TCG software emulation, same host, same QEMU,
+`release-fast-boot` reaches first HTTP byte 14.5× faster than
+trimmed Linux and 18.1× faster than stock
+([exhibits/cross-system.md](exhibits/cross-system.md)). Published
+unikernel figures (2–3 ms) and Firecracker's ~125 ms Linux boot are
+x86 with KVM hardware virtualization, where absolute times run
+roughly 5–10× lower. Those absolute numbers are not comparable to
+52.28 ms or 759.79 ms; the ratio is, because the emulation penalty
+applies to both arms on the same host.
+
+Instrumentation cost is measured, not caveated:
+trimmed-instrumented − trimmed = 23.70 ms for
+`loglevel=7 printk.time=1 initcall_debug` on the same
+`Image-trimmed` binary (identical `kernel_sha256`).
+
+S is reported per system, never pooled across systems. D-0071
+pools Whimbrel safe and fast because S is profile-independent on
+one ELF (`s_ns_fast=6.87 ms`, `s_ns_safe=6.98 ms` in this
+campaign's batch header — the ~6.8 ms constant of
+[exhibits/d0070-pcap.md](exhibits/d0070-pcap.md)). A five-arm pool
+is 13.51 ms with a 7.95 ms IQR, dragged by Linux's 20.8 MB Image
+(that load lands in S, D-0062). The wide IQR is two populations,
+not noise.
+
+This is floor-finding, not a trophy. The result is what a
+single-purpose VM's structure buys under those stated conditions.
+Whimbrel's guest work in this campaign is E2→E3g 6.43 ms; the
+phase decomposition
+([exhibits/phase-decomposition.md](exhibits/phase-decomposition.md))
+shows where that interval goes. No "fastest" without its conditions
+attached.
+
+The trimmed row's good-faith claim is now backed by measurement: it
+beats stock by 188.32 ms, so the trim removed real work rather than
+hobbling Linux. The published config is
+`bench/linux/linux-trimmed.fragment` on `qemu_riscv64_virt_defconfig`
+(Buildroot 2026.02.3, kernel 6.18.7). A Linux boot-time specialist
+could likely do better — we claim *a* minimal Linux, not *the*
+minimal Linux (D-0062).
+
+Linux's own boot decomposition (printk / `initcall_debug` on the
+instrumented arm) is not written up here. That exhibit waits on
+reading what those serial logs actually give.
 
 ---
 
@@ -488,7 +552,13 @@ maintained in [threats-to-validity.md](threats-to-validity.md).
 6. **Single hart and fixed RAM.** The floor is for this machine shape.
 7. **Debug-era history is not evidence.** Regeneration from CSV;
    appendix [appendix-regenerate.md](appendix-regenerate.md).
-8. **Linux-tuning fairness** (D-0062) — stated when that row exists.
+8. **Linux-tuning fairness** (D-0062) — measured: trimmed beats
+   stock by 188.32 ms
+   ([exhibits/cross-system.md](exhibits/cross-system.md)), so the
+   trim removed real work. Config published:
+   `bench/linux/linux-trimmed.fragment`. A Linux boot-time
+   specialist could likely do better; we claim *a* minimal Linux,
+   not *the* minimal Linux.
 9. **Unikraft pin** (D-0063) — stated when that row exists.
 10. **Instrumentation observer effect.** Stamp overhead is a generated
     row in [exhibits/edges.md](exhibits/edges.md) (5.5 µs on
@@ -500,7 +570,8 @@ maintained in [threats-to-validity.md](threats-to-validity.md).
     post-publish host work for it to move (D-0070).
 11. **Host variance.** Dedicated native host, performance governor,
     SMT off, boost off, steal 0 on all recorded trials of the freeze,
-    T4.4, T4.6, and both D-0068 invocations, two interleaved batches
+    T4.4, T4.6, both D-0068 invocations, and T4.8 (300 recorded), two
+    interleaved batches
     that met max(2%, 200 µs). D-0068 additionally reproduced across
     two independent campaigns. The KVM pod failed the criterion and
     is not cited.
@@ -560,17 +631,11 @@ maintained in [threats-to-validity.md](threats-to-validity.md).
 
 ## Future work
 
-Next: the Linux baseline (D-0062). The D-0070 pcap pass landed
-(confirmed; residual explained by D-0071); the bracket-yield
-diagnostic is moot. The harness fix — drop `e0_to_e3w_ns`, record
-`w_ns` / `d_ack_ns` / `d_fin_ns` per trial, keep first-connect as
-a control, put S in the batch header — is specified in
-`results/README.md` (Bench-host spec (D-0071)) and implemented on
-the bench host; this tree does not edit `scripts/bench.py`.
-Per-batch result files (D-0067) share that write path.
-`virtq_init` remains eligible at 13% of 6.43 ms and is not the
-next action. D-0060 is declined-by-subsumption. `-bios none`
-(D-0061). Unikraft spike (D-0063). T4.3b audit cleanup.
+Next: Linux boot decomposition from the instrumented arm's serial
+(printk / `initcall_debug`) — not drafted until those logs are
+read. Unikraft spike (D-0063). `virtq_init` remains eligible at
+13% of 6.43 ms and is not the next action. D-0060 is
+declined-by-subsumption. `-bios none` (D-0061). T4.3b audit cleanup.
 
 ---
 
@@ -581,6 +646,7 @@ next action. D-0060 is declined-by-subsumption. `-bios none`
 - [Phase decomposition exhibit](exhibits/phase-decomposition.md)
 - [Edges exhibit](exhibits/edges.md)
 - [Dump placement exhibit](exhibits/dump-placement.md)
+- [Cross-system exhibit](exhibits/cross-system.md)
 - [D-0070 pcap pass exhibit](exhibits/d0070-pcap.md) (generated on
   the bench host; committed from there)
 - [Machine-spec block](exhibits/machine-spec.md)

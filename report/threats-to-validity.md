@@ -20,7 +20,11 @@ item is mitigated-and-measured or stated.
 4. **Single hart and fixed RAM.** The floor is for this machine shape.
 5. **Debug-era history is not evidence.** Regeneration from CSV kills
    chat-only numbers (audit findings 16–23).
-6. **Linux-tuning fairness** (D-0062) — stated when that row exists.
+6. **Linux-tuning fairness** (D-0062) — measured: trimmed beats
+   stock by 188.32 ms (`report/exhibits/cross-system.md`). Config
+   published: `bench/linux/linux-trimmed.fragment`. A Linux
+   boot-time specialist could likely do better; we claim *a*
+   minimal Linux, not *the* minimal Linux.
 7. **Unikraft pin** (D-0063) — stated when that row exists.
 8. **Instrumentation observer effect.** Stamp overhead is a generated
    edges-exhibit row (~5.5 µs fast-boot). D-0068 moved
@@ -30,9 +34,9 @@ item is mitigated-and-measured or stated.
    post-publish host work for it to move (D-0070).
 9. **Host variance.** Report numbers are the dedicated Ubuntu 26.04
    host (7800X3D, 8 cores SMT off, boost off, performance governor,
-   QEMU 10.2.1, steal 0). Freeze, T4.4, T4.6, and both D-0068
-   invocations each ran two interleaved batches that met max(2%, 200 µs)
-   on both configs. D-0068 additionally reproduced across two
+   QEMU 10.2.1, steal 0). Freeze, T4.4, T4.6, both D-0068
+   invocations, and T4.8 each ran two interleaved batches that met
+   max(2%, 200 µs). D-0068 additionally reproduced across two
    independent campaigns. The KVM pod failed this criterion and is
    not cited. Steal=0 is necessary, not sufficient (USER_HZ=100) —
    recorded as a surviving T4.1 finding.
