@@ -4,6 +4,10 @@
 One process, `time.monotonic_ns()`, connect-retry at ~1 ms cadence.
 Records first-connect, first-byte (E4), and attempt count. Replaces the
 fork-per-attempt curl loop whose exec overhead quantized E4 to 5–15 ms.
+
+Recv timeout after connect is `--timeout-s` (the campaign trial
+timeout), identical for every system. A hardcoded 2 s recv is the
+per-system-looking knob that would hide a slow Linux arm (D-0062).
 """
 
 from __future__ import annotations
@@ -17,8 +21,21 @@ import socket
 import sys
 import time
 
-GET = b"GET / HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n"
-WANT_BODY = b"whimbrel\n"
+GET = (
+    b"GET / HTTP/1.0\r\n"
+    b"Host: 127.0.0.1\r\n"
+    b"\r\n"
+)
+# Byte-identical 92-byte RESP (app/src/lib.rs / bench/linux/server.c).
+RESP = (
+    b"HTTP/1.0 200 OK\r\n"
+    b"Content-Type: text/plain\r\n"
+    b"Connection: close\r\n"
+    b"Content-Length: 9\r\n"
+    b"\r\n"
+    b"whimbrel\n"
+)
+assert len(RESP) == 92
 CADENCE_NS = 1_000_000
 CONNECT_WAIT_NS = 800_000
 
@@ -33,14 +50,16 @@ def wait_until(deadline_ns: int) -> None:
             time.sleep((remain - 100_000) / 1e9)
 
 
-def attempt_connect(host: str, port: int, wait_ns: int) -> socket.socket | None:
+def attempt_connect(
+    host: str, port: int, wait_ns: int, recv_timeout_s: float
+) -> socket.socket | None:
     s = socket.socket()
     s.setblocking(False)
     try:
         rc = s.connect_ex((host, port))
         if rc == 0:
             s.setblocking(True)
-            s.settimeout(2.0)
+            s.settimeout(recv_timeout_s)
             return s
         if rc not in (errno.EINPROGRESS, errno.EWOULDBLOCK, errno.EAGAIN):
             s.close()
@@ -58,7 +77,7 @@ def attempt_connect(host: str, port: int, wait_ns: int) -> socket.socket | None:
             err = s.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
             if err == 0:
                 s.setblocking(True)
-                s.settimeout(2.0)
+                s.settimeout(recv_timeout_s)
                 return s
             s.close()
             return None
@@ -70,10 +89,10 @@ def attempt_connect(host: str, port: int, wait_ns: int) -> socket.socket | None:
         return None
 
 
-def recv_response(s: socket.socket) -> tuple[int | None, bytes]:
+def recv_response(s: socket.socket, recv_timeout_s: float) -> tuple[int | None, bytes]:
     buf = b""
     first_byte = None
-    s.settimeout(2.0)
+    s.settimeout(recv_timeout_s)
     try:
         while True:
             chunk = s.recv(4096)
@@ -82,7 +101,7 @@ def recv_response(s: socket.socket) -> tuple[int | None, bytes]:
             if first_byte is None:
                 first_byte = time.monotonic_ns()
             buf += chunk
-            if WANT_BODY in buf:
+            if RESP in buf:
                 break
     except OSError:
         pass
@@ -96,7 +115,7 @@ def calibrate(host: str, port: int, n: int) -> dict:
         wait_until(next_t)
         t = time.monotonic_ns()
         times.append(t)
-        sock = attempt_connect(host, port, CONNECT_WAIT_NS)
+        sock = attempt_connect(host, port, CONNECT_WAIT_NS, 2.0)
         if sock is not None:
             sock.close()
         next_t = t + CADENCE_NS
@@ -136,20 +155,20 @@ def run_loop(host: str, port: int, timeout_s: float, ready_path: str) -> dict:
             break
         attempts += 1
         attempt_ns.append(t)
-        sock = attempt_connect(host, port, CONNECT_WAIT_NS)
+        sock = attempt_connect(host, port, CONNECT_WAIT_NS, timeout_s)
         if sock is None:
             next_t = t + CADENCE_NS
             continue
         first_connect = time.monotonic_ns()
         try:
             sock.sendall(GET)
-            first_byte, buf = recv_response(sock)
+            first_byte, buf = recv_response(sock, timeout_s)
         finally:
             try:
                 sock.close()
             except OSError:
                 pass
-        body_ok = WANT_BODY in buf
+        body_ok = RESP in buf
         break
 
     deltas = [attempt_ns[i + 1] - attempt_ns[i] for i in range(max(0, len(attempt_ns) - 1))]

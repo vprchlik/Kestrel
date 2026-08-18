@@ -121,6 +121,11 @@ if [ -z "$close_hit" ]; then
     echo "TEST FAIL: data frame ${data_fn} does not contain Connection: close"
     exit 1
 fi
+if [ "$data_len" != "92" ]; then
+    echo "TEST FAIL: HTTP tcp.len is ${data_len}, want 92"
+    echo "frame ${data_fn}"
+    exit 1
+fi
 
 fin_line=$(run_fields 'tcp && ip.src == 10.0.2.15 && tcp.srcport == 80 && tcp.flags.fin == 1' \
     -e frame.number -e tcp.seq -e tcp.checksum.status | awk '{print $1, $2, $3}' | first_after "$((data_fn - 1))" || true)

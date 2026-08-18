@@ -2514,8 +2514,9 @@ D-0011 onward are working decisions made under those constraints.
   6. **Uniform client recv timeout**, tied to the trial timeout and
      identical for every system: the hardcoded 2 s recv timeout
      cannot measure a guest slower than ~2 s to first byte. Not a
-     per-system knob. Bench host implements with the other harness
-     deltas.
+     per-system knob. Landed in `scripts/bench-client.py`
+     (`--timeout-s` is the recv timeout); the dedicated host
+     executes the campaign.
   7. **Five arms, one campaign, interleaved:** whimbrel-fast,
      whimbrel-safe, linux-trimmed, linux-stock,
      linux-trimmed-instrumented; two shuffled batches × 30 recorded
@@ -3264,9 +3265,7 @@ D-0011 onward are working decisions made under those constraints.
      unexplained constant must not keep a plausible-sounding name;
      "host-side remainder" was doing the work that "measured
      delivery" could not. Threats item 16 carries this.
-  3. **Harness fix:** design only in this tree; the dedicated host
-     implements it (D-0055 / D-0067 discipline). `scripts/bench.py`
-     is not edited here. The interface is the **Bench-host spec
+  3. **Harness fix:** the interface is the **Bench-host spec
      (D-0071)** section of `results/README.md`. In short: drop
      `e0_to_e3w_ns`; record per-trial `w_ns`, `d_ack_ns`, `d_fin_ns`
      from the D-0070 filters on one pcap clock; keep
@@ -3274,7 +3273,9 @@ D-0011 onward are working decisions made under those constraints.
      fails the run, it is not a system difference); put S in the
      batch header, not in every `runs.csv` row. No cross-system
      table may carry an E3w-derived column. Historical git objects
-     keep the old schema; do not rewrite them.
+     keep the old schema; do not rewrite them. The T4.8 trial-time
+     work lands the writer in `scripts/bench.py`; the dedicated
+     host executes it (this pod does not run `just bench`).
 - Revisit trigger: a bench-host instrumented mechanism check (the
   pcap-write poll, ~10 boots) if anyone wants S measured rather than
   derived there; or any QEMU/host change on the bench machine, which

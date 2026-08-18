@@ -134,14 +134,14 @@ half-wired `--after-batches` that falls back to HEAD is fail-open.
 This pod does not run `just bench`. The bench host runs N-trials
 and is the first writer of `results/batches/`.
 
-## Bench-host spec (D-0071) — implement there, not in this tree
+## Bench-host spec (D-0071) — schema; writer is the T4.8 harness
 
-Approved. Do **not** change `scripts/bench.py` in this repository;
-the dedicated host owns the harness write path (D-0055). This
-section is the interface. `scripts/d0070-pcap-pass.py` is the
-reference extract (`extract_pcap`); the harness uses that
-implementation — import it, or split the extract into a shared
-module both call. A third copy of the filters is a fail.
+The schema below is the interface. The T4.8 trial-time commit lands
+the writer in `scripts/bench.py`; the dedicated host executes it
+(D-0055: this pod does not run `just bench`).
+`scripts/pcap_http.py` is the shared extract (`extract_pcap`);
+`scripts/d0070-pcap-pass.py` imports it. A third copy of the
+filters is a fail.
 
 The D-0070 pass over already-recorded pcaps is closed. New batches
 record the intervals at trial time so a future campaign does not
@@ -467,12 +467,9 @@ A build that cannot print all five blocks is a failed build.
 - `runs.csv` `kernel_sha256` for Linux rows is the booted `Image`
   sha. The cpio sha and the `-append` string go in the batch header
   (`summary.txt`), like `s_ns`.
-- Trial-time harness deltas (per-system argv/append/timeouts,
-  per-system PHASE-line policy, the uniform client recv timeout,
-  the SYN-grid and RST gates, the trimmed-vs-stock tripwire at
-  summarize time — all pre-registered in the D-0062 amendment) are
-  their own spec block, added with the gates step. They are not
-  part of `linux-build`.
+- Trial-time harness deltas live in **Bench-host spec (T4.8
+  trial-time / Linux gate)** below. They are not part of
+  `linux-build`.
 
 ### Budget
 
@@ -482,6 +479,203 @@ kernel build dir, 1–2 GB of tarball cache. Warm fragment
 iterations are minutes. Nothing about batches changes to
 accommodate the build; it is not on any measured path.
 
+## Bench-host spec (T4.8 trial-time / Linux gate)
+
+Approved. Code lives in this tree (`scripts/bench.py`,
+`scripts/bench-client.py`, `scripts/qemu-args.sh`,
+`scripts/pcap_http.py`, `scripts/linux-boot-test.sh`,
+`scripts/assert-pcap-syn-grid.sh`). The dedicated host executes
+it. This pod does not run `just bench` or `just linux-build`.
+`just test-linux` fail-closes here if `bench/linux/artifacts/`
+and `bench/linux/MANIFEST` are missing — that is the correct
+shape, not a skip.
+
+### What `bench.py` changes
+
+**Per-system QEMU argv** on top of the shared `qemu-args.sh` base
+(finding 28: the base is the only copy of machine/netdev/device).
+Whimbrel extra: `-kernel <elf>` only. Linux extra: `-kernel
+<Image> -initrd <rootfs.cpio> -append <cmdline>`. Whimbrel takes
+none of `-initrd` / `-append`. Cmdlines are the D-0062 pins,
+required to match the committed MANIFEST:
+
+- quiet: `console=ttyS0 quiet loglevel=0 rdinit=/init`
+- instrumented: `console=ttyS0 loglevel=7 printk.time=1
+  initcall_debug rdinit=/init`
+
+**Per-system QEMU wait** (hang watchdog). Linux boots slower;
+killing QEMU at the Whimbrel budget would abort a healthy stock
+row. Floors: Whimbrel 12 s, Linux 60 s. The wait is
+`max(campaign_timeout, system_floor) + 2`. It is not a
+measurement window and not a client-recv knob.
+
+**One uniform client recv timeout**, equal to the campaign
+`BENCH_TIMEOUT_S`, **identical for every system**. Not a
+per-system knob — that is exactly the asymmetry that hides a
+confound (a 2 s Linux recv next to a 12 s Whimbrel recv would
+censor slow Linux trials and leave the median looking fine).
+`scripts/bench-client.py` uses `--timeout-s` for `recv` after
+connect, not a hardcoded 2.0 s. Mixed T4.8 campaigns default
+`BENCH_TIMEOUT_S=60` (stock orientation 2–20 s); Whimbrel-only
+campaigns stay at 12. Raising the campaign timeout lengthens
+every arm's recv budget together.
+
+**PHASE-presence is gated on `system`.** `parse_phases` remains
+fail-closed for Whimbrel (no rows / missing E3g / unset /
+sum-to-E3g). Linux serial has no `PHASE` lines; an empty phase
+list is success, not `TEST FAIL: no PHASE rows`. Linux trials
+write no `phases.csv` rows. `LINUX INIT OK` (and `READY`, and no
+`INIT FAIL:` / `Kernel panic`) is the Linux serial gate.
+
+**D-0071 schema lands in the same writer.** Drop `e0_to_e3w_ns`.
+Record `w_ns` / `d_ack_ns` / `d_fin_ns` via `pcap_http.extract_pcap`
+(the D-0070 filters, one pcap clock). Mixed schema in one
+`runs.csv` is a fail. Computing E3w for Linux would recreate the
+D-0070 trap; omitting the column for Linux only would mix
+schemas. `W` is recorded on every row that has the slirp ARP
+(extract is fail-closed on a missing ARP for every system) and
+is still not a cross-system table column.
+
+**Campaign kinds.** `just bench-whimbrel` is unchanged (two
+Whimbrel arms). `just bench-t48` is the five-arm interleaved
+campaign: `release-fast-boot`, `release-default`, `trimmed`,
+`stock`, `trimmed-instrumented`. Linux artifacts are hashed
+against `bench/linux/MANIFEST` at batch start, before any boot
+(same fail-closed shape as linux-build's campaign-time rule).
+
+**Summarize-time gates** (fail the run, not a fraction):
+
+- First-connect control (D-0071): per batch, every arm's median
+  `e0_to_first_connect_ns` within 1 ms. A miss is a broken
+  control, not "Linux connects slower."
+- Trimmed-vs-stock tripwire (D-0062): per batch, if median
+  E0→E4(trimmed) ≥ median E0→E4(stock), `TEST FAIL` and the
+  trimmed row is not published.
+- S in the batch header, not a CSV column (D-0071). `|s_fast −
+  s_safe| > 1 ms` fails. Computed at trial time from extract
+  internals (`synack_to_http_ns` is not a CSV column).
+
+### What `runs.csv` gains
+
+No new per-trial columns beyond the D-0071 set. The Linux rows
+fill columns the Whimbrel writer already had:
+
+| field | Linux row |
+|---|---|
+| `system` | `linux` (Whimbrel rows stay `whimbrel`) |
+| `config` | `trimmed` / `stock` / `trimmed-instrumented` |
+| `kernel_sha256` | sha256 of the booted `Image` (not the cpio, not `/init`) |
+
+**Batch header** (`summary.txt`), same grain as `s_ns` — not
+CSV columns:
+
+```
+cpio=<path>
+cpio_sha256=<64 hex>
+linux_append_quiet=console=ttyS0 quiet loglevel=0 rdinit=/init
+linux_append_instrumented=console=ttyS0 loglevel=7 printk.time=1 initcall_debug rdinit=/init
+client_timeout_s=<BENCH_TIMEOUT_S>
+```
+
+A per-trial cpio or `-append` column would invite median / IQR
+treatment of a campaign constant. Header only.
+
+### Shared virtio-net-device args (`csum=off` / TSO-family off)
+
+In `scripts/qemu-args.sh` only (finding 28), on every consumer
+of that file:
+
+```
+-device virtio-net-device,netdev=net0,csum=off,guest_csum=off,gso=off,guest_tso4=off,guest_tso6=off,guest_ecn=off,guest_ufo=off,guest_uso4=off,guest_uso6=off,host_tso4=off,host_tso6=off,host_ecn=off,host_ufo=off,host_uso=off
+```
+
+A no-op for Whimbrel (never negotiates those features). Prevents
+Linux TX checksum offload from leaving invalid checksums in the
+capture, which would fail the HTTP checksum assert and silently
+invalidate a pcap-based `D_fin`. The T4.6 / D-0068 pins stay on
+their recorded objects and old argv. USO is grouped with the TSO
+family: QEMU 10 defaults `guest_uso4` / `guest_uso6` / `host_uso`
+on, and the same pcap-corruption path applies. `.cargo/config.toml`
+runner and `scripts/measure-e2.sh` take the same device string
+(they are not a fifth copy of the offload defaults).
+
+### Linux boot gate (`just test-linux`)
+
+Analogous to `just test` for Whimbrel. Not folded into `just test`
+— this pod has no Images, and a missing-artifact skip inside the
+sixteen-gate list would be fail-open. The recipe fail-closes.
+
+Boot `Image-trimmed` + `rootfs.cpio` + quiet `-append` on the
+shared QEMU argv. The measurement client starts before QEMU
+(same `CLIENT_EARLY` shape), recv timeout = `TIMEOUT_S` (default
+60), not curl `--max-time 2`.
+
+Pass only if all of:
+
+1. Serial contains `READY` and `LINUX INIT OK`; no `INIT FAIL:`;
+   no `Kernel panic`; QEMU exits (poweroff), not a hang.
+2. Client receives the byte-identical 92-byte `RESP` (same bytes
+   as `app/src/lib.rs`).
+3. `assert-pcap-http.sh`: HTTP 200, `Connection: close`, `tcp.len`
+   92, checksums good, guest FIN, peer FIN, **zero RST**.
+4. SYN-grid (confound A) and RST (confound B) below.
+
+Missing MANIFEST / Image / cpio / hash mismatch: `TEST FAIL:
+linux artifact missing` (or the campaign-time mismatch shape),
+no QEMU, no skip.
+
+### SYN-grid gate (confound A) — one gridded trial fails the batch
+
+Pre-registered in the D-0062 amendment. **One failure fails the
+batch**, not a reported fraction. A batch with 10% gridded trials
+has a median that looks fine and a poisoned mean; bimodal
+contamination must not hide behind a median. No Linux row
+publishes from a batch with a gridded trial.
+
+Per Linux trial (warmup included), from the pcap:
+
+- Guest first TX: first frame whose `eth.src` is not slirp
+  (`52:55:0a:00:02:02`). The invariant is first wire TX, not ARP
+  (D-0062 announce).
+- SYN into guest: first SYN to `10.0.2.15:80` with timestamp
+  **≥** t(guest first TX) — the flush after the guest appears,
+  not an earlier slirp probe that sat on the virtual wire.
+- Gate: `0 ≤ t(SYN) − t(guest first TX) < 1 ms`.
+
+If SYN arrival snaps to a ≥ 1 s grid, the trial is measuring
+slirp's RTO. Response when fired: diagnose in the pcap (is the
+announce present? did the SYN snap to a retransmit grid?) before
+any rerun.
+
+`scripts/assert-pcap-syn-grid.sh` is the per-pcap assert.
+`bench.py` calls it on every Linux trial and aborts the campaign
+on the first miss (no remaining trials, no partial CSV publish).
+
+### RST gate (confound B)
+
+Zero RST frames (`tcp.flags.reset==1`) in every Linux pcap, same
+shape as the Whimbrel `assert-pcap-http.sh` RST check. Any RST
+fails the run. Response: `/init` ordering regression or an
+unexpected early connection; diagnose, fix, rerun.
+
+### MANIFEST format (campaign-time reader)
+
+`bench/linux/MANIFEST`, written by `just linux-build`, parsed by
+the harness. Comments `#`. Lines:
+
+```
+artifact Image-stock <64 hex>
+artifact Image-trimmed <64 hex>
+artifact rootfs.cpio <64 hex>
+artifact init <64 hex>
+append quiet console=ttyS0 quiet loglevel=0 rdinit=/init
+append instrumented console=ttyS0 loglevel=7 printk.time=1 initcall_debug rdinit=/init
+```
+
+Files live at `bench/linux/artifacts/<name>`. Append strings that
+disagree with the D-0062 pins fail closed. This file is not
+committed until linux-build has run on the bench host.
+
 ## `runs.csv` — one row per trial
 
 
@@ -490,11 +684,11 @@ accommodate the build; it is not on any measured path.
 | `batch_id` | UTC stamp + batch index (`20260816T090000Z-1`) |
 | `trial` | per-config 1-based index (warmup 1..W, recorded W+1..W+N). Wall-clock order is `run_order`, not this column. |
 | `warmup` | `1` for the first 3 trials of that config in the batch (round-robin warmup), else `0` |
-| `system` | `whimbrel` |
-| `config` | `release-default` / `release-fast-boot` / `release-fast-boot-nofp` |
+| `system` | `whimbrel` or `linux` |
+| `config` | Whimbrel: `release-default` / `release-fast-boot` / `release-fast-boot-nofp`. Linux: `trimmed` / `stock` / `trimmed-instrumented`. |
 | `git_sha` | `git rev-parse HEAD` |
 | `dirty` | `1` if `git status --porcelain` is non-empty |
-| `kernel_sha256` | SHA-256 of the ELF this trial booted |
+| `kernel_sha256` | SHA-256 of the guest binary this trial booted (Whimbrel ELF; Linux `Image`) |
 | `qemu_version` | first line of `qemu-system-riscv64 --version` |
 | `qemu_hash` | SHA-256 of the QEMU binary |
 | `host_kernel` | `uname -r` |
@@ -536,7 +730,7 @@ control or S profile-independence check fails (D-0071 spec above).
 | `batch_id` | join to `runs.csv` |
 | `trial` | join to `runs.csv` |
 | `warmup` | same as runs |
-| `system` | `whimbrel` |
+| `system` | `whimbrel` (Linux trials write no phase rows) |
 | `config` | same as runs |
 | `phase` | name from the `PHASE` line (`_start`, `stamp_a`, `activate`, `net_init_done`, `syn_rx`, `E3g`, …) |
 | `ticks` | guest `rdtime` |
@@ -546,4 +740,6 @@ control or S profile-independence check fails (D-0071 spec above).
 | `source` | `serial` (room for a future instrument without new columns) |
 
 A `PHASE` line that does not match the machine-shaped regex, or `PHASE
-<name> unset`, fails the trial.
+<name> unset`, fails the trial. Linux trials write **no** phase
+rows; the PHASE-presence check is gated on `system=whimbrel`
+(T4.8 trial-time spec).

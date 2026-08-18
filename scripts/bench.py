@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""M4 benchmark harness (D-0055 / T4.1 / D-0071).
+"""M4 benchmark harness (D-0055 / T4.1 / D-0071 / T4.8).
 
 Long/tidy CSV: one run row per trial, one phase row per trial × PHASE
 line. T4.2 adding stamps is more rows, not more columns. Phase names are
 parsed from serial — this file is not a fourth copy of the justfile list
 (finding 26). New batches drop e0_to_e3w_ns and record pcap-internal
 w_ns / d_ack_ns / d_fin_ns via the D-0070 extract.
+
+T4.8: per-system QEMU argv and hang-watchdog; one uniform client recv
+timeout; PHASE-presence gated on system; Linux boot gate + SYN-grid/RST.
 """
 
 from __future__ import annotations
@@ -26,12 +29,14 @@ import subprocess
 import sys
 import tempfile
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
 # D-0070 extract (W / D_ack / D_fin on one pcap clock). Import the
-# implementation; do not clone the filters (D-0071).
+# implementation; do not clone the filters (D-0071). After T4.8 the
+# extract lives in pcap_http.py; d0070-pcap-pass.py re-exports it.
 _D0070_SPEC = importlib.util.spec_from_file_location(
     "d0070_pcap_pass", ROOT / "scripts" / "d0070-pcap-pass.py"
 )
@@ -39,6 +44,15 @@ if _D0070_SPEC is None or _D0070_SPEC.loader is None:
     raise RuntimeError("cannot import scripts/d0070-pcap-pass.py")
 _D0070 = importlib.util.module_from_spec(_D0070_SPEC)
 _D0070_SPEC.loader.exec_module(_D0070)
+
+_SCRIPTS = Path(__file__).resolve().parent
+if str(_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS))
+from pcap_http import (  # noqa: E402
+    PcapExtractError,
+    assert_no_rst,
+    assert_syn_grid,
+)
 
 SAFE_CONFIG = "release-default"
 FAST_CONFIG = "release-fast-boot"
@@ -113,6 +127,26 @@ PHASES_FIELDS = [
     "source",
 ]
 
+LINUX_APPEND_QUIET = "console=ttyS0 quiet loglevel=0 rdinit=/init"
+LINUX_APPEND_INSTRUMENTED = (
+    "console=ttyS0 loglevel=7 printk.time=1 initcall_debug rdinit=/init"
+)
+WHIMBREL_QEMU_FLOOR_S = 12.0
+LINUX_QEMU_FLOOR_S = 60.0
+ARTIFACT_RE = re.compile(r"^artifact (\S+) ([0-9a-f]{64})$")
+APPEND_RE = re.compile(r"^append (quiet|instrumented) (.+)$")
+
+
+@dataclass(frozen=True)
+class Arm:
+    config: str
+    system: str
+    features: tuple[str, ...] = ()
+    env_extra: tuple[tuple[str, str], ...] = ()
+    cargo_extra: tuple[str, ...] = ()
+    linux_image: str | None = None
+    linux_append: str | None = None
+
 
 class BenchFail(Exception):
     pass
@@ -145,6 +179,116 @@ def qemu_argv(pcap: str, port: int = 8080) -> tuple[str, list[str]]:
     args = line.split()
     qemu = os.environ.get("QEMU", "qemu-system-riscv64")
     return qemu, args
+
+
+def campaign_timeout_s(kind: str) -> float:
+    env = os.environ.get("BENCH_TIMEOUT_S")
+    if env:
+        return float(env)
+    return 60.0 if kind == "t48" else 12.0
+
+
+def qemu_timeout_s(system: str, client_timeout_s: float) -> float:
+    floor = LINUX_QEMU_FLOOR_S if system == "linux" else WHIMBREL_QEMU_FLOOR_S
+    return max(client_timeout_s, floor) + 2.0
+
+
+def linux_art_dir() -> Path:
+    return ROOT / "bench" / "linux" / "artifacts"
+
+
+def linux_manifest_path() -> Path:
+    return ROOT / "bench" / "linux" / "MANIFEST"
+
+
+def parse_linux_manifest(text: str) -> dict:
+    artifacts: dict[str, str] = {}
+    appends: dict[str, str] = {}
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        m = ARTIFACT_RE.match(line)
+        if m:
+            artifacts[m.group(1)] = m.group(2)
+            continue
+        m = APPEND_RE.match(line)
+        if m:
+            appends[m.group(1)] = m.group(2).strip()
+            continue
+        raise BenchFail(f"TEST FAIL: malformed MANIFEST line: {line}")
+    want_art = ("Image-stock", "Image-trimmed", "rootfs.cpio", "init")
+    missing = [n for n in want_art if n not in artifacts]
+    if missing:
+        raise BenchFail(
+            f"TEST FAIL: MANIFEST missing artifact lines: {missing}"
+        )
+    if appends.get("quiet") != LINUX_APPEND_QUIET:
+        raise BenchFail(
+            f"TEST FAIL: MANIFEST append quiet {appends.get('quiet')!r} "
+            f"want {LINUX_APPEND_QUIET!r}"
+        )
+    if appends.get("instrumented") != LINUX_APPEND_INSTRUMENTED:
+        raise BenchFail(
+            f"TEST FAIL: MANIFEST append instrumented "
+            f"{appends.get('instrumented')!r} "
+            f"want {LINUX_APPEND_INSTRUMENTED!r}"
+        )
+    return {"artifacts": artifacts, "appends": appends}
+
+
+def verify_linux_artifacts(names: list[str] | None = None) -> dict:
+    man_path = linux_manifest_path()
+    if not man_path.is_file() or man_path.stat().st_size == 0:
+        raise BenchFail(f"TEST FAIL: linux artifact missing: {man_path}")
+    parsed = parse_linux_manifest(man_path.read_text(encoding="utf-8"))
+    art = linux_art_dir()
+    check = names or list(parsed["artifacts"])
+    for name in check:
+        if name not in parsed["artifacts"]:
+            raise BenchFail(
+                f"TEST FAIL: linux artifact missing: MANIFEST has no {name}"
+            )
+        path = art / name
+        if not path.is_file() or path.stat().st_size == 0:
+            raise BenchFail(f"TEST FAIL: linux artifact missing: {path}")
+        got = sha256_file(path)
+        want = parsed["artifacts"][name]
+        if got != want:
+            raise BenchFail(
+                f"TEST FAIL: linux artifact mismatch: {path}\n"
+                f"  sha256={got} want {want}"
+            )
+    return parsed
+
+
+def guest_qemu_extra(
+    arm: Arm, kernel: Path, cpio: Path | None, append: str | None
+) -> list[str]:
+    if arm.system == "whimbrel":
+        return ["-kernel", str(kernel)]
+    if arm.system == "linux":
+        if cpio is None or append is None:
+            raise BenchFail("TEST FAIL: Linux argv requires -initrd and -append")
+        return [
+            "-kernel",
+            str(kernel),
+            "-initrd",
+            str(cpio),
+            "-append",
+            append,
+        ]
+    raise BenchFail(f"TEST FAIL: unknown system {arm.system}")
+
+
+def linux_append_for(arm: Arm) -> str | None:
+    if arm.system != "linux":
+        return None
+    if arm.linux_append == "quiet":
+        return LINUX_APPEND_QUIET
+    if arm.linux_append == "instrumented":
+        return LINUX_APPEND_INSTRUMENTED
+    raise BenchFail(f"TEST FAIL: linux arm {arm.config} has no append kind")
 
 
 def sha256_file(path: Path) -> str:
@@ -461,6 +605,13 @@ def parse_phases(serial_text: str) -> list[dict]:
     return rows
 
 
+def phases_from_serial(serial_text: str, system: str) -> list[dict]:
+    """PHASE-presence is Whimbrel-only. Linux serial has no PHASE lines."""
+    if system != "whimbrel":
+        return []
+    return parse_phases(serial_text)
+
+
 TICK_NS = 100
 
 
@@ -540,6 +691,10 @@ def require_pcap_intervals(
             f"TEST FAIL: d_fin_ns={extracted['d_fin_ns']} ≥ 10 ms "
             f"(D-0070 falsify line) in {pcap}"
         )
+    try:
+        assert_no_rst(pcap, tshark)
+    except PcapExtractError as e:
+        raise BenchFail(str(e)) from e
     return extracted
 
 
@@ -825,7 +980,8 @@ def cargo_build(
 
 def run_trial(
     *,
-    kernel: Path,
+    arm: Arm,
+    extra: list[str],
     pcap: Path,
     serial_path: Path,
     client_out: Path,
@@ -833,7 +989,8 @@ def run_trial(
     qemu_cpu: int,
     client_cpu: int,
     port: int,
-    timeout_s: float,
+    client_timeout_s: float,
+    qemu_wait_s: float,
 ) -> dict:
     tshark = require_tshark()
     qemu, args = qemu_argv(str(pcap), port)
@@ -852,7 +1009,7 @@ def run_trial(
         "--port",
         str(port),
         "--timeout-s",
-        str(timeout_s),
+        str(client_timeout_s),
         "--ready",
         str(ready_path),
         "--out",
@@ -873,7 +1030,7 @@ def run_trial(
         qemu_cmd = ["taskset", "-c", str(qemu_cpu)]
         if shutil.which("stdbuf"):
             qemu_cmd += ["stdbuf", "-oL"]
-        qemu_cmd += [qemu, *args, "-kernel", str(kernel)]
+        qemu_cmd += [qemu, *args, *extra]
         e0_mono = time.monotonic_ns()
         e0_wall = time.time_ns()
         with open(serial_path, "wb") as ser:
@@ -881,11 +1038,11 @@ def run_trial(
                 qemu_cmd, cwd=ROOT, stdout=ser, stderr=subprocess.STDOUT
             )
         try:
-            qemu_p.wait(timeout=timeout_s)
+            qemu_p.wait(timeout=qemu_wait_s)
         except subprocess.TimeoutExpired:
             qemu_p.kill()
             qemu_p.wait(timeout=2)
-            raise BenchFail(f"TEST FAIL: QEMU timed out after {timeout_s}s")
+            raise BenchFail(f"TEST FAIL: QEMU timed out after {qemu_wait_s}s")
         grace = time.monotonic() + 2.0
         while client.poll() is None and time.monotonic() < grace:
             time.sleep(0.01)
@@ -905,19 +1062,31 @@ def run_trial(
         raise BenchFail("TEST FAIL: client result JSON missing")
     client_data = json.loads(client_out.read_text())
     if not client_data.get("body_ok"):
-        raise BenchFail("TEST FAIL: client did not receive body whimbrel\\n")
+        raise BenchFail("TEST FAIL: client did not receive the 92-byte RESP")
     if client_data.get("first_connect_mono_ns") is None:
         raise BenchFail("TEST FAIL: no first-connect stamp")
     if client_data.get("first_byte_mono_ns") is None:
         raise BenchFail("TEST FAIL: no first-byte stamp (E4)")
 
     serial_text = serial_path.read_bytes().decode("utf-8", errors="replace")
-    if "PANIC" in serial_text:
+    if "PANIC" in serial_text or "Kernel panic" in serial_text:
         raise BenchFail("TEST FAIL: guest panic")
-    phases = parse_phases(serial_text)
+    if arm.system == "linux":
+        if "INIT FAIL:" in serial_text:
+            raise BenchFail("TEST FAIL: Linux /init INIT FAIL")
+        if "READY" not in serial_text:
+            raise BenchFail("TEST FAIL: Linux READY missing")
+        if "LINUX INIT OK" not in serial_text:
+            raise BenchFail("TEST FAIL: LINUX INIT OK missing")
+    phases = phases_from_serial(serial_text, arm.system)
     e0_to_connect = int(client_data["first_connect_mono_ns"]) - e0_mono
     e0_to_e4 = int(client_data["first_byte_mono_ns"]) - e0_mono
-    extracted = require_pcap_intervals(pcap, tshark, system="whimbrel")
+    extracted = require_pcap_intervals(pcap, tshark, system=arm.system)
+    if arm.system == "linux":
+        try:
+            assert_syn_grid(pcap, tshark)
+        except PcapExtractError as e:
+            raise BenchFail(str(e)) from e
     return {
         "e0_mono_ns": e0_mono,
         "e0_wall_ns": e0_wall,
@@ -933,31 +1102,119 @@ def run_trial(
     }
 
 
-def configs_for(
-    kind: str,
-) -> list[tuple[str, list[str], dict[str, str], list[str]]]:
+def configs_for(kind: str) -> list[Arm]:
     # Release default is no frame pointers (finding 14 stripped). The
     # with-FP arm merges via --config so linker.ld is not dropped.
-    fp_yes = [
+    fp_yes = (
         "--config",
         'target.riscv64gc-unknown-none-elf.rustflags=["-C","force-frame-pointers=yes"]',
-    ]
+    )
+    whimbrel_safe = Arm("release-default", "whimbrel")
+    whimbrel_fast = Arm("release-fast-boot", "whimbrel", features=("fast-boot",))
     if kind == "whimbrel":
-        return [
-            ("release-default", [], {}, []),
-            ("release-fast-boot", ["fast-boot"], {}, []),
-        ]
+        return [whimbrel_safe, whimbrel_fast]
     if kind == "fp-ab":
         return [
-            (
+            Arm(
                 "release-fast-boot-fp",
-                ["fast-boot"],
-                {"CARGO_TARGET_DIR": str(ROOT / "target-fp")},
-                fp_yes,
+                "whimbrel",
+                features=("fast-boot",),
+                env_extra=(("CARGO_TARGET_DIR", str(ROOT / "target-fp")),),
+                cargo_extra=fp_yes,
             ),
-            ("release-fast-boot", ["fast-boot"], {}, []),
+            whimbrel_fast,
+        ]
+    if kind == "t48":
+        return [
+            whimbrel_fast,
+            whimbrel_safe,
+            Arm(
+                "trimmed",
+                "linux",
+                linux_image="Image-trimmed",
+                linux_append="quiet",
+            ),
+            Arm(
+                "stock",
+                "linux",
+                linux_image="Image-stock",
+                linux_append="quiet",
+            ),
+            Arm(
+                "trimmed-instrumented",
+                "linux",
+                linux_image="Image-trimmed",
+                linux_append="instrumented",
+            ),
         ]
     raise BenchFail(f"TEST FAIL: unknown bench kind {kind}")
+
+
+def trimmed_vs_stock_failures(
+    metric_by_group: dict[tuple[str, str, str], dict[str, list[float]]],
+) -> list[str]:
+    """If median E0→E4(trimmed) ≥ stock, trimmed is not published."""
+    failed: list[str] = []
+    by_batch: dict[str, dict[str, float]] = {}
+    for (batch, sys, cfg), mets in metric_by_group.items():
+        if sys != "linux":
+            continue
+        vals = mets.get("e0_to_e4_ns") or []
+        if not vals:
+            continue
+        by_batch.setdefault(batch, {})[cfg] = statistics.median(vals)
+    for batch, cfgs in by_batch.items():
+        if "trimmed" not in cfgs or "stock" not in cfgs:
+            continue
+        if cfgs["trimmed"] >= cfgs["stock"]:
+            failed.append(
+                f"trimmed E0→E4 median {cfgs['trimmed']:.0f} ns >= stock "
+                f"{cfgs['stock']:.0f} ns in {batch}; trimmed row is not published"
+            )
+    return failed
+
+
+def linux_kernel_hash_failures(runs: list[dict]) -> list[str]:
+    rec = [
+        r
+        for r in runs
+        if int(r["warmup"]) == 0 and r.get("system") == "linux"
+    ]
+    if not rec:
+        return []
+    man = linux_manifest_path()
+    if not man.is_file():
+        return [f"linux rows present but MANIFEST missing: {man}"]
+    parsed = parse_linux_manifest(man.read_text(encoding="utf-8"))
+    failed: list[str] = []
+    for r in rec:
+        image = "Image-stock" if r["config"] == "stock" else "Image-trimmed"
+        want = parsed["artifacts"].get(image)
+        if want is None:
+            failed.append(f"MANIFEST has no {image} for {r['config']}")
+            continue
+        if r["kernel_sha256"] != want:
+            failed.append(
+                f"kernel_sha256={r['kernel_sha256']} want {want} "
+                f"({image} {r['config']} trial {r['trial']})"
+            )
+    return failed
+
+
+def linux_header_lines(
+    *,
+    client_timeout_s: float | None,
+    linux_meta: dict | None,
+) -> list[str]:
+    extra: list[str] = []
+    if client_timeout_s is not None:
+        extra.append(f"client_timeout_s={client_timeout_s:g}")
+    if linux_meta:
+        extra.append(f"cpio={linux_meta['cpio']}")
+        extra.append(f"cpio_sha256={linux_meta['cpio_sha256']}")
+        extra.append(f"linux_append_quiet={LINUX_APPEND_QUIET}")
+        extra.append(f"linux_append_instrumented={LINUX_APPEND_INSTRUMENTED}")
+    return extra
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -986,20 +1243,50 @@ def cmd_run(args: argparse.Namespace) -> int:
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     run_rows: list[dict] = []
     phase_rows: list[dict] = []
-    timeout_s = float(os.environ.get("BENCH_TIMEOUT_S", "12"))
+    client_timeout_s = campaign_timeout_s(args.kind)
+    print(
+        f"bench: client_timeout_s={client_timeout_s:g} "
+        f"(uniform recv; not per-system)",
+        flush=True,
+    )
 
-    kernels: dict[str, tuple[Path, str]] = {}
-    cfg_list = configs_for(args.kind)
-    cfg_names = [c[0] for c in cfg_list]
-    for config, features, env_extra, extra in cfg_list:
-        kernel_src = cargo_build(
-            features, extra=extra or None, env_extra=env_extra or None
+    arms = configs_for(args.kind)
+    linux_arms = [a for a in arms if a.system == "linux"]
+    linux_meta: dict | None = None
+    if linux_arms:
+        names = sorted(
+            {a.linux_image for a in linux_arms if a.linux_image}
+            | {"rootfs.cpio", "init"}
         )
-        kdir = out_dir / "bin"
-        kdir.mkdir(parents=True, exist_ok=True)
-        kernel = kdir / config
-        shutil.copy2(kernel_src, kernel)
-        kernels[config] = (kernel, sha256_file(kernel))
+        parsed = verify_linux_artifacts(list(names))
+        cpio = linux_art_dir() / "rootfs.cpio"
+        linux_meta = {
+            "parsed": parsed,
+            "cpio": str(cpio.relative_to(ROOT)),
+            "cpio_sha256": parsed["artifacts"]["rootfs.cpio"],
+        }
+
+    kernels: dict[str, tuple[Path, str, Arm]] = {}
+    kdir = out_dir / "bin"
+    kdir.mkdir(parents=True, exist_ok=True)
+    for arm in arms:
+        if arm.system == "whimbrel":
+            env = dict(arm.env_extra) if arm.env_extra else None
+            extra = list(arm.cargo_extra) if arm.cargo_extra else None
+            kernel_src = cargo_build(
+                list(arm.features), extra=extra, env_extra=env
+            )
+            kernel = kdir / arm.config
+            shutil.copy2(kernel_src, kernel)
+            kernels[arm.config] = (kernel, sha256_file(kernel), arm)
+            continue
+        if arm.system == "linux":
+            if arm.linux_image is None:
+                raise BenchFail(f"TEST FAIL: linux arm {arm.config} has no Image")
+            kernel = linux_art_dir() / arm.linux_image
+            kernels[arm.config] = (kernel, sha256_file(kernel), arm)
+            continue
+        raise BenchFail(f"TEST FAIL: unknown system {arm.system}")
 
     shuffle_seed = getattr(args, "shuffle_seed", None)
     if shuffle_seed is None:
@@ -1009,25 +1296,31 @@ def cmd_run(args: argparse.Namespace) -> int:
         )
     print(f"bench: shuffle_seed={shuffle_seed}", flush=True)
     run_order = 0
+    cfg_names = [a.config for a in arms]
 
     def one_trial(batch_id: str, config: str, trial: int, is_warmup: int) -> None:
         nonlocal run_order
         run_order += 1
-        kernel, k_hash = kernels[config]
+        kernel, k_hash, arm = kernels[config]
         tdir = out_dir / "trials" / batch_id / config / f"{trial:02d}"
         tdir.mkdir(parents=True, exist_ok=True)
         pcap = tdir / "qemu.pcap"
         serial_path = tdir / "serial.log"
         client_out = tdir / "client.json"
         ready_path = tdir / "client.ready"
+        append = linux_append_for(arm)
+        cpio = linux_art_dir() / "rootfs.cpio" if arm.system == "linux" else None
+        extra = guest_qemu_extra(arm, kernel, cpio, append)
+        qemu_wait = qemu_timeout_s(arm.system, client_timeout_s)
         print(
-            f"bench: batch={batch_id} config={config} "
+            f"bench: batch={batch_id} system={arm.system} config={config} "
             f"trial={trial} warmup={is_warmup} run_order={run_order}",
             flush=True,
         )
         steal0 = read_steal_ticks()
         result = run_trial(
-            kernel=kernel,
+            arm=arm,
+            extra=extra,
             pcap=pcap,
             serial_path=serial_path,
             client_out=client_out,
@@ -1035,7 +1328,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             qemu_cpu=qemu_cpu,
             client_cpu=client_cpu,
             port=port,
-            timeout_s=timeout_s,
+            client_timeout_s=client_timeout_s,
+            qemu_wait_s=qemu_wait,
         )
         steal_delta = read_steal_ticks() - steal0
         if steal_delta < 0:
@@ -1046,7 +1340,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                 "batch_id": batch_id,
                 "trial": trial,
                 "warmup": is_warmup,
-                "system": "whimbrel",
+                "system": arm.system,
                 "config": config,
                 "git_sha": git_sha,
                 "dirty": dirty,
@@ -1086,7 +1380,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                     "batch_id": batch_id,
                     "trial": trial,
                     "warmup": is_warmup,
-                    "system": "whimbrel",
+                    "system": arm.system,
                     "config": config,
                     "phase": ph["phase"],
                     "ticks": ph["ticks"],
@@ -1118,12 +1412,13 @@ def cmd_run(args: argparse.Namespace) -> int:
             allow_dirty=args.allow_dirty,
             runs=run_rows,
             phases=phase_rows,
+            client_timeout_s=client_timeout_s,
+            linux_meta=linux_meta,
         )
     )
     if args.kind == "fp-ab" and rc == 0:
         print_fp_ab_delta(out_dir)
     return rc
-
 
 def print_fp_ab_delta(out_dir: Path) -> None:
     runs = read_csv(out_dir / "runs.csv")
@@ -1258,6 +1553,12 @@ def cmd_summarize(args: argparse.Namespace) -> int:
         require_first_connect_control(runs)
         lines.extend(s_header_lines(runs))
     lines.extend(
+        linux_header_lines(
+            client_timeout_s=getattr(args, "client_timeout_s", None),
+            linux_meta=getattr(args, "linux_meta", None),
+        )
+    )
+    lines.extend(
         [
             f"git_sha={runs[0]['git_sha']} dirty={runs[0]['dirty']}",
             f"host_kernel={runs[0]['host_kernel']}",
@@ -1310,6 +1611,8 @@ def cmd_summarize(args: argparse.Namespace) -> int:
     lines.extend(steal_diagnosis(runs, phases))
 
     failed: list[str] = []
+    failed.extend(trimmed_vs_stock_failures(metric_by_group))
+    failed.extend(linux_kernel_hash_failures(runs))
     if getattr(args, "stability", False):
         by_cfg: dict[str, list[tuple[str, dict[str, list[float]]]]] = {}
         for (batch, _sys, cfg), mets in metric_by_group.items():
@@ -1336,7 +1639,7 @@ def cmd_summarize(args: argparse.Namespace) -> int:
     (out_dir / "summary.txt").write_text(text, encoding="utf-8")
     print(text, end="")
     if failed:
-        print("TEST FAIL: stability criterion not met", file=sys.stderr)
+        print("TEST FAIL: summarize gates not met", file=sys.stderr)
         print("\n".join(failed), file=sys.stderr)
         print(
             "Not widening the criterion (D-0055). Varying metrics listed above.",
@@ -1359,6 +1662,13 @@ def cmd_check_serial(args: argparse.Namespace) -> int:
         f"TEST PASS: phase deltas sum to E2→E3g "
         f"({int(e3g['ns_since_e2'])} ns) within stamp overhead {overhead} ns"
     )
+    return 0
+
+
+def cmd_check_linux_artifacts(args: argparse.Namespace) -> int:
+    names = list(args.names) if args.names else None
+    verify_linux_artifacts(names)
+    print("TEST PASS: linux artifacts match MANIFEST")
     return 0
 
 
@@ -1979,6 +2289,162 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
         "|s_ns_fast − s_ns_safe| > 1 ms",
     )
 
+    empty_linux = phases_from_serial("READY\nLINUX INIT OK\n", "linux")
+    if empty_linux != []:
+        raise BenchFail(f"linux PHASE skip unexpected: {empty_linux}")
+    fired.append("linux serial skips PHASE-presence")
+    try:
+        phases_from_serial("READY\n", "whimbrel")
+        raise BenchFail("whimbrel empty PHASE did not fire")
+    except BenchFail as e:
+        if "no PHASE rows" not in str(e):
+            raise
+        fired.append(f"whimbrel PHASE-presence: {e}")
+
+    w_arm = Arm("release-fast-boot", "whimbrel")
+    w_extra = guest_qemu_extra(w_arm, Path("/k"), None, None)
+    if w_extra != ["-kernel", "/k"]:
+        raise BenchFail(f"Whimbrel argv unexpected: {w_extra}")
+    if "-initrd" in w_extra or "-append" in w_extra:
+        raise BenchFail("Whimbrel argv took -initrd or -append")
+    l_arm = Arm(
+        "trimmed", "linux", linux_image="Image-trimmed", linux_append="quiet"
+    )
+    l_extra = guest_qemu_extra(
+        l_arm, Path("/Image"), Path("/rootfs.cpio"), LINUX_APPEND_QUIET
+    )
+    if l_extra != [
+        "-kernel",
+        "/Image",
+        "-initrd",
+        "/rootfs.cpio",
+        "-append",
+        LINUX_APPEND_QUIET,
+    ]:
+        raise BenchFail(f"Linux argv unexpected: {l_extra}")
+    fired.append("per-system argv: Whimbrel -kernel only; Linux +initrd +append")
+
+    os.environ.pop("BENCH_TIMEOUT_S", None)
+    if campaign_timeout_s("whimbrel") != 12.0:
+        raise BenchFail("whimbrel default timeout is not 12")
+    if campaign_timeout_s("t48") != 60.0:
+        raise BenchFail("t48 default timeout is not 60")
+    os.environ["BENCH_TIMEOUT_S"] = "45"
+    if campaign_timeout_s("whimbrel") != 45.0 or campaign_timeout_s("t48") != 45.0:
+        raise BenchFail("BENCH_TIMEOUT_S is not uniform across kinds")
+    os.environ.pop("BENCH_TIMEOUT_S", None)
+    fired.append("uniform campaign timeout (not a per-system recv knob)")
+
+    if qemu_timeout_s("whimbrel", 12.0) != 14.0:
+        raise BenchFail("Whimbrel qemu wait is not floor 12 + 2")
+    if qemu_timeout_s("linux", 12.0) != 62.0:
+        raise BenchFail("Linux qemu wait is not floor 60 + 2")
+    if qemu_timeout_s("whimbrel", 60.0) != 62.0:
+        raise BenchFail("uniform 60s recv must lengthen Whimbrel qemu wait too")
+    fired.append("per-system QEMU hang watchdog; recv stays uniform")
+
+    t48_names = [a.config for a in configs_for("t48")]
+    if t48_names != [
+        "release-fast-boot",
+        "release-default",
+        "trimmed",
+        "stock",
+        "trimmed-instrumented",
+    ]:
+        raise BenchFail(f"t48 arms unexpected: {t48_names}")
+    fired.append("t48 five-arm configs_for")
+
+    _qemu, qargs = qemu_argv("/tmp/whimbrel.pcap", 8080)
+    qjoined = " ".join(qargs)
+    if "csum=off" not in qjoined or "guest_tso4=off" not in qjoined:
+        raise BenchFail(f"shared qemu args missing offload-off: {qjoined}")
+    if "host_uso=off" not in qjoined:
+        raise BenchFail(f"shared qemu args missing host_uso=off: {qjoined}")
+    fired.append("shared virtio-net-device has csum=off / TSO-family off")
+
+    trim_bad = trimmed_vs_stock_failures(
+        {
+            ("b1", "linux", "trimmed"): {"e0_to_e4_ns": [5_000_000_000.0]},
+            ("b1", "linux", "stock"): {"e0_to_e4_ns": [1_000_000_000.0]},
+        }
+    )
+    if not any("not published" in x for x in trim_bad):
+        raise BenchFail(f"trimmed-vs-stock tripwire did not fire: {trim_bad}")
+    fired.append(f"trimmed-vs-stock: {trim_bad[0]}")
+    trim_ok = trimmed_vs_stock_failures(
+        {
+            ("b1", "linux", "trimmed"): {"e0_to_e4_ns": [1_000_000_000.0]},
+            ("b1", "linux", "stock"): {"e0_to_e4_ns": [5_000_000_000.0]},
+        }
+    )
+    if trim_ok:
+        raise BenchFail(f"trimmed-vs-stock fired on a healthy pair: {trim_ok}")
+
+    hdr = linux_header_lines(
+        client_timeout_s=60.0,
+        linux_meta={
+            "cpio": "bench/linux/artifacts/rootfs.cpio",
+            "cpio_sha256": "c" * 64,
+        },
+    )
+    if hdr != [
+        "client_timeout_s=60",
+        "cpio=bench/linux/artifacts/rootfs.cpio",
+        f"cpio_sha256={'c' * 64}",
+        f"linux_append_quiet={LINUX_APPEND_QUIET}",
+        f"linux_append_instrumented={LINUX_APPEND_INSTRUMENTED}",
+    ]:
+        raise BenchFail(f"batch header unexpected: {hdr}")
+    fired.append("batch header: cpio hash, -append pins, uniform client_timeout_s")
+
+    man = parse_linux_manifest(
+        "artifact Image-stock "
+        + ("a" * 64)
+        + "\nartifact Image-trimmed "
+        + ("b" * 64)
+        + "\nartifact rootfs.cpio "
+        + ("c" * 64)
+        + "\nartifact init "
+        + ("d" * 64)
+        + f"\nappend quiet {LINUX_APPEND_QUIET}\n"
+        + f"append instrumented {LINUX_APPEND_INSTRUMENTED}\n"
+    )
+    if man["artifacts"]["rootfs.cpio"] != "c" * 64:
+        raise BenchFail("MANIFEST parse unexpected")
+    try:
+        parse_linux_manifest(
+            "artifact Image-stock "
+            + ("a" * 64)
+            + "\nartifact Image-trimmed "
+            + ("b" * 64)
+            + "\nartifact rootfs.cpio "
+            + ("c" * 64)
+            + "\nartifact init "
+            + ("d" * 64)
+            + "\nappend quiet console=ttyS0\n"
+            + f"append instrumented {LINUX_APPEND_INSTRUMENTED}\n"
+        )
+        raise BenchFail("MANIFEST append mismatch did not fire")
+    except BenchFail as e:
+        if "append quiet" not in str(e):
+            raise
+        fired.append(f"MANIFEST append pin: {e}")
+
+    boot = subprocess.run(
+        ["bash", str(ROOT / "scripts" / "linux-boot-test.sh")],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    boot_out = (boot.stdout or "") + (boot.stderr or "")
+    if boot.returncode == 0:
+        raise BenchFail("linux-boot-test passed without artifacts")
+    if "linux artifact missing" not in boot_out:
+        raise BenchFail(
+            f"linux-boot-test missing-artifact shape unexpected: {boot_out}"
+        )
+    fired.append("linux-boot-test fail-closed without artifacts")
+
     print("TEST PASS: bench fail-closed selftest")
     for line in fired:
         print(f"  fired: {line}")
@@ -2008,6 +2474,25 @@ def main() -> int:
     )
     run_p.set_defaults(kind="whimbrel", func=cmd_run)
 
+    t48 = sub.add_parser("t48", help="T4.8 five-arm cross-system campaign")
+    t48.add_argument("--n", type=int, default=int(os.environ.get("BENCH_N", "30")))
+    t48.add_argument(
+        "--warmup", type=int, default=int(os.environ.get("BENCH_WARMUP", "3"))
+    )
+    t48.add_argument(
+        "--batches", type=int, default=int(os.environ.get("BENCH_BATCHES", "2"))
+    )
+    t48.add_argument("--out-dir", default=os.environ.get("BENCH_OUT", "results"))
+    t48.add_argument("--port", type=int, default=int(os.environ.get("BENCH_PORT", "8080")))
+    t48.add_argument("--allow-dirty", action="store_true")
+    t48.add_argument(
+        "--shuffle-seed",
+        type=int,
+        default=None,
+        help="recorded RNG seed for trial shuffle (or BENCH_SHUFFLE_SEED)",
+    )
+    t48.set_defaults(kind="t48", func=cmd_run)
+
     fp = sub.add_parser("fp-ab", help="finding 14: frame-pointer A/B")
     fp.add_argument("--n", type=int, default=int(os.environ.get("BENCH_N", "30")))
     fp.add_argument(
@@ -2031,6 +2516,13 @@ def main() -> int:
     chk = sub.add_parser("check-serial", help="assert PHASE deltas sum to E2→E3g")
     chk.add_argument("serial")
     chk.set_defaults(func=cmd_check_serial)
+
+    lin = sub.add_parser(
+        "check-linux-artifacts",
+        help="hash Linux artifacts against bench/linux/MANIFEST",
+    )
+    lin.add_argument("names", nargs="*")
+    lin.set_defaults(func=cmd_check_linux_artifacts)
 
     args = p.parse_args()
     try:

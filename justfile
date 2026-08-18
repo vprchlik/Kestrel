@@ -728,9 +728,19 @@ test-fast-release:
 bench-whimbrel:
     bash scripts/bench.sh whimbrel
 
+# T4.8 five-arm campaign. Requires bench/linux/artifacts + MANIFEST.
+# This pod does not run it (D-0055).
+bench-t48:
+    bash scripts/bench.sh t48
+
+# Linux boot gate: Image+initrd+append, 92-byte RESP, FIN, SYN-grid, no RST.
+# Fail-closed if artifacts are missing.
+test-linux timeout_s="60":
+    TIMEOUT_S={{timeout_s}} bash scripts/linux-boot-test.sh
+
 # Fail-closed checks (missing tshark, malformed PHASE, zero-trial CSV,
 # QEMU/git mismatch, dirty tree, host controls, origin sync, D-0071
-# schema / S / first-connect / pcap intervals).
+# schema / S / first-connect / pcap intervals, T4.8 argv / PHASE skip).
 bench-selftest:
     bash scripts/bench.sh selftest
 
@@ -751,7 +761,7 @@ report-exhibits:
 
 # D-0070 read-only tshark pass over recorded T4.6 / D-0068 pcaps.
 # git show of those CSV objects; results/trials/ must already exist.
-# Does not boot QEMU and does not change scripts/bench.py.
+# extract_pcap is scripts/pcap_http.py (shared with the T4.8 harness).
 d0070-pcap-pass:
     python3 scripts/d0070-pcap-pass.py
 

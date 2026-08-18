@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """D-0070 read-only tshark pass over already-recorded per-trial pcaps.
 
-Does not boot QEMU and does not modify scripts/bench.py. CSV pins are
-git objects (same commits as scripts/report-exhibits.py). Per-trial
-pcaps live under results/trials/ (gitignored); missing files fail
-closed rather than substituting a KVM leftover.
+Does not boot QEMU. CSV pins are git objects (same commits as
+scripts/report-exhibits.py). Per-trial pcaps live under
+results/trials/ (gitignored); missing files fail closed rather
+than substituting a KVM leftover. extract_pcap lives in
+scripts/pcap_http.py (shared with the T4.8 harness).
 
 Never type the numbers this script prints.
 """
@@ -14,8 +15,6 @@ from __future__ import annotations
 import argparse
 import csv
 import io
-import os
-import shutil
 import statistics
 import struct
 import subprocess
@@ -23,6 +22,15 @@ import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+
+_SCRIPTS = Path(__file__).resolve().parent
+if str(_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS))
+from pcap_http import (  # noqa: E402
+    PcapExtractError,
+    extract_pcap as _extract_pcap,
+    require_tshark as _require_tshark,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -51,16 +59,6 @@ CAMPAIGNS = (
     },
 )
 
-ARP_FILTER = (
-    "arp.opcode==1 && arp.src.proto_ipv4==10.0.2.2 && "
-    "arp.dst.proto_ipv4==10.0.2.15"
-)
-SYNACK_FILTER = "tcp.srcport==80 && tcp.flags==0x012"
-HTTP_FILTER = (
-    "tcp && ip.src == 10.0.2.15 && tcp.srcport == 80 && tcp.len > 0 && "
-    'tcp.flags.syn == 0 && frame contains "HTTP/1.0 200 OK"'
-)
-
 PRED_DFIN_MAX_NS = 5_000_000
 FALSIFY_DFIN_NS = 10_000_000
 PRED_RATIO_MAX = 2.0
@@ -80,18 +78,11 @@ def die(msg: str, code: int = 1) -> None:
     raise SystemExit(code)
 
 
-def tshark_bin() -> str:
-    return os.environ.get("BENCH_TSHARK", "tshark")
-
-
 def require_tshark() -> str:
-    name = tshark_bin()
-    path = name if os.path.sep in name else shutil.which(name)
-    if not path or not os.path.isfile(path) or not os.access(path, os.X_OK):
-        raise PassFail(
-            f"TEST FAIL: tshark not installed ({name}); see docs/SETUP.md"
-        )
-    return path
+    try:
+        return _require_tshark()
+    except PcapExtractError as e:
+        raise PassFail(str(e)) from e
 
 
 def git_show(rev: str, path: str) -> str:
@@ -219,127 +210,11 @@ def validate_campaign(
         )
 
 
-def tshark_table(
-    pcap: Path, tshark: str, display_filter: str, extra: tuple[str, ...] = ()
-) -> list[dict[str, str]]:
-    fields = ("frame.time_relative", "frame.number") + extra
-    cmd = [
-        tshark,
-        "-r",
-        str(pcap),
-        "-o",
-        "tcp.relative_sequence_numbers:FALSE",
-        "-Y",
-        display_filter,
-        "-T",
-        "fields",
-    ]
-    for field in fields:
-        cmd.extend(["-e", field])
-    proc = subprocess.run(cmd, capture_output=True, text=True)
-    if proc.returncode != 0:
-        err = proc.stderr.strip() or f"status={proc.returncode}"
-        if "permission" in err.lower():
-            raise PassFail(
-                f"TEST FAIL: tshark could not read {pcap}: {err} "
-                "(AppArmor override: docs/SETUP.md §7)"
-            )
-        raise PassFail(f"TEST FAIL: tshark could not read {pcap}: {err}")
-    rows: list[dict[str, str]] = []
-    for line in proc.stdout.splitlines():
-        if not line.strip():
-            continue
-        parts = line.split("\t")
-        while len(parts) < len(fields):
-            parts.append("")
-        rows.append(dict(zip(fields, parts[: len(fields)])))
-    return rows
-
-
-def _time_ns(row: dict[str, str]) -> int:
-    return int(round(float(row["frame.time_relative"]) * 1_000_000_000))
-
-
-def _frame_no(row: dict[str, str]) -> int:
-    return int(row["frame.number"])
-
-
 def extract_pcap(pcap: Path, tshark: str) -> dict[str, int]:
-    """W, D_ack, D_fin, and pcap(SYN/ACK→HTTP) on one pcap clock."""
-    if not pcap.is_file() or pcap.stat().st_size == 0:
-        raise PassFail(f"TEST FAIL: pcap missing or empty: {pcap}")
-
-    arp_rows = tshark_table(pcap, tshark, ARP_FILTER)
-    if not arp_rows:
-        raise PassFail(
-            f"TEST FAIL: no slirp ARP request for 10.0.2.15 in {pcap}"
-        )
-    syn_rows = tshark_table(pcap, tshark, SYNACK_FILTER)
-    if not syn_rows:
-        raise PassFail(f"TEST FAIL: no guest SYN/ACK (tcp.flags==0x012) in {pcap}")
-    http_rows = tshark_table(
-        pcap, tshark, HTTP_FILTER, extra=("tcp.nxtseq", "tcp.len", "tcp.flags.fin")
-    )
-    if not http_rows:
-        raise PassFail(f"TEST FAIL: no HTTP 200 data frame in {pcap}")
-
-    arp = arp_rows[0]
-    syn = syn_rows[0]
-    http = http_rows[0]
-    t_arp = _time_ns(arp)
-    t_syn = _time_ns(syn)
-    t_http = _time_ns(http)
-    fn_http = _frame_no(http)
-    if t_syn < t_arp:
-        raise PassFail(
-            f"TEST FAIL: SYN/ACK before slirp ARP in {pcap} "
-            f"(arp_ns={t_arp} synack_ns={t_syn})"
-        )
-    if t_http < t_syn:
-        raise PassFail(
-            f"TEST FAIL: HTTP frame before SYN/ACK in {pcap} "
-            f"(synack_ns={t_syn} http_ns={t_http})"
-        )
-    nxt = http["tcp.nxtseq"].strip()
-    if not nxt.isdigit():
-        raise PassFail(
-            f"TEST FAIL: HTTP tcp.nxtseq not an integer in {pcap}: {nxt!r}"
-        )
-    ack_filter = (
-        "tcp && ip.src == 10.0.2.2 && ip.dst == 10.0.2.15 && "
-        "tcp.dstport == 80 && tcp.flags.syn == 0 && tcp.flags.fin == 0 && "
-        "tcp.flags.reset == 0 && tcp.flags.ack == 1 && tcp.len == 0 && "
-        f"tcp.ack == {int(nxt)} && frame.number > {fn_http}"
-    )
-    ack_rows = tshark_table(pcap, tshark, ack_filter, extra=("tcp.ack",))
-    if not ack_rows:
-        raise PassFail(
-            f"TEST FAIL: no pure ACK of HTTP payload+FIN "
-            f"(tcp.ack={nxt}) after frame {fn_http} in {pcap}"
-        )
-    fin_filter = (
-        "tcp && ip.dst == 10.0.2.15 && tcp.dstport == 80 && "
-        f"tcp.flags.fin == 1 && frame.number > {fn_http}"
-    )
-    fin_rows = tshark_table(pcap, tshark, fin_filter)
-    if not fin_rows:
-        raise PassFail(
-            f"TEST FAIL: no client FIN toward :80 after HTTP frame "
-            f"{fn_http} in {pcap}"
-        )
-    t_ack = _time_ns(ack_rows[0])
-    t_fin = _time_ns(fin_rows[0])
-    if t_ack < t_http:
-        raise PassFail(f"TEST FAIL: ACK-of-response before HTTP in {pcap}")
-    if t_fin < t_http:
-        raise PassFail(f"TEST FAIL: client FIN before HTTP in {pcap}")
-    return {
-        "w_ns": t_syn - t_arp,
-        "d_ack_ns": t_ack - t_http,
-        "d_fin_ns": t_fin - t_http,
-        "synack_to_http_ns": t_http - t_syn,
-        "http_len": int(http["tcp.len"]),
-    }
+    try:
+        return _extract_pcap(pcap, tshark)
+    except PcapExtractError as e:
+        raise PassFail(str(e)) from e
 
 
 def leftover_batch_ids() -> list[str]:
