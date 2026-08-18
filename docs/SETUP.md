@@ -53,7 +53,9 @@ From T3.8 every invocation also carries `hostfwd=udp::7777-:7` (UDP
 echo on guest port 7). `tshark` above is what the harness uses to assert
 on those captures — without it, `just test` fails on a machine that has
 everything else. On Ubuntu 26.04+ the binary can be present and still
-fail every pcap read: §7 AppArmor.
+fail every pcap read: §7 AppArmor. Kernel / Buildroot builds on 26.04
+also hit §7's uutils `/usr/bin/install` trap (`install --version`
+prints `uutils`; GNU is `/usr/bin/gnuinstall`).
 
 ## 2. Rust toolchain
 
@@ -152,9 +154,10 @@ Gates run there; report numbers do not.
 Development and `just test` run anywhere QEMU works. **Every number in the
 M4 report** comes from one dedicated Ubuntu machine that meets the checks
 below. T4.2 stamps from a KVM pod are ladder-ordering only. On Ubuntu
-26.04+ two extra host steps are required before pcap asserts or
-`just bench-whimbrel` will pass: the QEMU package split in §1, and the
-tshark AppArmor override in this section.
+26.04+ extra host steps sit outside `scripts/install.sh` (cloud agents
+never run `just linux-build`): the QEMU package split in §1, the
+**uutils `/usr/bin/install` shim** below, the tshark AppArmor override,
+and the `just linux-build` packages.
 
 ### What the machine must be
 
@@ -175,10 +178,52 @@ boost off, QEMU 10.2.1, steal 0) is the source of the turbo-off numbers
 in D-0055. Copy the harness machine-spec block into the report, not this
 sentence.
 
+### Host packages for `just linux-build`
+
+§1's `build-essential` is not enough. A fresh 26.04 following only that
+list dies in Buildroot's `dependencies.sh` / kernel `scripts/kconfig`
+before it produces an Image. Install, then leave them installed:
+
+```bash
+sudo apt-get install -y \
+    bison \          # kernel scripts/kconfig (YACC)
+    flex \           # kernel scripts/kconfig (LEX)
+    libssl-dev \     # kernel host headers (module signing / scripts)
+    bc               # kernel Makefile timeconst; recipe preflight
+```
+
+This host needed `bison`, `flex`, and `libssl-dev` on top of an already
+working `just test` machine. `bc` was already present; it is listed
+because the recipe fail-closes without it.
+
 **QEMU package split** is in §1: on 26.04 `qemu-system-riscv64` lives in
 `qemu-system-riscv`, not `qemu-system-misc`. `install.sh` and the
 `apt-cache show` test in §1 pick the right package; `command -v
 qemu-system-riscv64` must succeed after install.
+
+### Ubuntu 26.04: uutils `/usr/bin/install` (Buildroot / kernel)
+
+Ubuntu 26.04 (`resolute`) ships **uutils** as `/usr/bin/install`, not
+GNU coreutils. Confirm with `install --version`: a first line containing
+`uutils` (this host: 0.8.0) is the broken one. Buildroot 2026.02.3's
+`support/dependencies/dependencies.sh` hard-fails on that binary
+(uutils#12166 — GNU `install` flags the kernel and Buildroot rely on).
+The failure looks like a missing host compiler or a bad `PATH`, not like
+a coreutils fork.
+
+GNU `install` is already on this image as `/usr/bin/gnuinstall`
+(`gnuinstall --version` must print GNU coreutils). `scripts/linux-build.sh`
+prepends a directory with `install → gnuinstall` to `PATH` for the
+Buildroot invocation. It does **not** run `update-alternatives` or
+otherwise rewrite the system `/usr/bin/install`. If `gnuinstall` is
+missing, install GNU `coreutils` so that binary exists; do not replace
+the uutils alternative globally on a desktop that expects it.
+
+Search terms that should land here: `uutils`, `/usr/bin/install`,
+`gnuinstall`, Buildroot `dependencies.sh`. Same class of 26.04-only
+host trap as the tshark AppArmor profile below — not a Whimbrel kernel
+bug, and not something `scripts/install.sh` should change (cloud agents
+do not run `just linux-build`).
 
 ### Required 26.04+ step: tshark AppArmor override
 

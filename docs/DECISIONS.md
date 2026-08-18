@@ -2582,6 +2582,21 @@ D-0011 onward are working decisions made under those constraints.
 - Build execution: `just linux-build` is a bench-host spec
   (`results/README.md`), same pattern as D-0067/D-0071 — the cloud
   pod has neither the disk nor the toolchain for buildroot.
+- **Amendment (2026-08-18 — trim: EXPERT on, MODULES kept):** The
+  first `linux-build` produced Image-trimmed 29.7 MB vs Image-stock
+  27.4 MB. `CONFIG_MODULES=n` retypes every tristate as bool
+  (`sym_get_type`) and canonicalizes `m` to `y` (`calc_value`);
+  stock→trim was 195 `m → y` and 0 `m → n`. That is not a floor.
+  `MODULES` stays y (nothing in the cpio `insmod`s; the loader is
+  dead weight, the 195 drivers are not). Five unsets (`BLOCK`,
+  `PROC_FS`, `SYSFS`, `KALLSYMS`, `NAMESPACES`) are EXPERT-gated
+  (`bool … if EXPERT`, default y). Stock + `EXPERT=y` alone: 89
+  diffs, 86 of them new unsets; three interesting (`EXPERT`,
+  `PCIE_BUS_DEFAULT` which dies with `PCI` off,
+  `MEDIA_HIDE_ANCILLARY_SUBDRV` going away). `CONFIG_EXPERT=y` is
+  in the fragment so those five unsets stick. `EFI` stays an
+  annotated override (`PORTABLE` `select EFI`); `NONPORTABLE=y` is
+  a board-personality change we will not make.
 
 ## D-0063: Unikraft spike — go/no-go and the no-core-patches line
 - Date: 2026-08-16 — Status: accepted

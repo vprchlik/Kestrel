@@ -733,11 +733,6 @@ bench-whimbrel:
 bench-t48:
     bash scripts/bench.sh t48
 
-# Linux boot gate: Image+initrd+append, 92-byte RESP, FIN, SYN-grid, no RST.
-# Fail-closed if artifacts are missing.
-test-linux timeout_s="60":
-    TIMEOUT_S={{timeout_s}} bash scripts/linux-boot-test.sh
-
 # Fail-closed checks (missing tshark, malformed PHASE, zero-trial CSV,
 # QEMU/git mismatch, dirty tree, host controls, origin sync, D-0071
 # schema / S / first-connect / pcap intervals, T4.8 argv / PHASE skip).
@@ -772,6 +767,13 @@ d0070-pcap-pass-selftest:
 # dedicated host. Prints five verification blocks. Never inside a batch.
 linux-build:
     bash scripts/linux-build.sh
+
+# Linux boot gate: MANIFEST hashes, READY (CRLF-tolerant), curl entity
+# is 9 bytes, 92-byte pcap HTTP, SYN-grid, no RST, QEMU exit 0.
+# Fail-closed if artifacts are missing. curl starts before QEMU so
+# the hostfwd SYN is queued (confound A); never curl-after-READY.
+test-linux image="trimmed" timeout_s="60":
+    TIMEOUT_S={{timeout_s}} bash scripts/linux-boot-test.sh {{image}}
 
 # Disassemble the kernel (extra flags as one quoted arg).
 objdump flags="-d": build

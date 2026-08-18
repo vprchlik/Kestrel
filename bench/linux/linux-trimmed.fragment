@@ -1,15 +1,33 @@
 # bench/linux/linux-trimmed.fragment — D-0062 trimmed row.
 # Merged onto the pinned board kernel config via merge_config.sh.
-# One delta per line. A symbol kconfig re-enables through
-# dependencies gets recorded here with a note, never silently
-# accepted — just linux-build fails on unannotated merge warnings.
+# One kconfig delta per line. Unset lines MUST be exactly
+# "# CONFIG_X is not set" — merge_config.sh's SED_CONFIG_EXP2 is
+# end-anchored, so a trailing note is not an unset. Notes go on the
+# previous line and must not contain the string CONFIG_<SYM>:
+# merge_config.sh uses grep -w CONFIG_X, and a note with that token
+# becomes the "requested value".
+#
+# A symbol kconfig re-enables through a dependency is recorded as:
+#   # merge-override SYM: <why it came back>
+# The recipe fails closed on an unannotated requested-vs-final FAIL.
+# "aggressive; re-enable candidate" is intent, not an override.
+
+# EXPERT: unhides BLOCK, PROC_FS, SYSFS, KALLSYMS, NAMESPACES
+# (bool … if EXPERT, default y). Without it those unsets are
+# invisible and olddefconfig restores y. On this board, EXPERT-only
+# fallout is 86 new unsets plus PCIE_BUS_DEFAULT (does not survive
+# PCI off). EPOLL and friends stay at stock defaults; we do not
+# unset them. MODULES stays y: n retypes tristate as bool and
+# canonicalizes m to y (symbol.c sym_get_type / calc_value).
+CONFIG_EXPERT=y
 
 ## Keep: serial console (ttyS0 on the virt board UART)
 CONFIG_TTY=y
 CONFIG_SERIAL_8250=y
 CONFIG_SERIAL_8250_CONSOLE=y
 CONFIG_SERIAL_OF_PLATFORM=y
-CONFIG_PRINTK=y            # serial console implies it; quiet row silences with loglevel=0
+# PRINTK: serial console implies it; quiet row silences with loglevel=0
+CONFIG_PRINTK=y
 
 ## Keep: virtio-net over virtio-mmio, built in (no module loading without userspace)
 CONFIG_NETDEVICES=y
@@ -24,38 +42,52 @@ CONFIG_INET=y
 ## Keep: initramfs boot + static ELF /init
 CONFIG_BLK_DEV_INITRD=y
 CONFIG_BINFMT_ELF=y
-CONFIG_DEVTMPFS=y          # D-0062 keeps it; /init itself needs only the cpio console node
-CONFIG_FUTEX=y             # static musl internals; not worth the breakage risk
+# DEVTMPFS: D-0062 keeps it; /init itself needs only the cpio console node
+CONFIG_DEVTMPFS=y
+# FUTEX: static musl internals; not worth the breakage risk
+CONFIG_FUTEX=y
 
-## Off: no modules, no v6, no storage, no second boot path
-# CONFIG_MODULES is not set
+## Off: no v6, no storage, no second boot path
+# IPV6: IPv4 only
 # CONFIG_IPV6 is not set
+# BLOCK: initramfs, no storage
 # CONFIG_BLOCK is not set
-# CONFIG_PCI is not set            # virtio here is MMIO; the virt board boots without PCI
-# CONFIG_EFI is not set            # OpenSBI + -kernel; no EFI stub on this path
+# PCI: virtio here is MMIO; the virt board boots without PCI
+# CONFIG_PCI is not set
+# EFI: OpenSBI + -kernel; no EFI stub on this path
+# CONFIG_EFI is not set
+# merge-override EFI: arch/riscv/Kconfig `config PORTABLE` (default !NONPORTABLE) `select EFI`. This tree has PORTABLE=y; unsetting EFI requires NONPORTABLE, which is a board-personality change we will not make.
 
 ## Off: single hart (matches the fixed machine shape; listed as tuning)
+# SMP: QEMU -smp 1; matches the fixed machine shape
 # CONFIG_SMP is not set
 
 ## Off: determinism / boot cost
-# CONFIG_RANDOMIZE_BASE is not set # KASLR
+# RANDOMIZE_BASE: KASLR
+# CONFIG_RANDOMIZE_BASE is not set
+# IKCONFIG: no /proc/config.gz
 # CONFIG_IKCONFIG is not set
+# KALLSYMS: no symbol table in the image
 # CONFIG_KALLSYMS is not set
 
 ## Off: no userspace beyond /init
+# UNIX: no AF_UNIX; /init talks TCP
 # CONFIG_UNIX is not set
-# CONFIG_PACKET is not set         # announce is UDP-to-gateway, not AF_PACKET (D-0062 amendment)
-# CONFIG_PROC_FS is not set        # aggressive; first re-enable candidate on no-boot
-# CONFIG_SYSFS is not set          # aggressive; second re-enable candidate on no-boot
-# CONFIG_TMPFS is not set          # rootfs stays ramfs
+# PACKET: announce is UDP-to-gateway, not AF_PACKET (D-0062 amendment)
+# CONFIG_PACKET is not set
+# PROC_FS: aggressive; first re-enable candidate on no-boot
+# CONFIG_PROC_FS is not set
+# SYSFS: aggressive; second re-enable candidate on no-boot
+# CONFIG_SYSFS is not set
+# TMPFS: rootfs stays ramfs
+# CONFIG_TMPFS is not set
+# SWAP: no backing store (vanishes from .config when BLOCK is off)
 # CONFIG_SWAP is not set
+# NAMESPACES: single task, no isolation knobs
 # CONFIG_NAMESPACES is not set
+# CGROUPS: no controllers, no userspace to configure them
 # CONFIG_CGROUPS is not set
 
-# Deliberately absent: EXPERT-gated toggles (EPOLL and friends).
-# Fighting CONFIG_EXPERT changes a raft of defaults — exactly how a
-# trim enables a slow path by accident. The merge output is the
-# arbiter; the trimmed-vs-stock tripwire (D-0062 amendment) is the
-# backstop. SBI SRST poweroff needs no explicit symbol on the
-# pinned kernel; the boot gate proves it, and if the pinned version
-# disagrees, the needed symbol joins this list with a comment.
+# SBI SRST poweroff needs no explicit symbol on the pinned kernel;
+# the boot gate proves it, and if the pinned version disagrees, the
+# needed symbol joins this list with a comment.

@@ -78,6 +78,19 @@ preflight() {
     need_bin flex
     need_bin bc
     mkdir -p "$DL" "$BUILD" "$ARTIFACTS"
+    # Ubuntu 26.04's /usr/bin/install is uutils 0.8.0. Buildroot 2026.02.3
+    # refuses it (uutils#12166). gnuinstall is already on this host from
+    # GNU coreutils; the recipe prepends it rather than rewriting the
+    # system alternative.
+    if install --version 2>/dev/null | grep -q 'uutils'; then
+        [[ -x /usr/bin/gnuinstall ]] || die "GNU install missing (/usr/bin/gnuinstall); package coreutils"
+        mkdir -p "$BUILD/gnubin"
+        ln -sfn /usr/bin/gnuinstall "$BUILD/gnubin/install"
+        export PATH="$BUILD/gnubin:$PATH"
+        install --version 2>/dev/null | grep -q 'GNU coreutils' \
+            || die "PATH shim did not select GNU install"
+        echo "linux-build: PATH prepends $BUILD/gnubin/install (GNU; uutils install is broken for this Buildroot)" >&2
+    fi
     avail="$(df -B1 --output=avail "$LINUX_DIR" | tail -n1 | tr -d ' ')"
     if (( avail < NEED_FREE_BYTES )); then
         die "need ≥ 35 GB free on $(df -h "$LINUX_DIR" | tail -n1); have $avail bytes"
@@ -141,15 +154,7 @@ apply_buildroot_fragment() {
         || die "buildroot.fragment did not set BR2_INIT_NONE=y"
 }
 
-build_stock_linux() {
-    local jobs="${BR2_JLEVEL:-$(nproc)}"
-    echo "linux-build: make linux -j$jobs (stock kernel + toolchain)" >&2
-    (
-        cd "$BR_DIR"
-        make linux "BR2_JLEVEL=$jobs"
-    )
-    STOCK_IMAGE="$BR_DIR/output/images/Image"
-    [[ -f "$STOCK_IMAGE" ]] || die "stock build produced no $STOCK_IMAGE"
+find_linux_src() {
     # linux-custom is the usual name for BR2_LINUX_KERNEL_CUSTOM_VERSION.
     if [[ -d "$BR_DIR/output/build/linux-custom" ]]; then
         LINUX_SRC="$BR_DIR/output/build/linux-custom"
@@ -158,17 +163,53 @@ build_stock_linux() {
     fi
     [[ -n "$LINUX_SRC" && -f "$LINUX_SRC/Makefile" ]] \
         || die "cannot find pinned kernel source under $BR_DIR/output/build"
-    STOCK_KCONFIG="$LINUX_SRC/.config"
-    [[ -f "$STOCK_KCONFIG" ]] || die "stock kernel .config missing at $STOCK_KCONFIG"
+}
+
+find_cross_compile() {
     HOST_DIR="$BR_DIR/output/host"
     local gcc_cands=()
+    # Two names point at the same wrapper (riscv64-linux-gcc and
+    # riscv64-buildroot-linux-musl-gcc). Prefer the musl SDK name.
     while IFS= read -r f; do
         gcc_cands+=("$f")
-    done < <(find "$HOST_DIR/bin" -maxdepth 1 \( -type f -o -type l \) -name '*-gcc')
+    done < <(find "$HOST_DIR/bin" -maxdepth 1 \( -type f -o -type l \) \
+        -name '*-buildroot-linux-*-gcc' | sort)
+    if (( ${#gcc_cands[@]} == 0 )); then
+        while IFS= read -r f; do
+            gcc_cands+=("$f")
+        done < <(find "$HOST_DIR/bin" -maxdepth 1 \( -type f -o -type l \) \
+            -name '*-gcc' | sort)
+    fi
     if (( ${#gcc_cands[@]} != 1 )); then
         die "expected one SDK *-gcc under $HOST_DIR/bin, found ${#gcc_cands[@]}: ${gcc_cands[*]:-none}"
     fi
-    CROSS_COMPILE="${gcc_cands[0]%-gcc}"
+    CROSS_COMPILE="${gcc_cands[0]%gcc}"
+}
+
+build_stock_linux() {
+    local jobs="${BR2_JLEVEL:-$(nproc)}"
+    find_linux_src
+    # Resume path: mrproper wipes the in-tree stock build. Reuse the
+    # already-copied Image and .config rather than rebuilding 6.18.7.
+    if [[ -f "$ARTIFACTS/Image-stock" && -f "$BUILD/stock.config" ]]; then
+        find_cross_compile
+        STOCK_IMAGE="$ARTIFACTS/Image-stock"
+        STOCK_KCONFIG="$BUILD/stock.config"
+        STOCK_LABEL="stock"
+        echo "linux-build: reusing $STOCK_IMAGE (skip make linux)" >&2
+        return
+    fi
+    echo "linux-build: make linux -j$jobs (stock kernel + toolchain)" >&2
+    (
+        cd "$BR_DIR"
+        make linux "BR2_JLEVEL=$jobs"
+    )
+    STOCK_IMAGE="$BR_DIR/output/images/Image"
+    [[ -f "$STOCK_IMAGE" ]] || die "stock build produced no $STOCK_IMAGE"
+    find_linux_src
+    STOCK_KCONFIG="$LINUX_SRC/.config"
+    [[ -f "$STOCK_KCONFIG" ]] || die "stock kernel .config missing at $STOCK_KCONFIG"
+    find_cross_compile
     # One-line virtio-net built-in if the board config ships =m (D-0062).
     STOCK_LABEL="stock"
     local virtio
@@ -198,6 +239,17 @@ build_stock_linux() {
 build_trimmed_linux() {
     local jobs="${BR2_JLEVEL:-$(nproc)}"
     TRIM_O="$BUILD/linux-trimmed"
+    if [[ -f "$ARTIFACTS/Image-trimmed" && -f "$BUILD/trimmed.config" && -f "$BUILD/merge_config.out" ]]; then
+        TRIM_IMAGE="$ARTIFACTS/Image-trimmed"
+        echo "linux-build: reusing $TRIM_IMAGE (skip trimmed rebuild)" >&2
+        return
+    fi
+    # Buildroot builds the pinned kernel in-tree under output/build/linux-*.
+    # The kernel Makefile refuses O= against that dirty tree ("please run
+    # 'make mrproper'"). Stock Image and .config are already copied out.
+    echo "linux-build: make ARCH=riscv mrproper in $LINUX_SRC (required for O= trimmed)" >&2
+    make -C "$LINUX_SRC" ARCH=riscv mrproper
+    rm -rf "$TRIM_O"
     mkdir -p "$TRIM_O"
     echo "linux-build: merge linux-trimmed.fragment (out-of-tree O=$TRIM_O)" >&2
     (
@@ -210,6 +262,13 @@ build_trimmed_linux() {
         die "merge_config.sh failed for trimmed kernel"
     }
     check_merge_warnings "$BUILD/merge_config.out" "$FRAG_TRIM"
+    # Gate block 3 before compiling: a dependency re-enable is a fragment
+    # annotation, not a 20-minute surprise after Image.
+    cp -a "$TRIM_O/.config" "$BUILD/trimmed.config"
+    requested_vs_final > "$BUILD/requested_vs_final.out" || {
+        cat "$BUILD/requested_vs_final.out" >&2
+        die "requested-vs-final failed after merge (annotate the fragment, do not skip)"
+    }
     echo "linux-build: make Image (trimmed) -j$jobs" >&2
     make -C "$LINUX_SRC" O="$TRIM_O" ARCH=riscv CROSS_COMPILE="$CROSS_COMPILE" \
         Image -j"$jobs"
@@ -227,17 +286,20 @@ check_merge_warnings() {
                 cfg="$(sed -n 's/^Value of \(CONFIG_[A-Z0-9_]*\) is .*/\1/p' <<<"$line")"
                 [[ -n "$cfg" ]] || die "unparseable merge warning: $line"
                 if ! python3 - "$frag" "$cfg" <<'PY'
+import re
 import sys
 from pathlib import Path
 frag = Path(sys.argv[1]).read_text()
 sym = sys.argv[2]
+bare = sym[len("CONFIG_"):] if sym.startswith("CONFIG_") else sym
+unset = f"# {sym} is not set"
 for raw in frag.splitlines():
     s = raw.strip()
-    if not s.startswith("#"):
+    if not s:
         continue
-    if s.startswith(f"# {sym} is not set"):
+    if s.startswith(unset):
         continue
-    if sym in s:
+    if s.startswith("#") and re.search(rf"\b{re.escape(bare)}\b", s):
         sys.exit(0)
 sys.exit(1)
 PY
@@ -271,15 +333,10 @@ for line in cfg.splitlines():
         final[m.group(1)] = "unset"
 
 def annotated(sym: str) -> bool:
-    for raw in frag.splitlines():
-        s = raw.strip()
-        if not s.startswith("#"):
-            continue
-        if s.startswith(f"# CONFIG_{sym} is not set"):
-            continue
-        if f"CONFIG_{sym}" in s or re.search(rf"\b{sym}\b", s):
-            return True
-    return False
+    # Intent notes ("PROC_FS: aggressive") do not count. A dependency
+    # re-enable is only accepted with an explicit merge-override line.
+    pat = re.compile(rf"# merge-override (?:CONFIG_)?{re.escape(sym)}\b")
+    return any(pat.match(raw.strip()) for raw in frag.splitlines())
 
 req_y = re.compile(r"^CONFIG_([A-Z0-9_]+)=y\b")
 req_n = re.compile(r"^# CONFIG_([A-Z0-9_]+) is not set")
@@ -320,7 +377,7 @@ PY
 }
 
 build_init_and_cpio() {
-    local gcc="$CROSS_COMPILE-gcc" strip="$CROSS_COMPILE-strip" spec tmp
+    local gcc="${CROSS_COMPILE}gcc" strip="${CROSS_COMPILE}strip" spec tmp
     echo "linux-build: static musl /init" >&2
     "$gcc" -static -Os -std=c11 -Wall -Werror -o "$ARTIFACTS/init" "$SERVER_C"
     "$strip" "$ARTIFACTS/init"
