@@ -197,9 +197,11 @@ boot, not a skip):
 - pcap missing or empty
 - any of ARP / SYN/ACK / HTTP / pure ACK / client FIN missing
 - SYN/ACK before ARP, HTTP before SYN/ACK, ACK or FIN before HTTP
-- for `system=whimbrel`: HTTP `tcp.len` ≠ 92 (the committed body).
-  Other systems record the same columns without the length pin —
-  their body is not 92 B.
+- HTTP `tcp.len` ≠ 92 (the committed 92-byte response). The Linux
+  baseline serves the byte-identical response (D-0062 amendment),
+  so the pin holds for every current system. A future system that
+  legitimately serves different bytes gets its own stated pin,
+  never a silent skip.
 - for `system=whimbrel`: `d_fin_ns` ≥ 10 ms (D-0070 falsify line,
   now a harness invariant). Linux / Unikraft record `d_fin_ns`
   without that tripwire; a large value there is data.
@@ -353,6 +355,85 @@ and, if it is printed at all, labels it control.
 definition (client FIN − HTTP frame) on both rows, never derived
 from E3w. If a system's pcap shape does not have that FIN, the
 cell is empty, not guessed.
+
+## Bench-host spec (D-0062 / T4.8): `just linux-build` — implement there, not in this tree
+
+Approved. The cloud pod has neither the disk nor the toolchain for
+a buildroot build; the recipe runs on the dedicated host only and
+never inside a batch. This section is the interface, same pattern
+as D-0067 / D-0071.
+
+### Inputs (committed under `bench/linux/`)
+
+- `PIN` — buildroot point release, tarball sha256, and the kernel
+  version that release pins. Committed before any build output is
+  used (D-0062 amendment); the recipe verifies, it never records.
+- `buildroot.fragment` — BR2 options on top of
+  `qemu_riscv64_virt_defconfig` (musl toolchain, no busybox, no
+  rootfs images).
+- `linux-trimmed.fragment` — the kernel-config trim, one delta per
+  line, each commented.
+- `server.c` — `/init`.
+- `initramfs.spec` — `gen_init_cpio` file list (deterministic:
+  fixed mtime/uid/gid; `/init` plus `dev/console` c 5 1).
+
+### Steps
+
+1. Preflight, fail closed: bench host only, ≥ 35 GB free, host
+   gcc/make present, network reachable. cpufreq boost stays off —
+   a slower build is not worth toggling measurement discipline.
+2. Download the pinned buildroot tarball; sha256 must match `PIN`.
+   No trust-on-first-use inside the recipe: the recorded hash comes
+   from the pin commit.
+3. Buildroot tree (stock): `qemu_riscv64_virt_defconfig` +
+   `buildroot.fragment`, **no kernel fragment**. Builds the
+   toolchain and the stock-config kernel → `Image-stock`. Record
+   which kernel config the pinned board uses; that config *is* the
+   stock row's definition. If it ships virtio-net as `=m`, the
+   one-line `=y` fragment is applied and the row is labeled
+   "stock + virtio built-in" (D-0062 plan caveat).
+4. Trimmed kernel from the same pinned kernel source, out-of-tree
+   `O=` build with the tree's SDK cross-toolchain,
+   `linux-trimmed.fragment` merged via `merge_config.sh` →
+   `Image-trimmed`. **Fail on any merge override/redundancy warning
+   not annotated in the fragment** — a symbol kconfig re-enables
+   through dependencies is recorded in a fragment comment, never
+   silently accepted. One buildroot tree plus one kernel build dir,
+   not two buildroot trees.
+5. `server.c` → static musl binary with the SDK toolchain; strip.
+6. Build `usr/gen_init_cpio` from the kernel tree; assemble
+   `rootfs.cpio` from `initramfs.spec`. Uncompressed.
+7. Emit `bench/linux/MANIFEST` (committed): sha256 of
+   `Image-stock`, `Image-trimmed`, `rootfs.cpio`, and the `/init`
+   binary, plus the exact `-append` strings:
+   - quiet: `console=ttyS0 quiet loglevel=0 rdinit=/init`
+   - instrumented: `console=ttyS0 loglevel=7 printk.time=1
+     initcall_debug rdinit=/init`
+   The artifacts themselves are not committed (size); the MANIFEST
+   is.
+
+### Campaign-time rules
+
+- The harness verifies MANIFEST sha256s before a batch and fails
+  closed on mismatch. No rebuild inside a batch, ever — the
+  Whimbrel analogue: build once per campaign, hash, verify.
+- `runs.csv` `kernel_sha256` for Linux rows is the booted `Image`
+  sha. The cpio sha and the `-append` string go in the batch header
+  (`summary.txt`), like `s_ns`.
+- Trial-time harness deltas (per-system argv/append/timeouts,
+  per-system PHASE-line policy, the uniform client recv timeout,
+  the SYN-grid and RST gates, the trimmed-vs-stock tripwire at
+  summarize time — all pre-registered in the D-0062 amendment) are
+  their own spec block, added with the gates step. They are not
+  part of `linux-build`.
+
+### Budget
+
+Cold: toolchain ~30–60 min on this host (boost off), each kernel
+~5–15 min; ~25 GB for the buildroot tree, ~4 GB for the trimmed
+kernel build dir, 1–2 GB of tarball cache. Warm fragment
+iterations are minutes. Nothing about batches changes to
+accommodate the build; it is not on any measured path.
 
 ## `runs.csv` — one row per trial
 
