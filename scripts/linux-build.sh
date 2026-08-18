@@ -286,7 +286,7 @@ build_trimmed_linux() {
         cat "$BUILD/merge_config.out" >&2
         die "merge_config.sh failed for trimmed kernel"
     }
-    check_merge_warnings "$BUILD/merge_config.out" "$FRAG_TRIM"
+    check_merge_warnings "$FRAG_TRIM" "$BUILD/merge_config.out"
     # Gate block 3 before compiling: a dependency re-enable is a fragment
     # annotation, not a 20-minute surprise after Image.
     cp -a "$TRIM_O/.config" "$BUILD/trimmed.config"
@@ -307,37 +307,19 @@ build_trimmed_linux() {
 }
 
 check_merge_warnings() {
-    local log="$1" frag="$2" line cfg
-    while IFS= read -r line; do
-        case "$line" in
-            *" is redefined by fragment "*|*" is redundant by fragment "*)
-                cfg="$(sed -n 's/^Value of \(CONFIG_[A-Z0-9_]*\) is .*/\1/p' <<<"$line")"
-                [[ -n "$cfg" ]] || die "unparseable merge warning: $line"
-                if ! python3 - "$frag" "$cfg" <<'PY'
-import re
-import sys
-from pathlib import Path
-frag = Path(sys.argv[1]).read_text()
-sym = sys.argv[2]
-bare = sym[len("CONFIG_"):] if sym.startswith("CONFIG_") else sym
-unset = f"# {sym} is not set"
-for raw in frag.splitlines():
-    s = raw.strip()
-    if not s:
-        continue
-    if s.startswith(unset):
-        continue
-    if s.startswith("#") and re.search(rf"\b{re.escape(bare)}\b", s):
-        sys.exit(0)
-sys.exit(1)
-PY
-                then
-                    die "merge override not annotated: $line"
-                fi
-                echo "linux-build: annotated merge warning: $line" >&2
-                ;;
-        esac
-    done < "$log"
+    # Was: any "redefined by fragment" / "redundant by fragment" line
+    # aborted unless a fragment comment contained the bare symbol
+    # name. Intent notes counted (`# FTRACE:`), so thirty trim lines
+    # "passed as annotated" and RTC_CLASS (note said `RTC:`) did not.
+    # That conflates the fragment doing its job with kconfig refusing
+    # the request.
+    #
+    # Now: redefined/redundant are informational. "not in final
+    # .config" where the symbol survived requires `# merge-override
+    # SYM:` or abort (scripts/linux-merge-warnings.py).
+    local frag="$1" log="$2"
+    python3 "$ROOT/scripts/linux-merge-warnings.py" "$frag" "$log" \
+        || die "merge_config.sh reported an unannotated value that did not stick"
 }
 
 requested_vs_final() {
@@ -549,6 +531,8 @@ EOF
 }
 
 main() {
+    python3 "$ROOT/scripts/linux-merge-warnings.py" selftest \
+        || die "linux-merge-warnings selftest failed"
     load_pin
     preflight
     download_and_verify

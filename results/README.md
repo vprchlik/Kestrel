@@ -411,14 +411,16 @@ as D-0067 / D-0071.
 4. Trimmed kernel from the same pinned kernel source, out-of-tree
    `O=` build with the tree's SDK cross-toolchain,
    `linux-trimmed.fragment` merged via `merge_config.sh` →
-   `Image-trimmed`. **Fail on any merge override/redundancy warning
-   not annotated in the fragment** — a symbol kconfig re-enables
-   through dependencies is recorded in a fragment comment, never
-   silently accepted. One buildroot tree plus one kernel build dir,
-   not two buildroot trees. D-0073: reuse is gated on a sha256
-   stamp of the fragment, not merely on `Image-trimmed` existing.
-   After D-0073, stock hash must still be the T4.8 pin and
-   trimmed hash must have moved (see T4.8b spec).
+   `Image-trimmed`. **Fail on "Value requested for … not in final
+   .config" when the symbol survived**, unless the fragment has
+   `# merge-override SYM:` — kconfig re-enabled it. **"Redefined
+   by fragment" is informational** (the fragment is doing its
+   job) and does not require annotation. One buildroot tree plus
+   one kernel build dir, not two buildroot trees. D-0073: reuse
+   is gated on a sha256 stamp of the fragment, not merely on
+   `Image-trimmed` existing. After D-0073, stock hash must still
+   be the T4.8 pin and trimmed hash must have moved (see T4.8b
+   spec).
 5. `server.c` → static musl binary with the SDK toolchain; strip.
 6. Build `usr/gen_init_cpio` from the kernel tree; assemble
    `rootfs.cpio` from `initramfs.spec`. Uncompressed.
@@ -439,15 +441,32 @@ what the fragment intended. The recipe prints, in order:
 1. **Pin echo:** buildroot release, tarball sha256 with `verified
    OK` against `PIN`, and the kernel version the tree pins.
 2. **Raw `merge_config.sh` output** for the trimmed build,
-   unfiltered.
+   unfiltered. `linux-build` classifies that log:
+   - `Value of CONFIG_X is redefined by fragment` (and
+     `redundant by fragment`) — informational. The fragment
+     changed (or restated) stock. Every trim line that does work
+     emits this. No annotation.
+   - `Value requested for CONFIG_X not in final .config` —
+     after alldefconfig, requested ≠ actual. If the symbol
+     survived (`=y` / `=m` / a value), abort unless
+     `# merge-override SYM:`. If the request was unset and
+     actual is empty, the menu vanished: successful unset, not
+     a survival.
+   Intent notes (`# FTRACE:`) are not merge-overrides. That was
+   the old gate: thirty redefined lines "passed as annotated"
+   because the note happened to contain the symbol name;
+   `RTC_CLASS` (note said `RTC:`) failed closed on a false
+   positive.
 3. **Requested-vs-final table:** every line of
    `linux-trimmed.fragment` against the trimmed final `.config` —
    `CONFIG_X: requested y, final y` / `requested unset, final
    unset` — with per-line PASS/FAIL. Any FAIL whose symbol is not
-   annotated in the fragment (a dependency re-enable recorded in a
-   comment) aborts the build:
+   a `# merge-override SYM:` line (a dependency re-enable) aborts
+   the build:
    `TEST FAIL: merge override not annotated: CONFIG_X requested
-   unset, final y`.
+   unset, final y`. This is the same survival rule as the
+   merge_config "not in final .config" classifier, applied to
+   the final `.config` directly.
 4. **Config diff summary:** the kernel tree's `scripts/diffconfig`
    between the stock final `.config` and the trimmed final
    `.config` — the complete end-to-end delta, intended trims plus
@@ -906,7 +925,7 @@ not 222.6 ms on the nose.
 `bench/linux/linux-trimmed.fragment` D-0073 section. Parents
 only (`NETWORK_FILESYSTEMS`, `USB_SUPPORT`, `SOUND`, `MMC`,
 `RTC_CLASS`, …). Do not also unset children in the fragment
-(merge_config "redundant by fragment" is FAIL unless annotated).
+(noise, and merge_config `grep -w` can match a parent prefix).
 `linux-build` block 3b still asserts the children are not y.
 
 Keeps: `SERIAL_8250`, `SERIAL_OF_PLATFORM`, virtio-mmio/net,

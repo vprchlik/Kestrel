@@ -3502,6 +3502,30 @@ D-0011 onward are working decisions made under those constraints.
   retarget the T4.8 exhibit to a new window.
 - Revisit when T4.8b numbers exist, or if a merge-override forces
   a fragment annotation (ACPI/HID are the likely stickers).
+- **Amendment (2026-08-18 — merge_config gate split):** T4.8b
+  `linux-build` failed closed on `CONFIG_RTC_CLASS` with
+  `Value of CONFIG_RTC_CLASS is redefined by fragment`. That
+  message means the fragment overrode stock — which is what
+  every trim line does. The gate treated it like a dependency
+  refusal and required a comment containing the bare symbol
+  name. Intent notes counted, so thirty other redefined lines
+  passed; `RTC_CLASS` (note said `RTC:`) did not. WATCHDOG
+  would have been next.
+
+  Was: `check_merge_warnings` aborted on `redefined by
+  fragment` / `redundant by fragment` unless some `# …`
+  comment matched `\bSYM\b` (the unset line itself skipped).
+  `not in final .config` was ignored here; `requested_vs_final`
+  was the only survival check.
+
+  Now: redefined/redundant are informational.
+  `not in final .config` where the symbol survived requires
+  `# merge-override SYM:` or abort. Vanished-after-unset
+  (requested unset, actual empty) is success. Intent notes are
+  not overrides. Classifier: `scripts/linux-merge-warnings.py`
+  (selftest covers the RTC_CLASS false positive). The
+  `RTC_CLASS` intent note now names `RTC_CLASS`; that is
+  readability, not the gate.
 
 
 

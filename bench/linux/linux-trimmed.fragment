@@ -9,8 +9,12 @@
 #
 # A symbol kconfig re-enables through a dependency is recorded as:
 #   # merge-override SYM: <why it came back>
-# The recipe fails closed on an unannotated requested-vs-final FAIL.
-# "aggressive; re-enable candidate" is intent, not an override.
+# merge_config.sh "redefined by fragment" is the fragment doing its
+# job; linux-build prints it and does not require annotation.
+# "Value requested for … not in final .config" after alldefconfig
+# is the silent-trim-failure case: annotate or the recipe aborts.
+# requested-vs-final is the same rule on the final .config.
+# Intent notes (`# FTRACE:`) are not merge-overrides.
 
 # EXPERT: unhides BLOCK, PROC_FS, SYSFS, KALLSYMS, NAMESPACES
 # (bool … if EXPERT, default y). Without it those unsets are
@@ -121,8 +125,8 @@ CONFIG_FUTEX=y
 # UNIX98_PTYS: EXPERT-gated default y (unlike FTRACE). EXPERT is already
 # on. pty_init was 33.8 ms UART-inflated on the diagnostic boot.
 # CONFIG_UNIX98_PTYS is not set
-# RTC: goldfish_rtc registered as rtc0 and set the wall clock. /init
-# uses CLOCK_MONOTONIC (riscv clocksource), not rtc0.
+# RTC_CLASS: goldfish_rtc registered as rtc0 and set the wall clock.
+# /init uses CLOCK_MONOTONIC (riscv clocksource), not rtc0.
 # CONFIG_RTC_CLASS is not set
 # WATCHDOG: watchdog_init was 8.0 ms UART-inflated. No watchdog userspace.
 # CONFIG_WATCHDOG is not set

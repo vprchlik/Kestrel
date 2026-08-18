@@ -782,8 +782,14 @@ d0070-pcap-pass-selftest:
 # plus D-0073 3b. Reuse of Image-trimmed is fragment-stamp gated.
 # Stock hash must stay the T4.8 pin; trimmed must move. Never
 # inside a batch. T4.8b runs this before just bench-t48.
+# merge_config "redefined by fragment" is informational;
+# "not in final .config" survival needs merge-override.
 linux-build:
+    python3 scripts/linux-merge-warnings.py selftest
     bash scripts/linux-build.sh
+
+linux-merge-warnings-selftest:
+    python3 scripts/linux-merge-warnings.py selftest
 
 # Linux boot gate: MANIFEST hashes, READY (CRLF-tolerant), 92-byte
 # on-wire RESP / pcap HTTP, SYN-grid, no RST, QEMU exit 0.
