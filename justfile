@@ -768,6 +768,11 @@ d0070-pcap-pass:
 d0070-pcap-pass-selftest:
     python3 scripts/d0070-pcap-pass.py selftest
 
+# T4.8 / D-0062: pin, fetch, and build Linux baseline artifacts on the
+# dedicated host. Prints five verification blocks. Never inside a batch.
+linux-build:
+    bash scripts/linux-build.sh
+
 # Disassemble the kernel (extra flags as one quoted arg).
 objdump flags="-d": build
     cargo objdump -- {{flags}}

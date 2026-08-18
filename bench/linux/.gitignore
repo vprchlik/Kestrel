@@ -1,3 +1,5 @@
 # Build outputs live here on the bench host; only MANIFEST is
 # committed (sha256s + cmdlines), never the multi-MB artifacts.
 artifacts/
+dl/
+build/
