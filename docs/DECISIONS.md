@@ -2439,7 +2439,9 @@ D-0011 onward are working decisions made under those constraints.
   exhibit says so.
 
 ## D-0062: Linux baseline — buildroot, /init-is-the-server, two rows
-- Date: 2026-08-16 — Status: accepted
+- Date: 2026-08-16 — Status: accepted; amended 2026-08-18 (T4.8
+  pins, approved sign-offs, and pre-registered gates — amendment at
+  the end of this entry)
 - **Decision:** buildroot at a pinned release, sha-recorded.
   `qemu_riscv64_virt_defconfig` base; kernel config trimmed toward
   tinyconfig keeping serial console, virtio-mmio + virtio-net, IPv4 TCP,
@@ -2482,6 +2484,99 @@ D-0011 onward are working decisions made under those constraints.
   fragment, `server.c`, and a build script with pinned tarball hash;
   D-0030's reservation-vs-working-set caveat attaches to the memory
   exhibit. The build is host-heavy but mechanical and cached.
+- **Amendment (2026-08-18 — T4.8 implementation pins and
+  pre-registrations; all six sign-off items approved):**
+  1. **Pin protocol.** Buildroot 2026.02 LTS. The exact point
+     release, tarball sha256, and the kernel version that release
+     pins are committed to `bench/linux/PIN` and echoed into this
+     entry *before* any build output is used. No artifact from an
+     unpinned tree is ever measured.
+  2. **One instrumented cmdline, not a second config.**
+     `printk.time=1` on the kernel cmdline replaces
+     `CONFIG_PRINTK_TIME`; the instrumented arm is the same trimmed
+     `Image` with `console=ttyS0 loglevel=7 printk.time=1
+     initcall_debug rdinit=/init`. The quiet-vs-instrumented delta
+     is therefore pure observer cost on one binary.
+  3. **External `-initrd` for both Linux rows** (uncompressed cpio).
+     Embedding would be a kernel-config delta on the stock row,
+     which would stop it being stock. Whimbrel has no `-initrd`;
+     stated necessary difference; the load lands in S (D-0071).
+  4. **`csum=off` (and the TSO family off) on the shared
+     virtio-net-device args for the cross-system campaign.**
+     Neutralizes checksum-offload pcap corruption. A no-op for
+     Whimbrel, which never negotiates those features; Whimbrel arms
+     are re-measured inside the same campaign, and the T4.6 ladder
+     pins stay on their recorded objects and old argv.
+  5. **The 92-byte HTTP-length pin applies to Linux rows too** —
+     the response is byte-identical by construction. The D-0071
+     spec line saying other systems' bodies "are not 92 B" is
+     corrected in `results/README.md`.
+  6. **Uniform client recv timeout**, tied to the trial timeout and
+     identical for every system: the hardcoded 2 s recv timeout
+     cannot measure a guest slower than ~2 s to first byte. Not a
+     per-system knob. Bench host implements with the other harness
+     deltas.
+  7. **Five arms, one campaign, interleaved:** whimbrel-fast,
+     whimbrel-safe, linux-trimmed, linux-stock,
+     linux-trimmed-instrumented; two shuffled batches × 30 recorded
+     + 3 warmup per arm; stability criterion per arm.
+  8. **Announce mechanism (confound A fix):** after ifup, `/init`
+     sends one UDP datagram toward 10.0.2.2 — the kernel's ARP
+     request for the gateway becomes the guest's first wire TX,
+     the same first-TX shape as Whimbrel's D-0046 gateway ARP, and
+     slirp learns the guest MAC and flushes the queued hostfwd SYN
+     right then. Chosen over an AF_PACKET gratuitous ARP so
+     `CONFIG_PACKET` stays out of the trim.
+  9. **`/init` ordering (confound B fix):** socket → bind → listen
+     **before** ifup and the announce, so a SYN flushed at first TX
+     meets LISTEN and never a pre-listen RST.
+  10. **Serve-once-then-poweroff:** one accepted connection, one
+      read, the 92 bytes, close, `reboot(RB_POWER_OFF)` — QEMU
+      exits and the trial ends the way a Whimbrel trial does.
+  11. **`/init` stamps are captured in memory and dumped after
+      close** (D-0068 discipline). Correction to the planning chat:
+      `loglevel=0` gates printk, not userspace writes to
+      `/dev/console` — a mid-boot stamp print would be real UART
+      cost on the measured path. Only the 6-byte `READY` marker is
+      written before the response.
+- **Pre-registered gates (responses stated before any number
+  exists; same shape as the stability criterion):**
+  1. **SYN-grid gate (confound A).** Per Linux trial, warmup
+     included, from the pcap: t(first SYN into the guest) −
+     t(guest first TX) < 1 ms. **One gridded trial fails the
+     batch** — not reported as a fraction: a batch with 10% gridded
+     trials has a clean-looking median and a poisoned mean, and
+     bimodal contamination must not hide behind a median. Response
+     when fired: the announce TX is not doing its job, or slirp's
+     retransmit behavior changed — diagnose in the pcap (is the
+     announce present? did the SYN snap to a ≥1 s retransmit grid?)
+     before any rerun. No Linux row publishes from a batch with a
+     gridded trial.
+  2. **RST gate (confound B).** Any RST in any Linux trial pcap
+     fails the run. Response: `/init` ordering regression or an
+     unexpected early connection; diagnose, fix, rerun.
+  3. **Trimmed-vs-stock tripwire, as a real gate.** At summarize
+     time, per batch: if median E0→E4(trimmed) ≥ median
+     E0→E4(stock) in either batch, the trim removed something
+     load-bearing (enabled a slow fallback path rather than
+     removing a feature). The trimmed row is **not published**.
+     Response: diagnose with the instrumented arm (initcall/printk
+     diff against one stock instrumented boot), amend the fragment
+     — or record the surprising truth with its diagnosis attached —
+     and rerun the campaign. The stock row may publish alone in the
+     interim; it is the untouched reference.
+  4. **First-connect control** (D-0071 spec): every arm within
+     1 ms; a miss fails the run. If it fires because a QEMU version
+     reordered image load ahead of netdev init, that is a finding
+     about the control — diagnose with the D-0071 pcap-write poll
+     before accepting any run or widening the bound.
+- **Orientation ranges (padded per D-0069; not falsifiers — the
+  gates above are the falsifiers):** trimmed E0→E4 0.3–5 s; stock
+  2–20 s; first-connect 18.5 ± 1 ms on every arm; Linux `d_fin_ns`
+  sub-ms, same order as Whimbrel's 63–155 µs.
+- Build execution: `just linux-build` is a bench-host spec
+  (`results/README.md`), same pattern as D-0067/D-0071 — the cloud
+  pod has neither the disk nor the toolchain for buildroot.
 
 ## D-0063: Unikraft spike — go/no-go and the no-core-patches line
 - Date: 2026-08-16 — Status: accepted
