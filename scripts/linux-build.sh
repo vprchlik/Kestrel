@@ -408,14 +408,46 @@ for line in cfg.splitlines():
         final[m.group(1)] = "unset"
 
 # D-0073: these must not be y. Absent/unset is a pass (menu vanished).
+# Parents we unset plus transport/core/lib layers that sit under a
+# different menu (NET_9P vs 9P_FS, DNS_RESOLVER vs NFS, NLS vs FAT,
+# MTD vs MTD_BLOCK, DAX vs PMEM, IP_PNP vs ROOT_NFS). Children of
+# those parents are listed so a split cannot hide. Do not also
+# put the children in the fragment (redundant-by-fragment).
 must_not_be_y = (
     "FTRACE",
     "NETWORK_FILESYSTEMS",
     "NFS_FS",
+    "NFS_V3",
+    "NFS_V4",
+    "NFS_COMMON",
+    "NFSD",
+    "LOCKD",
+    "GRACE_PERIOD",
+    "SUNRPC",
+    "SUNRPC_GSS",
+    "RPCSEC_GSS_KRB5",
+    "EXPORTFS",
+    "PNFS_FILE_LAYOUT",
+    "PNFS_FLEXFILE_LAYOUT",
+    "ROOT_NFS",
     "NET_9P",
+    "NET_9P_FD",
+    "NET_9P_VIRTIO",
     "9P_FS",
+    "NETFS_SUPPORT",
+    "FSCACHE",
+    "CACHEFILES",
+    "DNS_RESOLVER",
+    "NET_HANDSHAKE",
+    "CEPH_LIB",
+    "IP_PNP",
+    "IP_PNP_DHCP",
+    "IP_PNP_BOOTP",
+    "IP_PNP_RARP",
     "USB_SUPPORT",
     "USB",
+    "USB_COMMON",
+    "USB_GADGET",
     "SOUND",
     "SND",
     "MMC",
@@ -432,6 +464,18 @@ must_not_be_y = (
     "RTC_CLASS",
     "RTC_DRV_GOLDFISH",
     "WATCHDOG",
+    "NLS",
+    "NLS_CODEPAGE_437",
+    "NLS_ISO8859_1",
+    "MTD",
+    "MTD_BLOCK",
+    "MTD_CFI",
+    "MTD_SPI_NOR",
+    "DAX",
+    "DEV_DAX",
+    "FS_DAX",
+    "LIBNVDIMM",
+    "BLK_DEV_PMEM",
 )
 print("===== 3b. D-0073 leftovers must not be y =====")
 failed = []

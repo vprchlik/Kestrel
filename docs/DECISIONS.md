@@ -3414,7 +3414,14 @@ D-0011 onward are working decisions made under those constraints.
   Non-EXPERT (the FTRACE class):
   - `FTRACE` — the named miss (`menuconfig`, `default y if
     DEBUG_KERNEL`)
-  - `NETWORK_FILESYSTEMS` — parent of NFS / 9p / SUNRPC
+  - `NETWORK_FILESYSTEMS` — parent of NFS / 9P_FS / SUNRPC;
+    not the parent of `NET_9P` (see amendment)
+  - `NET_9P` — 9p transport under `NET` (T4.8b 3b miss)
+  - `DNS_RESOLVER` — NFS v4 leftover; prompt under networking
+  - `NLS` — FAT/ISO leftover; Native language support menu
+  - `MTD` — `MTD_BLOCK` leftover; MTD core
+  - `DAX` — PMEM leftover; direct-access menu
+  - `IP_PNP` — NFS-root leftover; `/init` does `SIOCSIFADDR`
   - `USB_SUPPORT` — USB / usbhid
   - `SOUND` — ALSA ("No soundcards found.")
   - `MMC` — SDHCI
@@ -3547,6 +3554,43 @@ D-0011 onward are working decisions made under those constraints.
   virtio / IPv4 TCP / initramfs / `DEVTMPFS` / `FUTEX` are y
   on the final `.config`. Selftest covers all three cases plus
   the keeps check.
+- **Amendment (2026-08-18 — split leftovers):** T4.8b block 3
+  was clean; block 3b caught `CONFIG_NET_9P: final y`. Unsetting
+  `NETWORK_FILESYSTEMS` removed `9P_FS` (sourced under that
+  `if` in `fs/Kconfig`) but not `NET_9P` (`menuconfig` in
+  `net/9p/Kconfig`, sourced from `net/Kconfig` next to
+  wireless). The filesystem is gone; its protocol layer is
+  still built in. `p9_virtio_init` was 31 µs on the D-0072
+  boot. Fragment unsets `NET_9P` with a note naming the split.
+  Children (`NET_9P_FD`, `NET_9P_VIRTIO`) stay out of the
+  fragment; 3b still requires they are not y.
+
+  Same shape, walked from the T4.8 Image initcalls + riscv
+  `defconfig` + Linux 6.18 Kconfig (this pod has no
+  post-rebuild `trimmed.config`). Fragment unsets the
+  other-parent survivor; 3b lists both sides:
+
+  - `DNS_RESOLVER` — NFS v4 `select`s it; prompt is under
+    networking options, not the network-filesystems menu.
+    T4.8 hole started here.
+  - `NLS` — FAT/ISO live under `if BLOCK`; USB `select`s
+    the NLS core. Native language support is a different
+    parent (`fs/nls/Kconfig`). T4.8: `init_nls_cp437`.
+  - `MTD` — `MTD_BLOCK` depends on `BLOCK`; the MTD core
+    does not. T4.8: `init_mtd`, `spi_nor`, CFI.
+  - `DAX` — `LIBNVDIMM` depends on `BLK_DEV` (gone with
+    `BLOCK`); `menuconfig DAX` is a different menu and the
+    prompt keeps it y. T4.8: `dax_core_init`.
+  - `IP_PNP` — kernel IP autoconfig exists to serve NFS
+    root / diskless boot (`ROOT_NFS depends on IP_PNP`).
+    The prompt sits under IPv4. `/init` does `SIOCSIFADDR`.
+    T4.8: `ip_auto_config`.
+
+  `SUNRPC` is sourced *inside* `if NETWORK_FILESYSTEMS`, so
+  it should already have vanished; 3b lists it so a future
+  split cannot hide. Do not unset `FAILOVER` /
+  `NET_FAILOVER` (`VIRTIO_NET` `select`s it). Do not unset
+  `KEYS` or `FILE_LOCKING`.
 
 
 

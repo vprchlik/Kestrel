@@ -480,8 +480,8 @@ what the fragment intended. The recipe prints, in order:
    unset, final y`. This is case 1 on the fragment lines (a
    symbol we asked to unset that came back). Dependent drops of
    symbols we never named are not this table.
-3b. **D-0073 leftovers must not be y** (FTRACE, NFS, USB, …).
-   Absent/unset is a pass.
+3b. **D-0073 leftovers must not be y** (FTRACE, NFS, NET_9P, USB,
+    NLS, MTD, DAX, IP_PNP, …). Absent/unset is a pass.
 3c. **D-0062 keeps must be y** on the final `.config`: serial
    (`TTY`, `SERIAL_8250`, `SERIAL_8250_CONSOLE`,
    `SERIAL_OF_PLATFORM`, `PRINTK`), virtio-mmio/net
@@ -946,10 +946,16 @@ not 222.6 ms on the nose.
 ### Fragment (already in tree)
 
 `bench/linux/linux-trimmed.fragment` D-0073 section. Parents
-only (`NETWORK_FILESYSTEMS`, `USB_SUPPORT`, `SOUND`, `MMC`,
+only (`NETWORK_FILESYSTEMS`, `NET_9P`, `DNS_RESOLVER`, `NLS`,
+`MTD`, `DAX`, `IP_PNP`, `USB_SUPPORT`, `SOUND`, `MMC`,
 `RTC_CLASS`, …). Do not also unset children in the fragment
 (noise, and merge_config `grep -w` can match a parent prefix).
 `linux-build` block 3b still asserts the children are not y.
+`NET_9P` is not a child of `NETWORK_FILESYSTEMS` — 9p has a
+filesystem under that menu and a transport under `NET`; T4.8b
+block 3b caught the transport still y after the fs menu
+dropped. Same split: `DNS_RESOLVER`, `NLS`, `MTD`, `DAX`,
+`IP_PNP`.
 
 Keeps: `SERIAL_8250`, `SERIAL_OF_PLATFORM`, virtio-mmio/net,
 IPv4 TCP, initramfs, `DEVTMPFS`, `FUTEX`, `MODULES=y`,
@@ -993,8 +999,9 @@ arbiter. If a T4.8-printk leftover is still y and unused by
 `just bench-t48`. Finding leftovers one N-trial later is the
 thing this pass exists to avoid.
 
-Grep at least: `FTRACE`, `NFS`, `9P`, `USB`, `SOUND`/`SND`,
-`MMC`/`SDHCI`, `MOUSEDEV`, `HUGETLB`, `AUDIT`, `SUNRPC`,
+Grep at least: `FTRACE`, `NFS`, `9P`, `NET_9P`, `SUNRPC`,
+`DNS_RESOLVER`, `NLS`, `MTD`, `DAX`, `IP_PNP`, `USB`,
+`SOUND`/`SND`, `MMC`/`SDHCI`, `MOUSEDEV`, `HUGETLB`, `AUDIT`,
 `ACPI`, `PNP`, `RTC`, `WATCHDOG`, `BPF_SYSCALL`. The deferred
 list in the fragment (VT, DEBUG_FS, FB, PINCTRL, I2C/SPI/GPIO,
 thermal, cpuidle, LSM) is named, not forgotten: unset in this
@@ -1039,8 +1046,10 @@ labeling, not a retarget of the T4.8 exhibit.
 ### What this pod already did
 
 Fragment + `linux-build` reuse/hash gates + D-0073 + this spec
-+ the T4.8 exhibit frozen as the before. No Image, no T4.8b
-CSV, no MANIFEST rewrite.
++ the T4.8 exhibit frozen as the before. Split leftovers
+(`NET_9P`, `DNS_RESOLVER`, `NLS`, `MTD`, `DAX`, `IP_PNP`) are
+in the fragment; 3b lists the other-parent children. No Image,
+no T4.8b CSV, no MANIFEST rewrite.
 
 ## `runs.csv` — one row per trial
 

@@ -101,8 +101,33 @@ CONFIG_FUTEX=y
 # FTRACE: menuconfig Tracers; defaults y if DEBUG_KERNEL; not EXPERT.
 # D-0072 named trace_eval_sync as 68% of the 327 ms hole. Missed trim.
 # CONFIG_FTRACE is not set
-# NETWORK_FILESYSTEMS: parent of NFS / 9p / SUNRPC (T4.8 printk + RPC).
+# NETWORK_FILESYSTEMS: NFS / 9P_FS / SUNRPC menu. Does not cover
+# the 9p transport (that is NET_9P, under NET).
 # CONFIG_NETWORK_FILESYSTEMS is not set
+# NET_9P: 9p has a filesystem under the network-filesystems menu
+# and a 9P2000 transport under networking. Killing the fs menu
+# does not kill the transport. T4.8: "9pnet: Installing 9P2000
+# support"; p9_virtio_init / p9_trans_fd_init.
+# CONFIG_NET_9P is not set
+# DNS_RESOLVER: NFS v4 selected it; the prompt sits under
+# networking options, not the network-filesystems menu. T4.8 hole
+# started at "Key type dns_resolver registered".
+# CONFIG_DNS_RESOLVER is not set
+# NLS: FAT/ISO went with BLOCK; USB (which selected the NLS
+# core) went with USB_SUPPORT. Native language support is a
+# different parent; the prompt keeps it y. T4.8: init_nls_cp437.
+# CONFIG_NLS is not set
+# MTD: MTD_BLOCK went with BLOCK; the MTD core does not.
+# CONFIG_MTD is not set
+# DAX: PMEM/NVDIMM went with BLOCK (LIBNVDIMM depends on
+# BLK_DEV). Direct-access is a different menu; the prompt
+# keeps it y. T4.8: dax_core_init.
+# CONFIG_DAX is not set
+# IP_PNP: kernel IP autoconfig exists to serve NFS root /
+# diskless boot. ROOT_NFS went with the network-filesystems
+# menu; this prompt sits under IPv4. /init does SIOCSIFADDR
+# itself. T4.8: ip_auto_config.
+# CONFIG_IP_PNP is not set
 # USB_SUPPORT: host USB / usbhid. No USB on this virt path.
 # CONFIG_USB_SUPPORT is not set
 # SOUND: ALSA. T4.8: "No soundcards found."
