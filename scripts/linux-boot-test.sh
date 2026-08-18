@@ -2,13 +2,15 @@
 # Linux boot gate (D-0062 / T4.8). Fail-closed if artifacts / MANIFEST
 # are missing — never a skip.
 #
-# curl starts before QEMU so slirp has a queued hostfwd SYN when
-# /init's first wire TX flushes it (SYN-grid / confound A). Waiting
-# for serial READY and then spawning curl is D-0043 harness wait:
-# t(SYN) then trails t(TX) by UART+grep+spawn and the 1 ms gate fails.
-# ttyS0 emits READY\r\n; the serial pin is CRLF-tolerant. curl -o is
-# the 9-byte entity (Content-Length: 9); the 92-byte pin is the on-wire
-# RESP / pcap HTTP_FILTER (pcap_http.HTTP_LEN).
+# HTTP client is bench-client.py, started before QEMU, so slirp has a
+# queued hostfwd SYN when /init's first wire TX flushes it (SYN-grid /
+# confound A). curl-after-READY is D-0043 harness wait and misses the
+# 1 ms gate. curl-retry-before-listen was tried: the guest reached
+# READY and blocked in accept() — curl's connect did not produce a
+# flushable SYN. ttyS0 emits READY\r\n; the serial pin is
+# CRLF-tolerant. curl -o would be the 9-byte entity (Content-Length:
+# 9); the 92-byte pin is the on-wire RESP (client body_ok) /
+# pcap HTTP_FILTER (pcap_http.HTTP_LEN).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -53,41 +55,34 @@ need "$CPIO"
 need "$INIT"
 [[ -f "$MANIFEST" ]] || die "linux artifact missing: $MANIFEST"
 
-append_quiet="$(awk '$1=="append_quiet" { $1=""; sub(/^ /,""); print; exit }' "$MANIFEST")"
-[[ -n "$append_quiet" ]] || die "MANIFEST missing append_quiet"
+append_quiet="$(awk '$1=="append" && $2=="quiet" { $1=$2=""; sub(/^ */,""); print; exit }' "$MANIFEST")"
+[[ -n "$append_quiet" ]] || die "MANIFEST missing append quiet"
 
 # shellcheck disable=SC1091
 source "$ROOT/scripts/qemu-args.sh"
 PCAP="$WORKDIR/linux-boot.pcap"
 SERIAL="$WORKDIR/serial.log"
-HTTP_HDR="$WORKDIR/http.hdr"
-HTTP_BODY="$WORKDIR/http.body"
-HTTP_STATUS="$WORKDIR/http.status"
+CLIENT_OUT="$WORKDIR/client.json"
+CLIENT_READY="$WORKDIR/client.ready"
 qemu_args_fill "$PCAP" "$PORT"
 
-# One successful connect, no --retry after that: extra SYNs after
-# serve-once would RST. Retry only curl's "failed to connect" (7)
-# while QEMU has not bound hostfwd yet. Once slirp accepts, this
-# curl blocks until /init's first TX flushes the queued SYN.
-(
-    while true; do
-        curl -sS --max-time "$TIMEOUT_S" \
-            -D "$HTTP_HDR" -o "$HTTP_BODY" \
-            "http://127.0.0.1:${PORT}/"
-        rc=$?
-        if [ "$rc" -eq 0 ]; then
-            echo 0 >"$HTTP_STATUS"
-            break
-        fi
-        if [ "$rc" -ne 7 ]; then
-            echo "$rc" >"$HTTP_STATUS"
-            break
-        fi
-        sleep 0.001
-    done
-) &
+python3 "$ROOT/scripts/bench-client.py" \
+    --port "$PORT" \
+    --timeout-s "$TIMEOUT_S" \
+    --ready "$CLIENT_READY" \
+    --out "$CLIENT_OUT" &
 hpid=$!
-sleep 0.05
+t0=$(date +%s)
+while [ ! -f "$CLIENT_READY" ]; do
+    now=$(date +%s)
+    if [ $((now - t0)) -gt 5 ]; then
+        echo "TEST FAIL: measurement client never became ready"
+        kill "$hpid" 2>/dev/null || true
+        wait "$hpid" 2>/dev/null || true
+        exit 1
+    fi
+    sleep 0.01
+done
 
 set +e
 if command -v stdbuf >/dev/null 2>&1; then
@@ -98,8 +93,10 @@ else
         -kernel "$IMAGE" -initrd "$CPIO" -append "$append_quiet" >"$SERIAL" 2>&1
 fi
 status=$?
-for _ in $(seq 1 20); do
-    [[ -f "$HTTP_STATUS" ]] && break
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+    if [ -f "$CLIENT_OUT" ]; then
+        break
+    fi
     sleep 0.05
 done
 kill "$hpid" 2>/dev/null || true
@@ -136,14 +133,17 @@ if ! grep -a -q 'LINUX INIT OK' "$SERIAL"; then
     cat "$SERIAL"
     exit 1
 fi
-[[ -f "$HTTP_STATUS" ]] || die "curl watcher left no http.status"
-[[ "$(cat "$HTTP_STATUS")" == "0" ]] || die "curl failed (status $(cat "$HTTP_STATUS"))"
-[[ -f "$HTTP_HDR" ]] || die "no http.hdr"
-grep -q '^HTTP/1.0 200' "$HTTP_HDR" || die "not HTTP 200"
-[[ -f "$HTTP_BODY" ]] || die "no http.body"
-# 92-byte pin is the on-wire HTTP message (pcap). curl -o is the 9-byte body.
-# $(cat) strips a trailing newline, so compare with cmp.
-printf 'whimbrel\n' | cmp -s - "$HTTP_BODY" || die "HTTP body is not whimbrel\\n"
+if [ ! -f "$CLIENT_OUT" ]; then
+    echo "TEST FAIL: client result JSON missing"
+    exit 1
+fi
+# body_ok is the 92-byte on-wire RESP, not curl's 9-byte entity.
+if ! python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d.get("body_ok") else 1)' \
+    "$CLIENT_OUT"; then
+    echo "TEST FAIL: client did not receive the 92-byte RESP"
+    cat "$CLIENT_OUT"
+    exit 1
+fi
 
 PYTHONPATH="$ROOT/scripts" python3 - "$PCAP" <<'PY'
 import sys

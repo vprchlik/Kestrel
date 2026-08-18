@@ -768,10 +768,10 @@ d0070-pcap-pass-selftest:
 linux-build:
     bash scripts/linux-build.sh
 
-# Linux boot gate: MANIFEST hashes, READY (CRLF-tolerant), curl entity
-# is 9 bytes, 92-byte pcap HTTP, SYN-grid, no RST, QEMU exit 0.
-# Fail-closed if artifacts are missing. curl starts before QEMU so
-# the hostfwd SYN is queued (confound A); never curl-after-READY.
+# Linux boot gate: MANIFEST hashes, READY (CRLF-tolerant), 92-byte
+# on-wire RESP / pcap HTTP, SYN-grid, no RST, QEMU exit 0.
+# Fail-closed if artifacts are missing. HTTP client is bench-client
+# (queued SYN / confound A); never curl-after-READY.
 test-linux image="trimmed" timeout_s="60":
     TIMEOUT_S={{timeout_s}} bash scripts/linux-boot-test.sh {{image}}
 
