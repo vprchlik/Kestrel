@@ -1,0 +1,1180 @@
+
+OpenSBI v1.8
+   ____                    _____ ____ _____
+  / __ \                  / ____|  _ \_   _|
+ | |  | |_ __   ___ _ __ | (___ | |_) || |
+ | |  | | '_ \ / _ \ '_ \ \___ \|  _ < | |
+ | |__| | |_) |  __/ | | |____) | |_) || |_
+  \____/| .__/ \___|_| |_|_____/|____/_____|
+        | |
+        |_|
+
+Platform Name               : riscv-virtio,qemu
+Platform Features           : medeleg
+Platform HART Count         : 1
+Platform HART Protection    : pmp
+Platform IPI Device         : aclint-mswi
+Platform Timer Device       : aclint-mtimer @ 10000000Hz
+Platform Console Device     : uart8250
+Platform HSM Device         : ---
+Platform PMU Device         : ---
+Platform Reboot Device      : syscon-reboot
+Platform Shutdown Device    : syscon-poweroff
+Platform Suspend Device     : ---
+Platform CPPC Device        : ---
+Firmware Base               : 0x80000000
+Firmware Size               : 321 KB
+Firmware RW Offset          : 0x40000
+Firmware RW Size            : 65 KB
+Firmware Heap Offset        : 0x47000
+Firmware Heap Size          : 37 KB (total), 0 KB (reserved), 12 KB (used), 23 KB (free)
+Firmware Scratch Size       : 4096 B (total), 1464 B (used), 2632 B (free)
+Runtime SBI Version         : 3.0
+Standard SBI Extensions     : ipi,pmu,srst,sse,hsm,rfnc,fwft,time,base,legacy,dbcn,dbtr
+Experimental SBI Extensions : none
+
+Domain0 Name                : root
+Domain0 Boot HART           : 0
+Domain0 HARTs               : 0*
+Domain0 Region00            : 0x0000000080040000-0x000000008005ffff M: (F,R,W) S/U: ()
+Domain0 Region01            : 0x0000000080000000-0x000000008003ffff M: (F,R,X) S/U: ()
+Domain0 Region02            : 0x0000000000100000-0x0000000000100fff M: (I,R,W) S/U: (R,W)
+Domain0 Region03            : 0x0000000010000000-0x0000000010000fff M: (I,R,W) S/U: (R,W)
+Domain0 Region04            : 0x0000000002000000-0x000000000200ffff M: (I,R,W) S/U: ()
+Domain0 Region05            : 0x000000000c400000-0x000000000c5fffff M: (I,R,W) S/U: (R,W)
+Domain0 Region06            : 0x000000000c000000-0x000000000c3fffff M: (I,R,W) S/U: (R,W)
+Domain0 Region07            : 0x0000000000000000-0xffffffffffffffff M: () S/U: (R,W,X)
+Domain0 Next Address        : 0x0000000080200000
+Domain0 Next Arg1           : 0x0000000087e00000
+Domain0 Next Mode           : S-mode
+Domain0 SysReset            : yes
+Domain0 SysSuspend          : yes
+
+Boot HART ID                : 0
+Boot HART Domain            : root
+Boot HART Priv Version      : v1.12
+Boot HART Base ISA          : rv64imafdch
+Boot HART ISA Extensions    : sstc,zicntr,zihpm,zicboz,zicbom,sdtrig,svadu
+Boot HART PMP Count         : 16
+Boot HART PMP Granularity   : 2 bits
+Boot HART PMP Address Bits  : 54
+Boot HART MHPM Info         : 16 (0x0007fff8)
+Boot HART Debug Triggers    : 2 triggers
+Boot HART MIDELEG           : 0x0000000000001666
+Boot HART MEDELEG           : 0x0000000000f4b509
+[    0.000000] Linux version 6.18.7 (victor@victor-B650I-Lightning-WiFi) (riscv64-buildroot-linux-musl-gcc.br_real (Buildroot baseline-t4.3-29-g7152b76-dirty) 14.3.0, GNU ld (GNU Binutils) 2.44) #1 Tue Aug 18 02:43:03 EDT 2026
+[    0.000000] random: crng init done
+[    0.000000] Machine model: riscv-virtio,qemu
+[    0.000000] SBI specification v3.0 detected
+[    0.000000] SBI implementation ID=0x1 Version=0x10008
+[    0.000000] SBI TIME extension detected
+[    0.000000] SBI IPI extension detected
+[    0.000000] SBI RFENCE extension detected
+[    0.000000] SBI SRST extension detected
+[    0.000000] SBI DBCN extension detected
+[    0.000000] SBI FWFT extension detected
+[    0.000000] printk: debug: ignoring loglevel setting.
+[    0.000000] efi: UEFI not found.
+[    0.000000] OF: reserved mem: 0x0000000080000000..0x000000008003ffff (256 KiB) nomap non-reusable mmode_resv1@80000000
+[    0.000000] OF: reserved mem: 0x0000000080040000..0x000000008005ffff (128 KiB) nomap non-reusable mmode_resv0@80040000
+[    0.000000] Zone ranges:
+[    0.000000]   DMA32    [mem 0x0000000080000000-0x0000000087ffffff]
+[    0.000000]   Normal   empty
+[    0.000000] Movable zone start for each node
+[    0.000000] Early memory node ranges
+[    0.000000]   node   0: [mem 0x0000000080000000-0x000000008005ffff]
+[    0.000000]   node   0: [mem 0x0000000080060000-0x0000000087ffffff]
+[    0.000000] Initmem setup node 0 [mem 0x0000000080000000-0x0000000087ffffff]
+[    0.000000] riscv: base ISA extensions acdfhim
+[    0.000000] riscv: ELF capabilities acdfim
+[    0.000000] Ticket spinlock: enabled
+[    0.000000] pcpu-alloc: s0 r0 d32768 u32768 alloc=1*32768
+[    0.000000] pcpu-alloc: [0] 0 
+[    0.000000] Kernel command line: console=ttyS0 loglevel=7 printk.time=1 initcall_debug ignore_loglevel rdinit=/init
+[    0.000000] printk: log buffer data + meta data: 131072 + 458752 = 589824 bytes
+[    0.000000] Dentry cache hash table entries: 16384 (order: 5, 131072 bytes, linear)
+[    0.000000] Inode-cache hash table entries: 8192 (order: 4, 65536 bytes, linear)
+[    0.000000] software IO TLB: SWIOTLB bounce buffer size adjusted to 0MB
+[    0.000000] software IO TLB: area num 1.
+[    0.000000] software IO TLB: mapped [mem 0x0000000087f78000-0x0000000087fb8000] (0MB)
+[    0.000000] Built 1 zonelists, mobility grouping on.  Total pages: 32768
+[    0.000000] mem auto-init: stack:all(zero), heap alloc:off, heap free:off
+[    0.000000] SLUB: HWalign=64, Order=0-3, MinObjects=0, CPUs=1, Nodes=1
+[    0.000000] RCU Tasks Trace: Setting shift to 0 and lim to 1 rcu_task_cb_adjust=1 rcu_task_cpu_ids=1.
+[    0.000000] NR_IRQS: 64, nr_irqs: 64, preallocated irqs: 0
+[    0.000000] riscv-intc: 64 local interrupts mapped
+[    0.000000] clocksource: riscv_clocksource: mask: 0xffffffffffffffff max_cycles: 0x24e6a1710, max_idle_ns: 440795202120 ns
+[    0.000036] sched_clock: 64 bits at 10MHz, resolution 100ns, wraps every 4398046511100ns
+[    0.000397] riscv-timer: Timer interrupt in S-mode is available via sstc extension
+[    0.002662] entering initcall level: console
+[    0.002703] calling  0xffffffff808227d0 @ 0
+[    0.003658] Console: colour dummy device 80x25
+[    0.003866] initcall 0xffffffff808227d0 returned 0 after 0 usecs
+[    0.003889] calling  0xffffffff80822b84 @ 0
+[    0.003902] initcall 0xffffffff80822b84 returned 0 after 0 usecs
+[    0.003906] calling  0xffffffff808232a0 @ 0
+[    0.004361] initcall 0xffffffff808232a0 returned 0 after 0 usecs
+[    0.004367] calling  0xffffffff80823810 @ 0
+[    0.004446] initcall 0xffffffff80823810 returned 0 after 0 usecs
+[    0.005842] Calibrating delay loop (skipped), value calculated using timer frequency.. 20.00 BogoMIPS (lpj=40000)
+[    0.005911] pid_max: default: 32768 minimum: 301
+[    0.007121] Mount-cache hash table entries: 512 (order: 0, 4096 bytes, linear)
+[    0.007139] Mountpoint-cache hash table entries: 512 (order: 0, 4096 bytes, linear)
+[    0.018293] entering initcall level: early
+[    0.018332] calling  0xffffffff80803d00 @ 1
+[    0.018369] riscv: ELF compat mode supported
+[    0.018385] initcall 0xffffffff80803d00 returned 0 after 0 usecs
+[    0.018425] calling  0xffffffff80807520 @ 1
+[    0.018516] ASID allocator using 16 bits (65536 entries)
+[    0.018534] initcall 0xffffffff80807520 returned 0 after 0 usecs
+[    0.018542] calling  0xffffffff80807d54 @ 1
+[    0.018898] initcall 0xffffffff80807d54 returned 0 after 0 usecs
+[    0.018907] calling  0xffffffff80039b04 @ 1
+[    0.018950] initcall 0xffffffff80039b04 returned 0 after 0 usecs
+[    0.018954] calling  0xffffffff808090dc @ 1
+[    0.018973] initcall 0xffffffff808090dc returned 0 after 0 usecs
+[    0.018978] calling  0xffffffff8080a41c @ 1
+[    0.019047] initcall 0xffffffff8080a41c returned 0 after 0 usecs
+[    0.019052] calling  0xffffffff8080b5e8 @ 1
+[    0.019063] initcall 0xffffffff8080b5e8 returned 0 after 0 usecs
+[    0.019069] calling  0xffffffff8080b5c4 @ 1
+[    0.019079] initcall 0xffffffff8080b5c4 returned 0 after 0 usecs
+[    0.019083] calling  0xffffffff8080d778 @ 1
+[    0.019120] initcall 0xffffffff8080d778 returned 0 after 0 usecs
+[    0.019125] calling  0xffffffff8080d91c @ 1
+[    0.019201] initcall 0xffffffff8080d91c returned 0 after 0 usecs
+[    0.019207] calling  0xffffffff8080e0f8 @ 1
+[    0.019215] initcall 0xffffffff8080e0f8 returned 0 after 0 usecs
+[    0.019219] calling  0xffffffff8080e9ec @ 1
+[    0.019231] initcall 0xffffffff8080e9ec returned 0 after 0 usecs
+[    0.019235] calling  0xffffffff80811d08 @ 1
+[    0.019274] initcall 0xffffffff80811d08 returned 0 after 0 usecs
+[    0.019279] calling  0xffffffff80828b00 @ 1
+[    0.019310] initcall 0xffffffff80828b00 returned 0 after 0 usecs
+[    0.019315] calling  0xffffffff8082aba4 @ 1
+[    0.019331] EFI services will not be available.
+[    0.019347] initcall 0xffffffff8082aba4 returned 0 after 0 usecs
+[    0.019352] calling  0xffffffff8082ae3c @ 1
+[    0.019367] initcall 0xffffffff8082ae3c returned 0 after 0 usecs
+[    0.021095] Memory: 87672K/131072K available (7304K kernel code, 5712K rwdata, 4096K rodata, 2291K init, 314K bss, 41948K reserved, 0K cma-reserved)
+[    0.024717] devtmpfs: initialized
+[    0.027936] entering initcall level: pure
+[    0.027950] calling  0xffffffff8081995c @ 1
+[    0.028190] initcall 0xffffffff8081995c returned 0 after 0 usecs
+[    0.028201] calling  0xffffffff80819be0 @ 1
+[    0.028213] initcall 0xffffffff80819be0 returned 0 after 0 usecs
+[    0.028217] calling  0xffffffff80831950 @ 1
+[    0.028333] initcall 0xffffffff80831950 returned 0 after 0 usecs
+[    0.028356] entering initcall level: core
+[    0.028360] calling  0xffffffff80803ca8 @ 1
+[    0.028371] initcall 0xffffffff80803ca8 returned 0 after 0 usecs
+[    0.028375] calling  0xffffffff80804c64 @ 1
+[    0.028384] initcall 0xffffffff80804c64 returned 0 after 0 usecs
+[    0.028391] calling  0xffffffff80808d68 @ 1
+[    0.028409] initcall 0xffffffff80808d68 returned 0 after 0 usecs
+[    0.028414] calling  0xffffffff80809b24 @ 1
+[    0.028459] initcall 0xffffffff80809b24 returned 0 after 0 usecs
+[    0.028464] calling  0xffffffff8080a960 @ 1
+[    0.028560] initcall 0xffffffff8080a960 returned 0 after 0 usecs
+[    0.028567] calling  0xffffffff8080bb70 @ 1
+[    0.028609] clocksource: jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 7645041785100000 ns
+[    0.028649] initcall 0xffffffff8080bb70 returned 0 after 0 usecs
+[    0.028653] calling  0xffffffff8080bd18 @ 1
+[    0.028698] posixtimers hash table entries: 512 (order: 0, 4096 bytes, linear)
+[    0.028720] initcall 0xffffffff8080bd18 returned 0 after 0 usecs
+[    0.028725] calling  0xffffffff8080bf2c @ 1
+[    0.028813] futex hash table entries: 256 (8192 bytes on 1 NUMA nodes, total 8 KiB, linear).
+[    0.028823] initcall 0xffffffff8080bf2c returned 0 after 0 usecs
+[    0.028827] calling  0xffffffff8080df8c @ 1
+[    0.028884] initcall 0xffffffff8080df8c returned 0 after 0 usecs
+[    0.028890] calling  0xffffffff800d6afc @ 1
+[    0.028908] initcall 0xffffffff800d6afc returned 0 after 0 usecs
+[    0.028912] calling  0xffffffff8080e4fc @ 1
+[    0.028950] initcall 0xffffffff8080e4fc returned 0 after 0 usecs
+[    0.028955] calling  0xffffffff8080e688 @ 1
+[    0.028963] initcall 0xffffffff8080e688 returned 0 after 0 usecs
+[    0.028967] calling  0xffffffff8080e978 @ 1
+[    0.028975] initcall 0xffffffff8080e978 returned 0 after 0 usecs
+[    0.028979] calling  0xffffffff808168c0 @ 1
+[    0.029010] initcall 0xffffffff808168c0 returned 0 after 0 usecs
+[    0.029014] calling  0xffffffff80817e10 @ 1
+[    0.029047] initcall 0xffffffff80817e10 returned 0 after 0 usecs
+[    0.029051] calling  0xffffffff808182dc @ 1
+[    0.029128] initcall 0xffffffff808182dc returned 0 after 0 usecs
+[    0.029133] calling  0xffffffff808183d8 @ 1
+[    0.029160] initcall 0xffffffff808183d8 returned 0 after 0 usecs
+[    0.029166] calling  0xffffffff80818400 @ 1
+[    0.029176] initcall 0xffffffff80818400 returned 0 after 0 usecs
+[    0.029181] calling  0xffffffff80818428 @ 1
+[    0.029191] initcall 0xffffffff80818428 returned 0 after 0 usecs
+[    0.029195] calling  0xffffffff808196cc @ 1
+[    0.029241] initcall 0xffffffff808196cc returned 0 after 0 usecs
+[    0.029245] calling  0xffffffff8081978c @ 1
+[    0.029282] initcall 0xffffffff8081978c returned 0 after 0 usecs
+[    0.029286] calling  0xffffffff80819c04 @ 1
+[    0.029298] initcall 0xffffffff80819c04 returned 0 after 0 usecs
+[    0.029302] calling  0xffffffff8081b414 @ 1
+[    0.029316] pinctrl core: initialized pinctrl subsystem
+[    0.030253] initcall 0xffffffff8081b414 returned 0 after 0 usecs
+[    0.030261] calling  0xffffffff8081b67c @ 1
+[    0.030611] initcall 0xffffffff8081b67c returned 0 after 4000 usecs
+[    0.030619] calling  0xffffffff80820c04 @ 1
+[    0.030653] initcall 0xffffffff80820c04 returned 0 after 0 usecs
+[    0.030659] calling  0xffffffff80820c28 @ 1
+[    0.030702] initcall 0xffffffff80820c28 returned 0 after 0 usecs
+[    0.030706] calling  0xffffffff80821aa0 @ 1
+[    0.030780] initcall 0xffffffff80821aa0 returned 0 after 0 usecs
+[    0.030785] calling  0xffffffff803c1274 @ 1
+[    0.030811] initcall 0xffffffff803c1274 returned 0 after 0 usecs
+[    0.030816] calling  0xffffffff80821c38 @ 1
+[    0.033070] probe of reg-dummy returned 0 after 0 usecs
+[    0.033198] initcall 0xffffffff80821c38 returned 0 after 0 usecs
+[    0.033205] calling  0xffffffff80823edc @ 1
+[    0.033223] initcall 0xffffffff80823edc returned 0 after 0 usecs
+[    0.033228] calling  0xffffffff808240d4 @ 1
+[    0.033245] initcall 0xffffffff808240d4 returned 0 after 0 usecs
+[    0.033250] calling  0xffffffff80824d2c @ 1
+[    0.033290] initcall 0xffffffff80824d2c returned 0 after 0 usecs
+[    0.033294] calling  0xffffffff8082720c @ 1
+[    0.033315] initcall 0xffffffff8082720c returned 0 after 0 usecs
+[    0.033321] calling  0xffffffff8082723c @ 1
+[    0.033374] initcall 0xffffffff8082723c returned 0 after 0 usecs
+[    0.033379] calling  0xffffffff808272e0 @ 1
+[    0.033422] initcall 0xffffffff808272e0 returned 0 after 0 usecs
+[    0.033427] calling  0xffffffff80827304 @ 1
+[    0.033469] initcall 0xffffffff80827304 returned 0 after 0 usecs
+[    0.033474] calling  0xffffffff80827328 @ 1
+[    0.033485] initcall 0xffffffff80827328 returned 0 after 0 usecs
+[    0.033489] calling  0xffffffff80827370 @ 1
+[    0.033600] initcall 0xffffffff80827370 returned -19 after 0 usecs
+[    0.033621] calling  0xffffffff80827458 @ 1
+[    0.033662] initcall 0xffffffff80827458 returned 0 after 0 usecs
+[    0.033666] calling  0xffffffff8082ab88 @ 1
+[    0.033689] DMI not present or invalid.
+[    0.033708] initcall 0xffffffff8082ab88 returned 0 after 0 usecs
+[    0.033712] calling  0xffffffff8082ebe4 @ 1
+[    0.033939] initcall 0xffffffff8082ebe4 returned 0 after 0 usecs
+[    0.033947] calling  0xffffffff8082ecc0 @ 1
+[    0.033955] initcall 0xffffffff8082ecc0 returned 0 after 0 usecs
+[    0.033959] calling  0xffffffff8082f0c0 @ 1
+[    0.034016] initcall 0xffffffff8082f0c0 returned 0 after 0 usecs
+[    0.034020] calling  0xffffffff8082fac0 @ 1
+[    0.034196] NET: Registered PF_NETLINK/PF_ROUTE protocol family
+[    0.034876] initcall 0xffffffff8082fac0 returned 0 after 4000 usecs
+[    0.034884] calling  0xffffffff8082fc98 @ 1
+[    0.035400] initcall 0xffffffff8082fc98 returned 0 after 0 usecs
+[    0.035417] entering initcall level: postcore
+[    0.035420] calling  0xffffffff80808340 @ 1
+[    0.035429] initcall 0xffffffff80808340 returned 0 after 0 usecs
+[    0.035434] calling  0xffffffff8080b4a4 @ 1
+[    0.035959] DMA: preallocated 128 KiB GFP_KERNEL pool for atomic allocations
+[    0.036086] DMA: preallocated 128 KiB GFP_KERNEL|GFP_DMA32 pool for atomic allocations
+[    0.036160] initcall 0xffffffff8080b4a4 returned 0 after 0 usecs
+[    0.036167] calling  0xffffffff8080c1dc @ 1
+[    0.036214] audit: initializing netlink subsys (disabled)
+[    0.036907] initcall 0xffffffff8080c1dc returned 0 after 0 usecs
+[    0.036917] calling  0xffffffff8080eec0 @ 1
+[    0.036953] initcall 0xffffffff8080eec0 returned 0 after 0 usecs
+[    0.036958] calling  0xffffffff8080ef68 @ 1
+[    0.036975] initcall 0xffffffff8080ef68 returned 0 after 0 usecs
+[    0.036980] calling  0xffffffff80812670 @ 1
+[    0.037261] initcall 0xffffffff80812670 returned 0 after 0 usecs
+[    0.037266] calling  0xffffffff8081b854 @ 1
+[    0.037345] initcall 0xffffffff8081b854 returned 0 after 0 usecs
+[    0.037350] calling  0xffffffff808203a0 @ 1
+[    0.037371] initcall 0xffffffff808203a0 returned 0 after 0 usecs
+[    0.037376] calling  0xffffffff80822060 @ 1
+[    0.037392] initcall 0xffffffff80822060 returned 0 after 0 usecs
+[    0.037397] calling  0xffffffff80822718 @ 1
+[    0.037538] initcall 0xffffffff80822718 returned 0 after 0 usecs
+[    0.037544] calling  0xffffffff80824060 @ 1
+[    0.037560] initcall 0xffffffff80824060 returned 0 after 0 usecs
+[    0.037565] calling  0xffffffff808240b0 @ 1
+[    0.037583] initcall 0xffffffff808240b0 returned 0 after 0 usecs
+[    0.037588] calling  0xffffffff80824104 @ 1
+[    0.037680] initcall 0xffffffff80824104 returned 0 after 0 usecs
+[    0.037685] calling  0xffffffff808247dc @ 1
+[    0.037701] initcall 0xffffffff808247dc returned 0 after 0 usecs
+[    0.037705] calling  0xffffffff80824bbc @ 1
+[    0.037722] initcall 0xffffffff80824bbc returned 0 after 0 usecs
+[    0.037726] calling  0xffffffff80824bf4 @ 1
+[    0.037770] initcall 0xffffffff80824bf4 returned 0 after 0 usecs
+[    0.037774] calling  0xffffffff80824d10 @ 1
+[    0.037818] initcall 0xffffffff80824d10 returned 0 after 0 usecs
+[    0.037823] calling  0xffffffff80825784 @ 1
+[    0.037889] initcall 0xffffffff80825784 returned 0 after 0 usecs
+[    0.037894] calling  0xffffffff80826cd8 @ 1
+[    0.038023] initcall 0xffffffff80826cd8 returned 0 after 0 usecs
+[    0.038029] calling  0xffffffff80826ecc @ 1
+[    0.038139] thermal_sys: Registered thermal governor 'step_wise'
+[    0.038180] initcall 0xffffffff80826ecc returned 0 after 0 usecs
+[    0.038186] calling  0xffffffff80827480 @ 1
+[    0.038276] cpuidle: using governor menu
+[    0.038302] initcall 0xffffffff80827480 returned 0 after 0 usecs
+[    0.038306] calling  0xffffffff8082e238 @ 1
+[    0.038321] initcall 0xffffffff8082e238 returned -19 after 0 usecs
+[    0.038326] calling  0xffffffff8082e2e0 @ 1
+[    0.038356] initcall 0xffffffff8082e2e0 returned 0 after 0 usecs
+[    0.038361] calling  0xffffffff8056ac44 @ 1
+[    0.038410] initcall 0xffffffff8056ac44 returned 0 after 0 usecs
+[    0.038415] calling  0xffffffff8056b238 @ 1
+[    0.038448] initcall 0xffffffff8056b238 returned 0 after 0 usecs
+[    0.038453] calling  0xffffffff8056b82c @ 1
+[    0.038477] initcall 0xffffffff8056b82c returned 0 after 0 usecs
+[    0.038481] calling  0xffffffff808374a8 @ 1
+[    0.038544] initcall 0xffffffff808374a8 returned 0 after 0 usecs
+[    0.038558] entering initcall level: arch
+[    0.038561] calling  0xffffffff80802f1c @ 1
+[    0.038655] initcall 0xffffffff80802f1c returned 0 after 4000 usecs
+[    0.038661] calling  0xffffffff80803da0 @ 1
+[    0.038893] initcall 0xffffffff80803da0 returned 0 after 0 usecs
+[    0.038899] calling  0xffffffff808047b0 @ 1
+[    0.038973] initcall 0xffffffff808047b0 returned 0 after 0 usecs
+[    0.038977] calling  0xffffffff80804a28 @ 1
+[    0.039164] SBI misaligned access exception delegation ok
+[    0.062830] cpu0: Ratio of byte access time to unaligned word access is 10.30, unaligned accesses are fast
+[    0.063108] initcall 0xffffffff80804a28 returned 0 after 24000 usecs
+[    0.063116] calling  0xffffffff80804d04 @ 1
+[    0.063144] initcall 0xffffffff80804d04 returned 0 after 0 usecs
+[    0.063149] calling  0xffffffff8080764c @ 1
+[    0.063157] initcall 0xffffffff8080764c returned 0 after 0 usecs
+[    0.063162] calling  0xffffffff8080b624 @ 1
+[    0.063199] initcall 0xffffffff8080b624 returned 0 after 0 usecs
+[    0.063203] calling  0xffffffff8081a0a0 @ 1
+[    0.063286] initcall 0xffffffff8081a0a0 returned -19 after 0 usecs
+[    0.063292] calling  0xffffffff80821690 @ 1
+[    0.063494] initcall 0xffffffff80821690 returned 0 after 0 usecs
+[    0.063500] calling  0xffffffff80821534 @ 1
+[    0.063566] initcall 0xffffffff80821534 returned 0 after 0 usecs
+[    0.063571] calling  0xffffffff803fb6fc @ 1
+[    0.063664] initcall 0xffffffff803fb6fc returned 0 after 0 usecs
+[    0.063670] calling  0xffffffff808274a4 @ 1
+[    0.064571] probe of sbi-cpuidle returned 19 after 0 usecs
+[    0.064616] initcall 0xffffffff808274a4 returned 0 after 0 usecs
+[    0.064622] calling  0xffffffff8082867c @ 1
+[    0.064638] initcall 0xffffffff8082867c returned -19 after 0 usecs
+[    0.064643] calling  0xffffffff80804550 @ 1
+[    0.064654] initcall 0xffffffff80804550 returned 0 after 0 usecs
+[    0.064658] calling  0xffffffff808048ac @ 1
+[    0.064718] initcall 0xffffffff808048ac returned 0 after 0 usecs
+[    0.064732] calling  0xffffffff8082bd78 @ 1
+[    0.070845] initcall 0xffffffff8082bd78 returned 0 after 4000 usecs
+[    0.070875] entering initcall level: subsys
+[    0.070879] calling  0xffffffff808076cc @ 1
+[    0.070889] initcall 0xffffffff808076cc returned 0 after 0 usecs
+[    0.070918] calling  0xffffffff808081ec @ 1
+[    0.070961] initcall 0xffffffff808081ec returned 0 after 0 usecs
+[    0.070965] calling  0xffffffff80808bb0 @ 1
+[    0.070974] initcall 0xffffffff80808bb0 returned 0 after 0 usecs
+[    0.070978] calling  0xffffffff80808fdc @ 1
+[    0.071014] initcall 0xffffffff80808fdc returned 0 after 0 usecs
+[    0.071018] calling  0xffffffff80809a58 @ 1
+[    0.071026] initcall 0xffffffff80809a58 returned 0 after 0 usecs
+[    0.071031] calling  0xffffffff8080b610 @ 1
+[    0.071038] initcall 0xffffffff8080b610 returned 0 after 0 usecs
+[    0.071042] calling  0xffffffff8080ca30 @ 1
+[    0.071155] initcall 0xffffffff8080ca30 returned 0 after 0 usecs
+[    0.071160] calling  0xffffffff8080c59c @ 1
+[    0.071168] initcall 0xffffffff8080c59c returned 0 after 0 usecs
+[    0.071174] calling  0xffffffff8080dfc8 @ 1
+[    0.071186] initcall 0xffffffff8080dfc8 returned 0 after 0 usecs
+[    0.071190] calling  0xffffffff8080e4d8 @ 1
+[    0.071205] initcall 0xffffffff8080e4d8 returned 0 after 0 usecs
+[    0.071210] calling  0xffffffff8080e554 @ 1
+[    0.071229] initcall 0xffffffff8080e554 returned 0 after 0 usecs
+[    0.071233] calling  0xffffffff8080eb34 @ 1
+[    0.071428] audit: type=2000 audit(0.032:1): state=initialized audit_enabled=0 res=1
+[    0.083232] initcall 0xffffffff8080eb34 returned 0 after 12000 usecs
+[    0.083246] calling  0xffffffff8080edec @ 1
+[    0.083266] initcall 0xffffffff8080edec returned 0 after 0 usecs
+[    0.083271] calling  0xffffffff8080ef04 @ 1
+[    0.083450] initcall 0xffffffff8080ef04 returned 0 after 0 usecs
+[    0.083459] calling  0xffffffff80810c5c @ 1
+[    0.083470] initcall 0xffffffff80810c5c returned 0 after 0 usecs
+[    0.083474] calling  0xffffffff80811b00 @ 1
+[    0.083565] initcall 0xffffffff80811b00 returned 0 after 0 usecs
+[    0.083572] calling  0xffffffff80811cdc @ 1
+[    0.083586] initcall 0xffffffff80811cdc returned 0 after 0 usecs
+[    0.083590] calling  0xffffffff80811e1c @ 1
+[    0.083598] initcall 0xffffffff80811e1c returned 0 after 0 usecs
+[    0.083602] calling  0xffffffff8018b97c @ 1
+[    0.083624] initcall 0xffffffff8018b97c returned 0 after 0 usecs
+[    0.083628] calling  0xffffffff8018b94c @ 1
+[    0.083640] initcall 0xffffffff8018b94c returned 0 after 0 usecs
+[    0.083646] calling  0xffffffff80814708 @ 1
+[    0.084563] HugeTLB: registered 2.00 MiB page size, pre-allocated 0 pages
+[    0.084583] HugeTLB: 28 KiB vmemmap can be freed for a 2.00 MiB page
+[    0.084665] initcall 0xffffffff80814708 returned 0 after 0 usecs
+[    0.084674] calling  0xffffffff808198a4 @ 1
+[    0.084688] initcall 0xffffffff808198a4 returned 0 after 0 usecs
+[    0.084692] calling  0xffffffff80819d28 @ 1
+[    0.084711] initcall 0xffffffff80819d28 returned 0 after 0 usecs
+[    0.084716] calling  0xffffffff8081b648 @ 1
+[    0.084744] initcall 0xffffffff8081b648 returned 0 after 0 usecs
+[    0.084748] calling  0xffffffff8081b93c @ 1
+[    0.084792] initcall 0xffffffff8081b93c returned 0 after 0 usecs
+[    0.084797] calling  0xffffffff8081baa0 @ 1
+[    0.084968] initcall 0xffffffff8081baa0 returned -12 after 0 usecs
+[    0.084974] calling  0xffffffff8081cdd4 @ 1
+[    0.084989] ACPI: Interpreter disabled.
+[    0.085005] initcall 0xffffffff8081cdd4 returned -19 after 0 usecs
+[    0.085010] calling  0xffffffff8081f814 @ 1
+[    0.085039] initcall 0xffffffff8081f814 returned 0 after 0 usecs
+[    0.085046] calling  0xffffffff80821d20 @ 1
+[    0.085135] initcall 0xffffffff80821d20 returned 0 after 0 usecs
+[    0.085140] calling  0xffffffff80821d68 @ 1
+[    0.085180] initcall 0xffffffff80821d68 returned 0 after 0 usecs
+[    0.085185] calling  0xffffffff80823ba8 @ 1
+[    0.085358] initcall 0xffffffff80823ba8 returned 0 after 0 usecs
+[    0.085363] calling  0xffffffff80823f14 @ 1
+[    0.085391] iommu: Default domain type: Translated
+[    0.085408] iommu: DMA domain TLB invalidation policy: strict mode
+[    0.085452] initcall 0xffffffff80823f14 returned 0 after 0 usecs
+[    0.085456] calling  0xffffffff804253f0 @ 1
+[    0.085489] initcall 0xffffffff804253f0 returned 0 after 0 usecs
+[    0.085494] calling  0xffffffff808253cc @ 1
+[    0.085660] initcall 0xffffffff808253cc returned 0 after 0 usecs
+[    0.085666] calling  0xffffffff80825504 @ 1
+[    0.085744] initcall 0xffffffff80825504 returned 0 after 0 usecs
+[    0.085750] calling  0xffffffff8082597c @ 1
+[    0.085784] initcall 0xffffffff8082597c returned 0 after 0 usecs
+[    0.085790] calling  0xffffffff80825a14 @ 1
+[    0.086111] initcall 0xffffffff80825a14 returned 0 after 0 usecs
+[    0.086116] calling  0xffffffff80825f10 @ 1
+[    0.086134] initcall 0xffffffff80825f10 returned 0 after 0 usecs
+[    0.086138] calling  0xffffffff80825f40 @ 1
+[    0.086323] usbcore: registered new interface driver usbfs
+[    0.086454] usbcore: registered new interface driver hub
+[    0.086514] usbcore: registered new device driver usb
+[    0.086537] initcall 0xffffffff80825f40 returned 0 after 0 usecs
+[    0.086543] calling  0xffffffff808263ac @ 1
+[    0.086574] initcall 0xffffffff808263ac returned 0 after 0 usecs
+[    0.086579] calling  0xffffffff808263fc @ 1
+[    0.086605] initcall 0xffffffff808263fc returned 0 after 0 usecs
+[    0.086610] calling  0xffffffff80826478 @ 1
+[    0.086637] initcall 0xffffffff80826478 returned 0 after 0 usecs
+[    0.086641] calling  0xffffffff808267dc @ 1
+[    0.086672] initcall 0xffffffff808267dc returned 0 after 0 usecs
+[    0.086677] calling  0xffffffff80826db8 @ 1
+[    0.086765] initcall 0xffffffff80826db8 returned 0 after 0 usecs
+[    0.086771] calling  0xffffffff80826e6c @ 1
+[    0.086787] initcall 0xffffffff80826e6c returned 0 after 0 usecs
+[    0.086792] calling  0xffffffff80826e90 @ 1
+[    0.086810] initcall 0xffffffff80826e90 returned 0 after 0 usecs
+[    0.086814] calling  0xffffffff8082754c @ 1
+[    0.086898] initcall 0xffffffff8082754c returned 0 after 0 usecs
+[    0.086903] calling  0xffffffff80827784 @ 1
+[    0.086913] initcall 0xffffffff80827784 returned 0 after 0 usecs
+[    0.086917] calling  0xffffffff80828c10 @ 1
+[    0.086953] initcall 0xffffffff80828c10 returned 0 after 0 usecs
+[    0.086957] calling  0xffffffff8082e364 @ 1
+[    0.086995] initcall 0xffffffff8082e364 returned 0 after 0 usecs
+[    0.086999] calling  0xffffffff8082e3ac @ 1
+[    0.091315] initcall 0xffffffff8082e3ac returned 0 after 8000 usecs
+[    0.091327] calling  0xffffffff8082e4dc @ 1
+[    0.091371] initcall 0xffffffff8082e4dc returned 0 after 0 usecs
+[    0.091377] calling  0xffffffff8082e758 @ 1
+[    0.091427] initcall 0xffffffff8082e758 returned 0 after 0 usecs
+[    0.091432] calling  0xffffffff8082e7c4 @ 1
+[    0.091448] initcall 0xffffffff8082e7c4 returned 0 after 0 usecs
+[    0.091453] calling  0xffffffff8082e7e8 @ 1
+[    0.091480] Advanced Linux Sound Architecture Driver Initialized.
+[    0.091486] initcall 0xffffffff8082e7e8 returned 0 after 0 usecs
+[    0.091491] calling  0xffffffff8082f148 @ 1
+[    0.094839] initcall 0xffffffff8082f148 returned 0 after 0 usecs
+[    0.094850] calling  0xffffffff8082f450 @ 1
+[    0.094866] initcall 0xffffffff8082f450 returned 0 after 0 usecs
+[    0.094873] calling  0xffffffff8082f7bc @ 1
+[    0.094896] initcall 0xffffffff8082f7bc returned 0 after 0 usecs
+[    0.094901] calling  0xffffffff8082f800 @ 1
+[    0.095939] initcall 0xffffffff8082f800 returned 0 after 4000 usecs
+[    0.095947] calling  0xffffffff8082f884 @ 1
+[    0.095966] initcall 0xffffffff8082f884 returned 0 after 0 usecs
+[    0.095970] calling  0xffffffff8082f98c @ 1
+[    0.096088] initcall 0xffffffff8082f98c returned 0 after 0 usecs
+[    0.096093] calling  0xffffffff8082fda4 @ 1
+[    0.096367] initcall 0xffffffff8082fda4 returned 0 after 0 usecs
+[    0.096373] calling  0xffffffff80831a04 @ 1
+[    0.096444] initcall 0xffffffff80831a04 returned 0 after 0 usecs
+[    0.096449] calling  0xffffffff80837610 @ 1
+[    0.096492] initcall 0xffffffff80837610 returned 0 after 0 usecs
+[    0.096496] calling  0xffffffff80827004 @ 1
+[    0.103781] initcall 0xffffffff80827004 returned 0 after 8000 usecs
+[    0.103806] entering initcall level: fs
+[    0.103810] calling  0xffffffff80807e34 @ 1
+[    0.103909] initcall 0xffffffff80807e34 returned 0 after 0 usecs
+[    0.103915] calling  0xffffffff8080ba60 @ 1
+[    0.104150] clocksource: Switched to clocksource riscv_clocksource
+[    0.104170] initcall 0xffffffff8080ba60 returned 0 after 158 usecs
+[    0.104175] calling  0xffffffff8080cf48 @ 1
+[    0.104327] initcall 0xffffffff8080cf48 returned 0 after 148 usecs
+[    0.104333] calling  0xffffffff8080d73c @ 1
+[    0.104605] initcall 0xffffffff8080d73c returned 0 after 267 usecs
+[    0.104611] calling  0xffffffff8080dff8 @ 1
+[    0.104626] initcall 0xffffffff8080dff8 returned 0 after 11 usecs
+[    0.104631] calling  0xffffffff8080e040 @ 1
+[    0.104651] initcall 0xffffffff8080e040 returned 0 after 16 usecs
+[    0.104655] calling  0xffffffff8080e080 @ 1
+[    0.104688] initcall 0xffffffff8080e080 returned 0 after 29 usecs
+[    0.104694] calling  0xffffffff8080e1cc @ 1
+[    0.104708] initcall 0xffffffff8080e1cc returned 0 after 10 usecs
+[    0.104712] calling  0xffffffff808168e8 @ 1
+[    0.104773] initcall 0xffffffff808168e8 returned 0 after 57 usecs
+[    0.104778] calling  0xffffffff80816ba8 @ 1
+[    0.104833] initcall 0xffffffff80816ba8 returned 0 after 50 usecs
+[    0.104838] calling  0xffffffff80817f7c @ 1
+[    0.104909] initcall 0xffffffff80817f7c returned 0 after 68 usecs
+[    0.104914] calling  0xffffffff8081805c @ 1
+[    0.104965] initcall 0xffffffff8081805c returned 0 after 47 usecs
+[    0.104969] calling  0xffffffff8081817c @ 1
+[    0.105032] initcall 0xffffffff8081817c returned 0 after 59 usecs
+[    0.105038] calling  0xffffffff80818450 @ 1
+[    0.105063] initcall 0xffffffff80818450 returned 0 after 21 usecs
+[    0.105068] calling  0xffffffff80818538 @ 1
+[    0.105250] initcall 0xffffffff80818538 returned 0 after 177 usecs
+[    0.105257] calling  0xffffffff80818670 @ 1
+[    0.105270] initcall 0xffffffff80818670 returned 0 after 9 usecs
+[    0.105274] calling  0xffffffff8081870c @ 1
+[    0.105557] initcall 0xffffffff8081870c returned 0 after 279 usecs
+[    0.105563] calling  0xffffffff8081d980 @ 1
+[    0.105573] initcall 0xffffffff8081d980 returned 0 after 6 usecs
+[    0.105577] calling  0xffffffff8081f968 @ 1
+[    0.105624] initcall 0xffffffff8081f968 returned 0 after 39 usecs
+[    0.105630] calling  0xffffffff8081fa64 @ 1
+[    0.105642] pnp: PnP ACPI: disabled
+[    0.105650] initcall 0xffffffff8081fa64 returned 0 after 16 usecs
+[    0.105654] calling  0xffffffff80823888 @ 1
+[    0.114947] initcall 0xffffffff80823888 returned 0 after 9286 usecs
+[    0.114962] calling  0xffffffff80823d1c @ 1
+[    0.116172] initcall 0xffffffff80823d1c returned 0 after 1205 usecs
+[    0.116183] calling  0xffffffff80824c2c @ 1
+[    0.116232] initcall 0xffffffff80824c2c returned 0 after 44 usecs
+[    0.116237] calling  0xffffffff8082f954 @ 1
+[    0.116270] initcall 0xffffffff8082f954 returned 0 after 29 usecs
+[    0.116275] calling  0xffffffff80831200 @ 1
+[    0.116405] NET: Registered PF_INET protocol family
+[    0.123070] IP idents hash table entries: 2048 (order: 2, 16384 bytes, linear)
+[    0.125214] tcp_listen_portaddr_hash hash table entries: 512 (order: 0, 4096 bytes, linear)
+[    0.125245] Table-perturb hash table entries: 65536 (order: 6, 262144 bytes, linear)
+[    0.125280] TCP established hash table entries: 1024 (order: 1, 8192 bytes, linear)
+[    0.125327] TCP bind hash table entries: 1024 (order: 2, 16384 bytes, linear)
+[    0.125401] TCP: Hash tables configured (established 1024 bind 1024)
+[    0.125849] UDP hash table entries: 256 (order: 2, 16384 bytes, linear)
+[    0.125949] UDP-Lite hash table entries: 256 (order: 2, 16384 bytes, linear)
+[    0.126223] initcall 0xffffffff80831200 returned 0 after 9944 usecs
+[    0.126231] calling  0xffffffff8083112c @ 1
+[    0.126312] initcall 0xffffffff8083112c returned 0 after 77 usecs
+[    0.126317] calling  0xffffffff808340e0 @ 1
+[    0.126410] initcall 0xffffffff808340e0 returned 0 after 89 usecs
+[    0.126415] calling  0xffffffff808343dc @ 1
+[    0.127338] RPC: Registered named UNIX socket transport module.
+[    0.127359] RPC: Registered udp transport module.
+[    0.127364] RPC: Registered tcp transport module.
+[    0.127369] RPC: Registered tcp-with-tls transport module.
+[    0.127374] RPC: Registered tcp NFSv4.1 backchannel transport module.
+[    0.127386] initcall 0xffffffff808343dc returned 0 after 968 usecs
+[    0.127395] calling  0xffffffff808344e0 @ 1
+[    0.127410] initcall 0xffffffff808344e0 returned 0 after 11 usecs
+[    0.127415] calling  0xffffffff8081c8b0 @ 1
+[    0.127479] initcall 0xffffffff8081c8b0 returned 0 after 60 usecs
+[    0.127483] calling  0xffffffff808026e8 @ 1
+[    0.127625] initcall 0xffffffff808026e8 returned 0 after 137 usecs
+[    0.127646] entering initcall level: device
+[    0.127650] calling  0xffffffff80803d8c @ 1
+[    0.127659] initcall 0xffffffff80803d8c returned 0 after 5 usecs
+[    0.127663] calling  0xffffffff80807af8 @ 1
+[    0.127685] initcall 0xffffffff80807af8 returned 0 after 18 usecs
+[    0.127690] calling  0xffffffff8080a894 @ 1
+[    0.127701] initcall 0xffffffff8080a894 returned 0 after 8 usecs
+[    0.127706] calling  0xffffffff8080b750 @ 1
+[    0.127717] initcall 0xffffffff8080b750 returned 0 after 8 usecs
+[    0.127721] calling  0xffffffff8080bc48 @ 1
+[    0.127800] initcall 0xffffffff8080bc48 returned 0 after 75 usecs
+[    0.127807] calling  0xffffffff8080be0c @ 1
+[    0.127819] initcall 0xffffffff8080be0c returned 0 after 8 usecs
+[    0.127823] calling  0xffffffff8080c40c @ 1
+[    0.127877] initcall 0xffffffff8080c40c returned 0 after 51 usecs
+[    0.127882] calling  0xffffffff8080c458 @ 1
+[    0.127896] initcall 0xffffffff8080c458 returned 0 after 11 usecs
+[    0.127901] calling  0xffffffff8080c4a4 @ 1
+[    0.127943] initcall 0xffffffff8080c4a4 returned 0 after 38 usecs
+[    0.127947] calling  0xffffffff8080c560 @ 1
+[    0.127963] initcall 0xffffffff8080c560 returned 0 after 12 usecs
+[    0.127967] calling  0xffffffff8080e69c @ 1
+[    0.128137] initcall 0xffffffff8080e69c returned 0 after 166 usecs
+[    0.128151] calling  0xffffffff8080ec9c @ 1
+[    0.130096] Unpacking initramfs...
+[    0.132523] initcall 0xffffffff8080ec9c returned 0 after 4367 usecs
+[    0.132535] calling  0xffffffff8080ee20 @ 1
+[    0.132570] initcall 0xffffffff8080ee20 returned 0 after 31 usecs
+[    0.132575] calling  0xffffffff80811b48 @ 1
+[    0.132606] workingset: timestamp_bits=62 max_order=15 bucket_order=0
+[    0.132635] initcall 0xffffffff80811b48 returned 0 after 56 usecs
+[    0.132640] calling  0xffffffff808126e4 @ 1
+[    0.132670] initcall 0xffffffff808126e4 returned 0 after 26 usecs
+[    0.132675] calling  0xffffffff80816c08 @ 1
+[    0.132707] initcall 0xffffffff80816c08 returned 0 after 29 usecs
+[    0.132712] calling  0xffffffff808173f0 @ 1
+[    0.132738] initcall 0xffffffff808173f0 returned 0 after 22 usecs
+[    0.132742] calling  0xffffffff80817ea0 @ 1
+[    0.132783] initcall 0xffffffff80817ea0 returned 0 after 37 usecs
+[    0.132787] calling  0xffffffff808181fc @ 1
+[    0.132884] initcall 0xffffffff808181fc returned 0 after 92 usecs
+[    0.132891] calling  0xffffffff808184f4 @ 1
+[    0.132914] initcall 0xffffffff808184f4 returned 0 after 19 usecs
+[    0.132919] calling  0xffffffff80818514 @ 1
+[    0.132931] initcall 0xffffffff80818514 returned 0 after 9 usecs
+[    0.132935] calling  0xffffffff80818860 @ 1
+[    0.138334] initcall 0xffffffff80818860 returned -12 after 5394 usecs
+[    0.138346] calling  0xffffffff8081912c @ 1
+[    0.138376] initcall 0xffffffff8081912c returned 0 after 25 usecs
+[    0.138382] calling  0xffffffff80819150 @ 1
+[    0.138404] NFS: Registering the id_resolver key type
+[    0.138575] Key type id_resolver registered
+[    0.138600] Key type id_legacy registered
+[    0.138759] initcall 0xffffffff80819150 returned 0 after 373 usecs
+[    0.138765] calling  0xffffffff808193b0 @ 1
+[    0.138774] nfs4filelayout_init: NFSv4 File Layout Driver Registering...
+[    0.138808] initcall 0xffffffff808193b0 returned 0 after 39 usecs
+[    0.138813] calling  0xffffffff808193ec @ 1
+[    0.138821] nfs4flexfilelayout_init: NFSv4 Flexfile Layout Driver Registering...
+[    0.138838] initcall 0xffffffff808193ec returned 0 after 21 usecs
+[    0.138842] calling  0xffffffff80819428 @ 1
+[    0.138916] initcall 0xffffffff80819428 returned 0 after 69 usecs
+[    0.138923] calling  0xffffffff80819478 @ 1
+[    0.138959] initcall 0xffffffff80819478 returned 0 after 32 usecs
+[    0.138964] calling  0xffffffff8081949c @ 1
+[    0.139984] Freeing initrd memory: 44K
+[    0.140383] initcall 0xffffffff8081949c returned 0 after 1414 usecs
+[    0.140392] calling  0xffffffff80819520 @ 1
+[    0.140404] 9p: Installing v9fs 9p2000 file system support
+[    0.140450] initcall 0xffffffff80819520 returned 0 after 54 usecs
+[    0.140455] calling  0xffffffff80819878 @ 1
+[    0.140502] initcall 0xffffffff80819878 returned 0 after 44 usecs
+[    0.140507] calling  0xffffffff808199dc @ 1
+[    0.140739] initcall 0xffffffff808199dc returned 0 after 228 usecs
+[    0.140746] calling  0xffffffff80819c28 @ 1
+[    0.140815] initcall 0xffffffff80819c28 returned 0 after 65 usecs
+[    0.140821] calling  0xffffffff80819d70 @ 1
+[    0.140886] initcall 0xffffffff80819d70 returned 0 after 61 usecs
+[    0.140890] calling  0xffffffff8081a740 @ 1
+[    0.140936] initcall 0xffffffff8081a740 returned 0 after 42 usecs
+[    0.140943] calling  0xffffffff8081b2ec @ 1
+[    0.140978] initcall 0xffffffff8081b2ec returned 0 after 31 usecs
+[    0.140983] calling  0xffffffff8081b310 @ 1
+[    0.141016] initcall 0xffffffff8081b310 returned 0 after 29 usecs
+[    0.141021] calling  0xffffffff8081b334 @ 1
+[    0.142887] riscv-plic: plic@c000000: mapped 95 interrupts with 1 handlers for 2 contexts.
+[    0.143020] probe of c000000.plic returned 0 after 1929 usecs
+[    0.143058] initcall 0xffffffff8081b334 returned 0 after 2033 usecs
+[    0.143065] calling  0xffffffff8081b374 @ 1
+[    0.143106] initcall 0xffffffff8081b374 returned 0 after 37 usecs
+[    0.143112] calling  0xffffffff8081b398 @ 1
+[    0.143192] probe of platform-bus@4000000 returned 19 after 60 usecs
+[    0.143277] probe of soc returned 0 after 71 usecs
+[    0.143320] initcall 0xffffffff8081b398 returned 0 after 204 usecs
+[    0.143325] calling  0xffffffff8081b3bc @ 1
+[    0.143362] initcall 0xffffffff8081b3bc returned 0 after 33 usecs
+[    0.143367] calling  0xffffffff8081b4e0 @ 1
+[    0.143404] initcall 0xffffffff8081b4e0 returned 0 after 33 usecs
+[    0.143408] calling  0xffffffff8081b504 @ 1
+[    0.143448] initcall 0xffffffff8081b504 returned 0 after 35 usecs
+[    0.143454] calling  0xffffffff8081b528 @ 1
+[    0.143486] initcall 0xffffffff8081b528 returned 0 after 28 usecs
+[    0.143491] calling  0xffffffff8081b54c @ 1
+[    0.143523] initcall 0xffffffff8081b54c returned 0 after 28 usecs
+[    0.143527] calling  0xffffffff8081b570 @ 1
+[    0.143559] initcall 0xffffffff8081b570 returned 0 after 28 usecs
+[    0.143564] calling  0xffffffff8081b594 @ 1
+[    0.143601] initcall 0xffffffff8081b594 returned 0 after 34 usecs
+[    0.143606] calling  0xffffffff8081b5b8 @ 1
+[    0.143639] initcall 0xffffffff8081b5b8 returned 0 after 29 usecs
+[    0.143644] calling  0xffffffff8081b5dc @ 1
+[    0.143676] initcall 0xffffffff8081b5dc returned 0 after 29 usecs
+[    0.143680] calling  0xffffffff8081b600 @ 1
+[    0.143712] initcall 0xffffffff8081b600 returned 0 after 28 usecs
+[    0.143716] calling  0xffffffff8081b624 @ 1
+[    0.143748] initcall 0xffffffff8081b624 returned 0 after 28 usecs
+[    0.143754] calling  0xffffffff8081b8d0 @ 1
+[    0.143794] initcall 0xffffffff8081b8d0 returned 0 after 36 usecs
+[    0.143798] calling  0xffffffff8081b8f4 @ 1
+[    0.143837] initcall 0xffffffff8081b8f4 returned 0 after 35 usecs
+[    0.143842] calling  0xffffffff8081b918 @ 1
+[    0.143873] initcall 0xffffffff8081b918 returned 0 after 28 usecs
+[    0.143878] calling  0xffffffff8081d9c0 @ 1
+[    0.143903] initcall 0xffffffff8081d9c0 returned 0 after 21 usecs
+[    0.143908] calling  0xffffffff8081ebe0 @ 1
+[    0.143931] initcall 0xffffffff8081ebe0 returned -19 after 19 usecs
+[    0.143936] calling  0xffffffff8081ec28 @ 1
+[    0.143959] initcall 0xffffffff8081ec28 returned 0 after 19 usecs
+[    0.143963] calling  0xffffffff8081ec88 @ 1
+[    0.143990] initcall 0xffffffff8081ec88 returned 0 after 22 usecs
+[    0.143994] calling  0xffffffff8081ecac @ 1
+[    0.144006] initcall 0xffffffff8081ecac returned 0 after 9 usecs
+[    0.144012] calling  0xffffffff8081eda0 @ 1
+[    0.150718] initcall 0xffffffff8081eda0 returned -19 after 6701 usecs
+[    0.150730] calling  0xffffffff8081eeb0 @ 1
+[    0.150740] initcall 0xffffffff8081eeb0 returned -19 after 5 usecs
+[    0.150745] calling  0xffffffff8081f774 @ 1
+[    0.150773] initcall 0xffffffff8081f774 returned 0 after 24 usecs
+[    0.150778] calling  0xffffffff80820ae8 @ 1
+[    0.150824] initcall 0xffffffff80820ae8 returned 0 after 43 usecs
+[    0.150829] calling  0xffffffff80820b24 @ 1
+[    0.150864] initcall 0xffffffff80820b24 returned 0 after 31 usecs
+[    0.150870] calling  0xffffffff80820bbc @ 1
+[    0.150903] initcall 0xffffffff80820bbc returned 0 after 29 usecs
+[    0.150908] calling  0xffffffff80820b98 @ 1
+[    0.150950] initcall 0xffffffff80820b98 returned 0 after 38 usecs
+[    0.150955] calling  0xffffffff80820be0 @ 1
+[    0.150988] initcall 0xffffffff80820be0 returned 0 after 29 usecs
+[    0.150992] calling  0xffffffff80820c4c @ 1
+[    0.151032] initcall 0xffffffff80820c4c returned 0 after 36 usecs
+[    0.151036] calling  0xffffffff80820c70 @ 1
+[    0.151094] initcall 0xffffffff80820c70 returned 0 after 54 usecs
+[    0.151098] calling  0xffffffff80820c94 @ 1
+[    0.151133] initcall 0xffffffff80820c94 returned 0 after 30 usecs
+[    0.151137] calling  0xffffffff80820cb8 @ 1
+[    0.151171] initcall 0xffffffff80820cb8 returned 0 after 30 usecs
+[    0.151176] calling  0xffffffff80820cdc @ 1
+[    0.151208] initcall 0xffffffff80820cdc returned 0 after 29 usecs
+[    0.151216] calling  0xffffffff80820d00 @ 1
+[    0.151288] initcall 0xffffffff80820d00 returned 0 after 66 usecs
+[    0.151292] calling  0xffffffff80820d24 @ 1
+[    0.151572] initcall 0xffffffff80820d24 returned -19 after 276 usecs
+[    0.151577] calling  0xffffffff80820fa8 @ 1
+[    0.151627] initcall 0xffffffff80820fa8 returned -19 after 45 usecs
+[    0.151633] calling  0xffffffff808210fc @ 1
+[    0.151676] initcall 0xffffffff808210fc returned -19 after 39 usecs
+[    0.151680] calling  0xffffffff808214c8 @ 1
+[    0.151713] initcall 0xffffffff808214c8 returned 0 after 29 usecs
+[    0.151718] calling  0xffffffff808214ec @ 1
+[    0.151752] initcall 0xffffffff808214ec returned 0 after 30 usecs
+[    0.151757] calling  0xffffffff80821510 @ 1
+[    0.151796] initcall 0xffffffff80821510 returned 0 after 35 usecs
+[    0.151800] calling  0xffffffff808217c4 @ 1
+[    0.151852] initcall 0xffffffff808217c4 returned 0 after 48 usecs
+[    0.151857] calling  0xffffffff808217e8 @ 1
+[    0.151959] initcall 0xffffffff808217e8 returned -19 after 98 usecs
+[    0.151964] calling  0xffffffff808218e8 @ 1
+[    0.152003] initcall 0xffffffff808218e8 returned 0 after 35 usecs
+[    0.152007] calling  0xffffffff8082190c @ 1
+[    0.152172] initcall 0xffffffff8082190c returned 0 after 160 usecs
+[    0.152178] calling  0xffffffff80821930 @ 1
+[    0.152219] initcall 0xffffffff80821930 returned 0 after 36 usecs
+[    0.152224] calling  0xffffffff80821b58 @ 1
+[    0.153445] probe of 10008000.virtio_mmio returned 0 after 1172 usecs
+[    0.153913] probe of 10007000.virtio_mmio returned 19 after 433 usecs
+[    0.153955] probe of 10006000.virtio_mmio returned 19 after 29 usecs
+[    0.153984] probe of 10005000.virtio_mmio returned 19 after 21 usecs
+[    0.154010] probe of 10004000.virtio_mmio returned 19 after 19 usecs
+[    0.154038] probe of 10003000.virtio_mmio returned 19 after 19 usecs
+[    0.154064] probe of 10002000.virtio_mmio returned 19 after 19 usecs
+[    0.154090] probe of 10001000.virtio_mmio returned 19 after 19 usecs
+[    0.154113] initcall 0xffffffff80821b58 returned 0 after 1885 usecs
+[    0.154120] calling  0xffffffff80821b7c @ 1
+[    0.154144] initcall 0xffffffff80821b7c returned 0 after 20 usecs
+[    0.154149] calling  0xffffffff80821ba0 @ 1
+[    0.154168] initcall 0xffffffff80821ba0 returned 0 after 15 usecs
+[    0.154173] calling  0xffffffff80821d44 @ 1
+[    0.154201] initcall 0xffffffff80821d44 returned 0 after 24 usecs
+[    0.154207] calling  0xffffffff80821d8c @ 1
+[    0.154236] initcall 0xffffffff80821d8c returned 0 after 25 usecs
+[    0.154241] calling  0xffffffff80821db0 @ 1
+[    0.154275] initcall 0xffffffff80821db0 returned 0 after 31 usecs
+[    0.154280] calling  0xffffffff80821dd4 @ 1
+[    0.154325] initcall 0xffffffff80821dd4 returned -19 after 42 usecs
+[    0.154330] calling  0xffffffff80821e50 @ 1
+[    0.154385] initcall 0xffffffff80821e50 returned 0 after 51 usecs
+[    0.154389] calling  0xffffffff80821e7c @ 1
+[    0.154411] initcall 0xffffffff80821e7c returned 0 after 18 usecs
+[    0.154416] calling  0xffffffff80821ea8 @ 1
+[    0.154523] initcall 0xffffffff80821ea8 returned 0 after 103 usecs
+[    0.154527] calling  0xffffffff80821ecc @ 1
+[    0.154546] initcall 0xffffffff80821ecc returned 0 after 14 usecs
+[    0.154550] calling  0xffffffff808221c8 @ 1
+[    0.154564] initcall 0xffffffff808221c8 returned 0 after 11 usecs
+[    0.154570] calling  0xffffffff808221f0 @ 1
+[    0.188337] initcall 0xffffffff808221f0 returned 0 after 33763 usecs
+[    0.188347] calling  0xffffffff8082354c @ 1
+[    0.188375] Serial: 8250/16550 driver, 4 ports, IRQ sharing disabled
+[    0.188947] probe of serial8250:0 returned 0 after 85 usecs
+[    0.189366] probe of serial8250:0.0 returned 0 after 61 usecs
+[    0.189879] probe of serial8250:0.1 returned 0 after 10 usecs
+[    0.189977] probe of serial8250:0.2 returned 0 after 9 usecs
+[    0.190055] probe of serial8250:0.3 returned 0 after 8 usecs
+[    0.190306] probe of serial8250 returned 0 after 48 usecs
+[    0.190328] initcall 0xffffffff8082354c returned 0 after 1976 usecs
+[    0.190335] calling  0xffffffff808237a0 @ 1
+[    0.190409] initcall 0xffffffff808237a0 returned 0 after 69 usecs
+[    0.190414] calling  0xffffffff808237c4 @ 1
+[    0.193267] printk: legacy console [ttyS0] disabled
+[    0.194765] probe of 10000000.serial:0 returned 0 after 18 usecs
+[    0.194819] probe of 10000000.serial:0.0 returned 0 after 15 usecs
+[    0.195067] 10000000.serial: ttyS0 at MMIO 0x10000000 (irq = 1, base_baud = 230400) is a 16550A
+[    0.196021] printk: legacy console [ttyS0] enabled
+[    0.353227] probe of 10000000.serial returned 0 after 162750 usecs
+[    0.353459] initcall 0xffffffff808237c4 returned 0 after 163041 usecs
+[    0.353603] calling  0xffffffff80823834 @ 1
+[    0.353771] initcall 0xffffffff80823834 returned 0 after 79 usecs
+[    0.353898] calling  0xffffffff80823c24 @ 1
+[    0.354053] initcall 0xffffffff80823c24 returned 0 after 66 usecs
+[    0.354181] calling  0xffffffff80823dc4 @ 1
+[    0.354311] initcall 0xffffffff80823dc4 returned 0 after 41 usecs
+[    0.354437] calling  0xffffffff80823de8 @ 1
+[    0.354541] initcall 0xffffffff80823de8 returned 0 after 15 usecs
+[    0.354678] calling  0xffffffff80823e0c @ 1
+[    0.354800] initcall 0xffffffff80823e0c returned 0 after 34 usecs
+[    0.354924] calling  0xffffffff80824084 @ 1
+[    0.355063] initcall 0xffffffff80824084 returned -19 after 50 usecs
+[    0.355195] calling  0xffffffff80824724 @ 1
+[    0.355303] initcall 0xffffffff80824724 returned 0 after 20 usecs
+[    0.355427] calling  0xffffffff808247a0 @ 1
+[    0.355702] initcall 0xffffffff808247a0 returned -2 after 186 usecs
+[    0.355832] calling  0xffffffff80825384 @ 1
+[    0.355942] initcall 0xffffffff80825384 returned 0 after 21 usecs
+[    0.356101] calling  0xffffffff808253a8 @ 1
+[    0.356218] initcall 0xffffffff808253a8 returned 0 after 25 usecs
+[    0.356343] calling  0xffffffff808255a0 @ 1
+[    0.356705] initcall 0xffffffff808255a0 returned 0 after 274 usecs
+[    0.356840] calling  0xffffffff80825704 @ 1
+[    0.356963] initcall 0xffffffff80825704 returned 0 after 35 usecs
+[    0.357089] calling  0xffffffff8082573c @ 1
+[    0.357199] initcall 0xffffffff8082573c returned 0 after 24 usecs
+[    0.357324] calling  0xffffffff80825760 @ 1
+[    0.357509] initcall 0xffffffff80825760 returned 0 after 97 usecs
+[    0.357640] calling  0xffffffff80825838 @ 1
+[    0.357766] initcall 0xffffffff80825838 returned 0 after 39 usecs
+[    0.357891] calling  0xffffffff8082585c @ 1
+[    0.358023] initcall 0xffffffff8082585c returned 0 after 45 usecs
+[    0.358147] calling  0xffffffff80825900 @ 1
+[    0.358519] initcall 0xffffffff80825900 returned 0 after 284 usecs
+[    0.358654] calling  0xffffffff808259cc @ 1
+[    0.358762] initcall 0xffffffff808259cc returned 0 after 20 usecs
+[    0.358884] calling  0xffffffff80825d00 @ 1
+[    0.359171] initcall 0xffffffff80825d00 returned 0 after 199 usecs
+[    0.359302] calling  0xffffffff80825d90 @ 1
+[    0.359557] initcall 0xffffffff80825d90 returned 0 after 167 usecs
+[    0.359692] calling  0xffffffff80825db8 @ 1
+[    0.359891] initcall 0xffffffff80825db8 returned 0 after 111 usecs
+[    0.360017] calling  0xffffffff80825de0 @ 1
+[    0.360192] initcall 0xffffffff80825de0 returned 0 after 52 usecs
+[    0.360320] calling  0xffffffff80825e08 @ 1
+[    0.360619] initcall 0xffffffff80825e08 returned 0 after 212 usecs
+[    0.360747] calling  0xffffffff80825e30 @ 1
+[    0.363668] probe of virtio0 returned 0 after 2796 usecs
+[    0.363807] initcall 0xffffffff80825e30 returned 0 after 2972 usecs
+[    0.363938] calling  0xffffffff80825ed8 @ 1
+[    0.364237] initcall 0xffffffff80825ed8 returned 0 after 182 usecs
+[    0.364368] calling  0xffffffff80825efc @ 1
+[    0.364462] initcall 0xffffffff80825efc returned 0 after 5 usecs
+[    0.364589] calling  0xffffffff808261a4 @ 1
+[    0.364719] initcall 0xffffffff808261a4 returned 0 after 38 usecs
+[    0.364842] calling  0xffffffff80826220 @ 1
+[    0.365057] initcall 0xffffffff80826220 returned 0 after 128 usecs
+[    0.365185] calling  0xffffffff8082626c @ 1
+[    0.365300] initcall 0xffffffff8082626c returned 0 after 29 usecs
+[    0.365425] calling  0xffffffff808262c0 @ 1
+[    0.365615] initcall 0xffffffff808262c0 returned 0 after 102 usecs
+[    0.365744] calling  0xffffffff8082630c @ 1
+[    0.365859] initcall 0xffffffff8082630c returned 0 after 28 usecs
+[    0.365982] calling  0xffffffff80826370 @ 1
+[    0.366245] initcall 0xffffffff80826370 returned 0 after 175 usecs
+[    0.366373] calling  0xffffffff8082643c @ 1
+[    0.366473] initcall 0xffffffff8082643c returned 0 after 12 usecs
+[    0.366600] calling  0xffffffff808264f4 @ 1
+[    0.380312] mousedev: PS/2 mouse device common for all mice
+[    0.380446] initcall 0xffffffff808264f4 returned 0 after 13759 usecs
+[    0.380583] calling  0xffffffff8082656c @ 1
+[    0.380695] initcall 0xffffffff8082656c returned 0 after 12 usecs
+[    0.380820] calling  0xffffffff808265fc @ 1
+[    0.381036] initcall 0xffffffff808265fc returned 0 after 128 usecs
+[    0.381169] calling  0xffffffff8082665c @ 1
+[    0.381414] initcall 0xffffffff8082665c returned 0 after 157 usecs
+[    0.381545] calling  0xffffffff80826854 @ 1
+[    0.385229] goldfish_rtc 101000.rtc: registered as rtc0
+[    0.385659] goldfish_rtc 101000.rtc: setting system clock to 2026-08-18T08:48:32 UTC (1787042912)
+[    0.386036] probe of 101000.rtc returned 0 after 4374 usecs
+[    0.386185] initcall 0xffffffff80826854 returned 0 after 4546 usecs
+[    0.386317] calling  0xffffffff80826878 @ 1
+[    0.386442] initcall 0xffffffff80826878 returned 0 after 36 usecs
+[    0.386570] calling  0xffffffff8082689c @ 1
+[    0.386752] initcall 0xffffffff8082689c returned 0 after 88 usecs
+[    0.386878] calling  0xffffffff80826ddc @ 1
+[    0.386999] initcall 0xffffffff80826ddc returned 0 after 33 usecs
+[    0.387124] calling  0xffffffff80826e00 @ 1
+[    0.387247] initcall 0xffffffff80826e00 returned 0 after 35 usecs
+[    0.387372] calling  0xffffffff80826e24 @ 1
+[    0.388460] probe of reboot returned 0 after 985 usecs
+[    0.388620] initcall 0xffffffff80826e24 returned 0 after 1161 usecs
+[    0.388753] calling  0xffffffff80826e48 @ 1
+[    0.389031] probe of poweroff returned 0 after 171 usecs
+[    0.389175] initcall 0xffffffff80826e48 returned 0 after 333 usecs
+[    0.389303] calling  0xffffffff808271c4 @ 1
+[    0.389448] initcall 0xffffffff808271c4 returned 0 after 56 usecs
+[    0.389574] calling  0xffffffff808271e8 @ 1
+[    0.389706] initcall 0xffffffff808271e8 returned 0 after 40 usecs
+[    0.389831] calling  0xffffffff8082734c @ 1
+[    0.389943] initcall 0xffffffff8082734c returned 0 after 24 usecs
+[    0.390068] calling  0xffffffff80827598 @ 1
+[    0.390189] initcall 0xffffffff80827598 returned 0 after 33 usecs
+[    0.390313] calling  0xffffffff808275bc @ 1
+[    0.390434] initcall 0xffffffff808275bc returned 0 after 33 usecs
+[    0.390559] calling  0xffffffff808275e0 @ 1
+[    0.390654] sdhci: Secure Digital Host Controller Interface driver
+[    0.390784] sdhci: Copyright(c) Pierre Ossman
+[    0.390877] initcall 0xffffffff808275e0 returned 0 after 227 usecs
+[    0.391002] calling  0xffffffff80827614 @ 1
+[    0.391113] initcall 0xffffffff80827614 returned 0 after 23 usecs
+[    0.391236] calling  0xffffffff80827638 @ 1
+[    0.391328] Synopsys Designware Multimedia Card Interface Driver
+[    0.391452] initcall 0xffffffff80827638 returned 0 after 128 usecs
+[    0.391577] calling  0xffffffff8082765c @ 1
+[    0.391713] initcall 0xffffffff8082765c returned 0 after 46 usecs
+[    0.391840] calling  0xffffffff80827680 @ 1
+[    0.391959] initcall 0xffffffff80827680 returned 0 after 31 usecs
+[    0.392132] calling  0xffffffff808276a4 @ 1
+[    0.392322] initcall 0xffffffff808276a4 returned 0 after 99 usecs
+[    0.392448] calling  0xffffffff808276c8 @ 1
+[    0.392540] sdhci-pltfm: SDHCI platform and OF driver helper
+[    0.392666] initcall 0xffffffff808276c8 returned 0 after 130 usecs
+[    0.392792] calling  0xffffffff808276ec @ 1
+[    0.392931] initcall 0xffffffff808276ec returned 0 after 51 usecs
+[    0.393056] calling  0xffffffff80827710 @ 1
+[    0.393220] initcall 0xffffffff80827710 returned 0 after 76 usecs
+[    0.393345] calling  0xffffffff80827734 @ 1
+[    0.393465] initcall 0xffffffff80827734 returned 0 after 32 usecs
+[    0.393594] calling  0xffffffff8082a24c @ 1
+[    0.393707] initcall 0xffffffff8082a24c returned -38 after 25 usecs
+[    0.393835] calling  0xffffffff8082b9d8 @ 1
+[    0.393972] initcall 0xffffffff8082b9d8 returned 0 after 49 usecs
+[    0.394100] calling  0xffffffff8082ba20 @ 1
+[    0.394248] initcall 0xffffffff8082ba20 returned 0 after 60 usecs
+[    0.394373] calling  0xffffffff8082ba4c @ 1
+[    0.394481] initcall 0xffffffff8082ba4c returned 0 after 19 usecs
+[    0.394610] calling  0xffffffff8082ba78 @ 1
+[    0.394715] initcall 0xffffffff8082ba78 returned 0 after 17 usecs
+[    0.394838] calling  0xffffffff8082baa4 @ 1
+[    0.394941] initcall 0xffffffff8082baa4 returned 0 after 16 usecs
+[    0.395065] calling  0xffffffff8082bad0 @ 1
+[    0.395175] initcall 0xffffffff8082bad0 returned 0 after 22 usecs
+[    0.395299] calling  0xffffffff8082bafc @ 1
+[    0.395402] initcall 0xffffffff8082bafc returned 0 after 16 usecs
+[    0.395526] calling  0xffffffff8082bb28 @ 1
+[    0.395637] initcall 0xffffffff8082bb28 returned 0 after 20 usecs
+[    0.395763] calling  0xffffffff8082bb54 @ 1
+[    0.395868] initcall 0xffffffff8082bb54 returned 0 after 16 usecs
+[    0.395994] calling  0xffffffff8082bb80 @ 1
+[    0.396154] initcall 0xffffffff8082bb80 returned 0 after 23 usecs
+[    0.396282] calling  0xffffffff8082bbac @ 1
+[    0.396387] initcall 0xffffffff8082bbac returned 0 after 17 usecs
+[    0.396511] calling  0xffffffff8082bbd8 @ 1
+[    0.396620] initcall 0xffffffff8082bbd8 returned 0 after 17 usecs
+[    0.396743] calling  0xffffffff8082bc04 @ 1
+[    0.396849] initcall 0xffffffff8082bc04 returned 0 after 17 usecs
+[    0.396973] calling  0xffffffff8082bc30 @ 1
+[    0.397122] usbcore: registered new interface driver usbhid
+[    0.397243] usbhid: USB HID core driver
+[    0.397327] initcall 0xffffffff8082bc30 returned 0 after 266 usecs
+[    0.397452] calling  0xffffffff8082e298 @ 1
+[    0.397577] initcall 0xffffffff8082e298 returned 0 after 37 usecs
+[    0.397706] calling  0xffffffff8082e2bc @ 1
+[    0.397829] initcall 0xffffffff8082e2bc returned 0 after 35 usecs
+[    0.397953] calling  0xffffffff8082e490 @ 1
+[    0.398064] initcall 0xffffffff8082e490 returned 0 after 24 usecs
+[    0.398187] calling  0xffffffff8082e628 @ 1
+[    0.398413] riscv-pmu-sbi: SBI PMU extension is available
+[    0.398785] riscv-pmu-sbi: 16 firmware and 18 hardware counters
+[    0.398936] riscv-pmu-sbi: Perf sampling/filtering is not supported as sscof extension is not available
+[    0.399561] probe of riscv-pmu-sbi returned 0 after 1168 usecs
+[    0.399719] initcall 0xffffffff8082e628 returned 0 after 1443 usecs
+[    0.399849] calling  0xffffffff8082e7a0 @ 1
+[    0.400022] initcall 0xffffffff8082e7a0 returned 0 after 85 usecs
+[    0.400190] calling  0xffffffff8082e870 @ 1
+[    0.416787] initcall 0xffffffff8082e870 returned 0 after 16507 usecs
+[    0.416935] calling  0xffffffff8082ea34 @ 1
+[    0.417109] initcall 0xffffffff8082ea34 returned 0 after 83 usecs
+[    0.417239] calling  0xffffffff8082ea68 @ 1
+[    0.417835] probe of snd-soc-dummy returned 0 after 446 usecs
+[    0.418013] initcall 0xffffffff8082ea68 returned 0 after 684 usecs
+[    0.418144] calling  0xffffffff8082f6c0 @ 1
+[    0.418293] initcall 0xffffffff8082f6c0 returned 0 after 60 usecs
+[    0.418422] calling  0xffffffff8082f8a8 @ 1
+[    0.418594] initcall 0xffffffff8082f8a8 returned 0 after 78 usecs
+[    0.418721] calling  0xffffffff8082fa3c @ 1
+[    0.418822] initcall 0xffffffff8082fa3c returned 0 after 9 usecs
+[    0.418944] calling  0xffffffff8082fce8 @ 1
+[    0.419069] initcall 0xffffffff8082fce8 returned 0 after 36 usecs
+[    0.419194] calling  0xffffffff808319dc @ 1
+[    0.419292] initcall 0xffffffff808319dc returned 0 after 9 usecs
+[    0.419415] calling  0xffffffff8083387c @ 1
+[    0.419542] initcall 0xffffffff8083387c returned 0 after 39 usecs
+[    0.419670] calling  0xffffffff8083391c @ 1
+[    0.419796] initcall 0xffffffff8083391c returned 0 after 34 usecs
+[    0.419920] calling  0xffffffff80833940 @ 1
+[    0.420123] initcall 0xffffffff80833940 returned 0 after 115 usecs
+[    0.420253] calling  0xffffffff80834514 @ 1
+[    0.420578] 9pnet: Installing 9P2000 support
+[    0.420677] initcall 0xffffffff80834514 returned 0 after 336 usecs
+[    0.420803] calling  0xffffffff808345c8 @ 1
+[    0.420919] initcall 0xffffffff808345c8 returned 0 after 28 usecs
+[    0.421043] calling  0xffffffff8083460c @ 1
+[    0.421161] initcall 0xffffffff8083460c returned 0 after 31 usecs
+[    0.421285] calling  0xffffffff80834668 @ 1
+[    0.421402] Key type dns_resolver registered
+[    0.421509] initcall 0xffffffff80834668 returned 0 after 137 usecs
+[    0.421639] calling  0xffffffff808347f4 @ 1
+[    0.421846] initcall 0xffffffff808347f4 returned 0 after 119 usecs
+[    0.421991] entering initcall level: late
+[    0.422074] calling  0xffffffff80809718 @ 1
+[    0.422315] initcall 0xffffffff80809718 returned 0 after 153 usecs
+[    0.422444] calling  0xffffffff80809a6c @ 1
+[    0.430053] initcall 0xffffffff80809a6c returned 0 after 7521 usecs
+[    0.430195] calling  0xffffffff80809aec @ 1
+[    0.430311] initcall 0xffffffff80809aec returned 0 after 25 usecs
+[    0.430442] calling  0xffffffff8080a470 @ 1
+[    0.430581] initcall 0xffffffff8080a470 returned 0 after 50 usecs
+[    0.430713] calling  0xffffffff8080ac98 @ 1
+[    0.430849] initcall 0xffffffff8080ac98 returned 0 after 43 usecs
+[    0.430976] calling  0xffffffff8080bef4 @ 1
+[    0.431076] initcall 0xffffffff8080bef4 returned 0 after 13 usecs
+[    0.431201] calling  0xffffffff8080e01c @ 1
+[    0.431298] initcall 0xffffffff8080e01c returned 0 after 9 usecs
+[    0.431421] calling  0xffffffff8080e10c @ 1
+[    0.431778] initcall 0xffffffff8080e10c returned 0 after 267 usecs
+[    0.431910] calling  0xffffffff8080e140 @ 1
+[    0.432020] initcall 0xffffffff8080e140 returned 0 after 22 usecs
+[    0.432169] calling  0xffffffff8080e1f0 @ 1
+[    0.432352] initcall 0xffffffff8080e1f0 returned 0 after 87 usecs
+[    0.432479] calling  0xffffffff80111894 @ 1
+[    0.432582] initcall 0xffffffff80111894 returned 0 after 15 usecs
+[    0.432711] calling  0xffffffff8080e2d4 @ 1
+[    0.432846] initcall 0xffffffff8080e2d4 returned 0 after 47 usecs
+[    0.432971] calling  0xffffffff8080e338 @ 1
+[    0.433090] initcall 0xffffffff8080e338 returned 0 after 32 usecs
+[    0.433214] calling  0xffffffff8080e420 @ 1
+[    0.433310] initcall 0xffffffff8080e420 returned 0 after 9 usecs
+[    0.433433] calling  0xffffffff8080e458 @ 1
+[    0.433528] initcall 0xffffffff8080e458 returned 0 after 8 usecs
+[    0.433654] calling  0xffffffff8080e490 @ 1
+[    0.433750] initcall 0xffffffff8080e490 returned 0 after 8 usecs
+[    0.433872] calling  0xffffffff8080e4b4 @ 1
+[    0.433967] initcall 0xffffffff8080e4b4 returned 0 after 7 usecs
+[    0.434089] calling  0xffffffff8080e578 @ 1
+[    0.434211] initcall 0xffffffff8080e578 returned 0 after 34 usecs
+[    0.434335] calling  0xffffffff8080e610 @ 1
+[    0.434437] initcall 0xffffffff8080e610 returned 0 after 14 usecs
+[    0.434560] calling  0xffffffff8080e650 @ 1
+[    0.434660] initcall 0xffffffff8080e650 returned 0 after 9 usecs
+[    0.434786] calling  0xffffffff80811de8 @ 1
+[    0.434888] initcall 0xffffffff80811de8 returned 0 after 15 usecs
+[    0.435012] calling  0xffffffff80814c90 @ 1
+[    0.435105] initcall 0xffffffff80814c90 returned 0 after 5 usecs
+[    0.435226] calling  0xffffffff808163ac @ 1
+[    0.435328] initcall 0xffffffff808163ac returned 0 after 15 usecs
+[    0.435451] calling  0xffffffff80816ef8 @ 1
+[    0.435553] initcall 0xffffffff80816ef8 returned 0 after 15 usecs
+[    0.435682] calling  0xffffffff80819bc0 @ 1
+[    0.436777] initcall 0xffffffff80819bc0 returned 0 after 1006 usecs
+[    0.436917] calling  0xffffffff80820418 @ 1
+[    0.437070] initcall 0xffffffff80820418 returned 0 after 63 usecs
+[    0.437196] calling  0xffffffff80821a18 @ 1
+[    0.437309] initcall 0xffffffff80821a18 returned 0 after 25 usecs
+[    0.437434] calling  0xffffffff8041d23c @ 1
+[    0.437530] initcall 0xffffffff8041d23c returned 0 after 8 usecs
+[    0.437656] calling  0xffffffff8041fa88 @ 1
+[    0.444852] initcall 0xffffffff8041fa88 returned 0 after 7107 usecs
+[    0.444993] calling  0xffffffff80826638 @ 1
+[    0.445169] initcall 0xffffffff80826638 returned 0 after 86 usecs
+[    0.445299] calling  0xffffffff80829600 @ 1
+[    0.445395] initcall 0xffffffff80829600 returned -19 after 7 usecs
+[    0.445523] calling  0xffffffff8082aec8 @ 1
+[    0.445629] initcall 0xffffffff8082aec8 returned 0 after 11 usecs
+[    0.445756] calling  0xffffffff8082e580 @ 1
+[    0.445867] initcall 0xffffffff8082e580 returned 0 after 17 usecs
+[    0.445992] calling  0xffffffff805f0f58 @ 1
+[    0.446099] initcall 0xffffffff805f0f58 returned 0 after 18 usecs
+[    0.446227] calling  0xffffffff8082f550 @ 1
+[    0.446406] initcall 0xffffffff8082f550 returned 0 after 89 usecs
+[    0.446532] calling  0xffffffff8082f7dc @ 1
+[    0.446633] initcall 0xffffffff8082f7dc returned 0 after 8 usecs
+[    0.446757] calling  0xffffffff8082f8cc @ 1
+[    0.446860] initcall 0xffffffff8082f8cc returned 0 after 10 usecs
+[    0.446983] calling  0xffffffff8082f914 @ 1
+[    0.447079] initcall 0xffffffff8082f914 returned 0 after 9 usecs
+[    0.447204] calling  0xffffffff8082fd0c @ 1
+[    0.447338] initcall 0xffffffff8082fd0c returned 0 after 46 usecs
+[    0.447462] calling  0xffffffff80830924 @ 1
+[    0.447621] initcall 0xffffffff80830924 returned 0 after 71 usecs
+[    0.447748] calling  0xffffffff80831024 @ 1
+[    0.447860] initcall 0xffffffff80831024 returned 0 after 25 usecs
+[    0.447985] calling  0xffffffff808328e4 @ 1
+[    0.448172] initcall 0xffffffff808328e4 returned 0 after 57 usecs
+[    0.448302] calling  0xffffffff808339d0 @ 1
+[    0.448420] initcall 0xffffffff808339d0 returned 0 after 31 usecs
+[    0.448544] calling  0xffffffff80833aa0 @ 1
+[    0.448648] initcall 0xffffffff80833aa0 returned 0 after 12 usecs
+[    0.448772] calling  0xffffffff8080c988 @ 1
+[    0.448875] initcall 0xffffffff8080c988 returned 0 after 16 usecs
+[    0.448998] calling  0xffffffff8080cacc @ 1
+[    0.671703] initcall 0xffffffff8080cacc returned 0 after 222615 usecs
+[    0.671853] calling  0xffffffff8081b808 @ 1
+[    0.671973] initcall 0xffffffff8081b808 returned 0 after 29 usecs
+[    0.672152] calling  0xffffffff808203c0 @ 1
+[    0.672282] initcall 0xffffffff808203c0 returned 0 after 34 usecs
+[    0.672410] calling  0xffffffff8082077c @ 1
+[    0.672509] clk: Disabling unused clocks
+[    0.672727] initcall 0xffffffff8082077c returned 0 after 227 usecs
+[    0.672857] calling  0xffffffff80821970 @ 1
+[    0.672955] PM: genpd: Disabling unused power domains
+[    0.673073] initcall 0xffffffff80821970 returned 0 after 128 usecs
+[    0.673198] calling  0xffffffff80821be0 @ 1
+[    0.673309] initcall 0xffffffff80821be0 returned 0 after 19 usecs
+[    0.673431] calling  0xffffffff8082bd5c @ 1
+[    0.673537] initcall 0xffffffff8082bd5c returned 0 after 19 usecs
+[    0.673664] calling  0xffffffff8082eb5c @ 1
+[    0.673758] ALSA device list:
+[    0.673857]   No soundcards found.
+[    0.673934] initcall 0xffffffff8082eb5c returned 0 after 183 usecs
+[    0.699056] Freeing unused kernel image (initmem) memory: 2288K
+[    0.699426] Run /init as init process
+[    0.699507]   with arguments:
+[    0.699567]     /init
+[    0.699619]   with environment:
+[    0.699681]     HOME=/
+[    0.699730]     TERM=linux
+READY
+INIT listen mono_ns=708681100
+INIT ifup mono_ns=716630900
+INIT announce mono_ns=728454000
+INIT ready mono_ns=729923000
+INIT accept mono_ns=730231400
+INIT read mono_ns=730883200
+INIT response mono_ns=733696600
+LINUX INIT OK
+[    0.741144] riscv-pmu-sbi riscv-pmu-sbi: shutdown
+[    0.741278] serial8250 serial8250: shutdown
+[    0.741571] virtio_net virtio0: shutdown
+[    0.741878] platform 30000000.pci: shutdown
+[    0.741960] platform 2000000.clint: shutdown
+[    0.742036] goldfish_rtc 101000.rtc: shutdown
+[    0.742114] of_serial 10000000.serial: shutdown
+[    0.742194] virtio-mmio 10008000.virtio_mmio: shutdown
+[    0.742282] platform 10007000.virtio_mmio: shutdown
+[    0.742366] platform 10006000.virtio_mmio: shutdown
+[    0.742449] platform 10005000.virtio_mmio: shutdown
+[    0.742533] platform 10004000.virtio_mmio: shutdown
+[    0.742622] platform 10003000.virtio_mmio: shutdown
+[    0.742706] platform 10002000.virtio_mmio: shutdown
+[    0.742790] platform 10001000.virtio_mmio: shutdown
+[    0.742873] riscv-plic c000000.plic: shutdown
+[    0.742950] platform 100000.test: shutdown
+[    0.743022] simple-pm-bus soc: shutdown
+[    0.743090] platform 20000000.flash: shutdown
+[    0.743165] platform 10100000.fw-cfg: shutdown
+[    0.743242] platform pmu: shutdown
+[    0.743304] platform platform-bus@4000000: shutdown
+[    0.743388] syscon-reboot reboot: shutdown
+[    0.743460] syscon-poweroff poweroff: shutdown
+[    0.743537] platform sbi-cpuidle: shutdown
+[    0.743670] PM: Calling 0xffffffff800614ec
+[    0.743771] reboot: Power down
