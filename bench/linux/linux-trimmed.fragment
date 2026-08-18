@@ -1,0 +1,61 @@
+# bench/linux/linux-trimmed.fragment — D-0062 trimmed row.
+# Merged onto the pinned board kernel config via merge_config.sh.
+# One delta per line. A symbol kconfig re-enables through
+# dependencies gets recorded here with a note, never silently
+# accepted — just linux-build fails on unannotated merge warnings.
+
+## Keep: serial console (ttyS0 on the virt board UART)
+CONFIG_TTY=y
+CONFIG_SERIAL_8250=y
+CONFIG_SERIAL_8250_CONSOLE=y
+CONFIG_SERIAL_OF_PLATFORM=y
+CONFIG_PRINTK=y            # serial console implies it; quiet row silences with loglevel=0
+
+## Keep: virtio-net over virtio-mmio, built in (no module loading without userspace)
+CONFIG_NETDEVICES=y
+CONFIG_VIRTIO_MENU=y
+CONFIG_VIRTIO_MMIO=y
+CONFIG_VIRTIO_NET=y
+
+## Keep: IPv4 TCP only
+CONFIG_NET=y
+CONFIG_INET=y
+
+## Keep: initramfs boot + static ELF /init
+CONFIG_BLK_DEV_INITRD=y
+CONFIG_BINFMT_ELF=y
+CONFIG_DEVTMPFS=y          # D-0062 keeps it; /init itself needs only the cpio console node
+CONFIG_FUTEX=y             # static musl internals; not worth the breakage risk
+
+## Off: no modules, no v6, no storage, no second boot path
+# CONFIG_MODULES is not set
+# CONFIG_IPV6 is not set
+# CONFIG_BLOCK is not set
+# CONFIG_PCI is not set            # virtio here is MMIO; the virt board boots without PCI
+# CONFIG_EFI is not set            # OpenSBI + -kernel; no EFI stub on this path
+
+## Off: single hart (matches the fixed machine shape; listed as tuning)
+# CONFIG_SMP is not set
+
+## Off: determinism / boot cost
+# CONFIG_RANDOMIZE_BASE is not set # KASLR
+# CONFIG_IKCONFIG is not set
+# CONFIG_KALLSYMS is not set
+
+## Off: no userspace beyond /init
+# CONFIG_UNIX is not set
+# CONFIG_PACKET is not set         # announce is UDP-to-gateway, not AF_PACKET (D-0062 amendment)
+# CONFIG_PROC_FS is not set        # aggressive; first re-enable candidate on no-boot
+# CONFIG_SYSFS is not set          # aggressive; second re-enable candidate on no-boot
+# CONFIG_TMPFS is not set          # rootfs stays ramfs
+# CONFIG_SWAP is not set
+# CONFIG_NAMESPACES is not set
+# CONFIG_CGROUPS is not set
+
+# Deliberately absent: EXPERT-gated toggles (EPOLL and friends).
+# Fighting CONFIG_EXPERT changes a raft of defaults — exactly how a
+# trim enables a slow path by accident. The merge output is the
+# arbiter; the trimmed-vs-stock tripwire (D-0062 amendment) is the
+# backstop. SBI SRST poweroff needs no explicit symbol on the
+# pinned kernel; the boot gate proves it, and if the pinned version
+# disagrees, the needed symbol joins this list with a comment.

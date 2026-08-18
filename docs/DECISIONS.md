@@ -2521,11 +2521,15 @@ D-0011 onward are working decisions made under those constraints.
      linux-trimmed-instrumented; two shuffled batches × 30 recorded
      + 3 warmup per arm; stability criterion per arm.
   8. **Announce mechanism (confound A fix):** after ifup, `/init`
-     sends one UDP datagram toward 10.0.2.2 — the kernel's ARP
-     request for the gateway becomes the guest's first wire TX,
-     the same first-TX shape as Whimbrel's D-0046 gateway ARP, and
-     slirp learns the guest MAC and flushes the queued hostfwd SYN
-     right then. Chosen over an AF_PACKET gratuitous ARP so
+     sends one UDP datagram toward 10.0.2.2. The invariant is the
+     guest's **first wire TX**, not ARP specifically: with a cold
+     ARP cache the kernel emits an ARP request for the gateway
+     first (Whimbrel's D-0046 shape); with a warm cache (slirp's
+     own frames during boot, an entry populated at ifup) the
+     datagram itself is the first frame. slirp learns the guest
+     MAC from whichever frame leaves first and flushes the queued
+     hostfwd SYN either way — the SYN-grid gate is stated on first
+     TX, not on ARP. Chosen over an AF_PACKET gratuitous ARP so
      `CONFIG_PACKET` stays out of the trim.
   9. **`/init` ordering (confound B fix):** socket → bind → listen
      **before** ifup and the announce, so a SYN flushed at first TX
