@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""M4 benchmark harness (D-0055 / T4.1).
+"""M4 benchmark harness (D-0055 / T4.1 / D-0071).
 
 Long/tidy CSV: one run row per trial, one phase row per trial × PHASE
 line. T4.2 adding stamps is more rows, not more columns. Phase names are
 parsed from serial — this file is not a fourth copy of the justfile list
-(finding 26).
+(finding 26). New batches drop e0_to_e3w_ns and record pcap-internal
+w_ns / d_ack_ns / d_fin_ns via the D-0070 extract.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import importlib.util
 import json
 import math
 import os
@@ -22,10 +24,39 @@ import socket
 import statistics
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+# D-0070 extract (W / D_ack / D_fin on one pcap clock). Import the
+# implementation; do not clone the filters (D-0071).
+_D0070_SPEC = importlib.util.spec_from_file_location(
+    "d0070_pcap_pass", ROOT / "scripts" / "d0070-pcap-pass.py"
+)
+if _D0070_SPEC is None or _D0070_SPEC.loader is None:
+    raise RuntimeError("cannot import scripts/d0070-pcap-pass.py")
+_D0070 = importlib.util.module_from_spec(_D0070_SPEC)
+_D0070_SPEC.loader.exec_module(_D0070)
+
+SAFE_CONFIG = "release-default"
+FAST_CONFIG = "release-fast-boot"
+CONTROL_TOL_NS = 1_000_000
+WHIMBREL_DFIN_FAIL_NS = 10_000_000
+HTTP_LEN_PIN = 92
+NEW_RUN_METRICS = (
+    "e0_to_first_connect_ns",
+    "e0_to_e4_ns",
+    "w_ns",
+    "d_ack_ns",
+    "d_fin_ns",
+)
+OLD_RUN_METRICS = (
+    "e0_to_first_connect_ns",
+    "e0_to_e3w_ns",
+    "e0_to_e4_ns",
+)
 PHASE_HEADER_RE = re.compile(r"^PHASE ticks \(")
 PHASE_UNSET_RE = re.compile(r"^PHASE (\S+) unset\s*$")
 PHASE_ROW_RE = re.compile(
@@ -61,8 +92,10 @@ RUNS_FIELDS = [
     "e0_mono_ns",
     "e0_wall_ns",
     "e0_to_first_connect_ns",
-    "e0_to_e3w_ns",
     "e0_to_e4_ns",
+    "w_ns",
+    "d_ack_ns",
+    "d_fin_ns",
     "attempts",
     "pcap_path",
 ]
@@ -452,71 +485,146 @@ def assert_phases_sum_to_e3g(rows: list[dict]) -> int:
     return overhead
 
 
-def pcap_time_ns(line: str) -> int:
-    parts = line.split()
-    if not parts:
-        raise BenchFail(f"TEST FAIL: empty tshark line: {line!r}")
-    return int(round(float(parts[0]) * 1_000_000_000))
+def runs_schema(fieldnames) -> str:
+    """old = e0_to_e3w_ns without W/D_*; new = W/D_* without e0_to_e3w_ns.
 
-
-def tshark_fields(pcap: Path, tshark: str, display_filter: str) -> str:
-    cmd = [
-        tshark,
-        "-r",
-        str(pcap),
-        "-o",
-        "tcp.relative_sequence_numbers:FALSE",
-        "-Y",
-        display_filter,
-        "-T",
-        "fields",
-        "-e",
-        "frame.time_relative",
-        "-e",
-        "frame.number",
-    ]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
-    if proc.returncode != 0:
-        raise BenchFail(
-            f"TEST FAIL: tshark could not read {pcap}: {proc.stderr.strip()}"
-        )
-    return proc.stdout
-
-
-def e0_to_e3w_ns(pcap: Path, tshark: str, e0_to_first_connect_ns: int) -> int:
-    """E3w on the E0 timeline: monotonic first-connect (≈ SYN/ACK) plus
-    the pcap-relative SYN/ACK→HTTP interval. filter-dump's wall clock and
-    Python CLOCK_REALTIME disagree on this QEMU, so this is not
-    `pcap_epoch - e0_wall`.
+    Mixed or incomplete headers fail closed (D-0071). Historical git
+    objects keep the old schema; this does not rewrite them.
     """
-    if not pcap.is_file() or pcap.stat().st_size == 0:
-        raise BenchFail(f"TEST FAIL: pcap missing or empty: {pcap}")
-    syn_out = tshark_fields(
-        pcap,
-        tshark,
-        "tcp && ip.src == 10.0.2.15 && tcp.srcport == 80 && "
-        "tcp.flags.syn == 1 && tcp.flags.ack == 1",
-    )
-    http_out = tshark_fields(
-        pcap,
-        tshark,
-        "tcp && ip.src == 10.0.2.15 && tcp.srcport == 80 && tcp.len > 0 && "
-        'tcp.flags.syn == 0 && frame contains "HTTP/1.0 200 OK"',
-    )
-    syn_line = next((ln for ln in syn_out.splitlines() if ln.strip()), "")
-    http_line = next((ln for ln in http_out.splitlines() if ln.strip()), "")
-    if not syn_line:
-        raise BenchFail(f"TEST FAIL: no TCP SYN/ACK from 10.0.2.15:80 in {pcap}")
-    if not http_line:
-        raise BenchFail(f"TEST FAIL: no HTTP 200 data frame in {pcap}")
-    syn_rel = pcap_time_ns(syn_line)
-    http_rel = pcap_time_ns(http_line)
-    if http_rel < syn_rel:
+    fields = set(fieldnames)
+    has_e3w = "e0_to_e3w_ns" in fields
+    new_cols = {"w_ns", "d_ack_ns", "d_fin_ns"}
+    has_new = new_cols <= fields
+    if has_e3w and has_new:
         raise BenchFail(
-            f"TEST FAIL: HTTP frame before SYN/ACK in {pcap} "
-            f"(synack_rel_ns={syn_rel} http_rel_ns={http_rel})"
+            "TEST FAIL: mixed runs.csv schema "
+            "(e0_to_e3w_ns and w_ns/d_ack_ns/d_fin_ns both present)"
         )
-    return e0_to_first_connect_ns + (http_rel - syn_rel)
+    if has_e3w:
+        extra = new_cols & fields
+        if extra:
+            raise BenchFail(
+                "TEST FAIL: mixed runs.csv schema "
+                f"(e0_to_e3w_ns with partial new columns {sorted(extra)})"
+            )
+        return "old"
+    if has_new:
+        return "new"
+    raise BenchFail(
+        "TEST FAIL: incomplete runs.csv schema "
+        "(need e0_to_e3w_ns without w_ns/d_ack_ns/d_fin_ns, "
+        "or w_ns/d_ack_ns/d_fin_ns without e0_to_e3w_ns)"
+    )
+
+
+def require_pcap_intervals(
+    pcap: Path, tshark: str, *, system: str
+) -> dict[str, int]:
+    """Per-trial W / D_ack / D_fin via the D-0070 extract. Warmup included."""
+    try:
+        extracted = _D0070.extract_pcap(pcap, tshark)
+    except _D0070.PassFail as e:
+        raise BenchFail(str(e)) from e
+    http_len = int(extracted["http_len"])
+    if http_len != HTTP_LEN_PIN:
+        raise BenchFail(
+            f"TEST FAIL: HTTP tcp.len={http_len} want {HTTP_LEN_PIN} in {pcap}"
+        )
+    for key in ("w_ns", "d_ack_ns", "d_fin_ns"):
+        if extracted[key] < 0:
+            raise BenchFail(
+                f"TEST FAIL: {key} is negative ({extracted[key]}) in {pcap}"
+            )
+    if system == "whimbrel" and extracted["d_fin_ns"] >= WHIMBREL_DFIN_FAIL_NS:
+        raise BenchFail(
+            f"TEST FAIL: d_fin_ns={extracted['d_fin_ns']} ≥ 10 ms "
+            f"(D-0070 falsify line) in {pcap}"
+        )
+    return extracted
+
+
+def require_first_connect_control(runs: list[dict]) -> None:
+    """Listener-up is guest-independent. A miss fails the run, not a cell."""
+    rec = [r for r in runs if int(r["warmup"]) == 0]
+    if not rec:
+        return
+    by_cfg: dict[str, list[int]] = {}
+    by_sys: dict[str, list[int]] = {}
+    for r in rec:
+        v = int(r["e0_to_first_connect_ns"])
+        by_cfg.setdefault(r["config"], []).append(v)
+        by_sys.setdefault(r["system"], []).append(v)
+    if SAFE_CONFIG in by_cfg and FAST_CONFIG in by_cfg:
+        ms = statistics.median(by_cfg[SAFE_CONFIG])
+        mf = statistics.median(by_cfg[FAST_CONFIG])
+        delta = abs(ms - mf)
+        if delta > CONTROL_TOL_NS:
+            raise BenchFail(
+                f"TEST FAIL: first-connect control |safe − fast| = {delta:.0f} ns "
+                f"(safe={ms:.0f} fast={mf:.0f}) > 1 ms"
+            )
+    if len(by_sys) > 1:
+        names = sorted(by_sys)
+        meds = {s: statistics.median(by_sys[s]) for s in names}
+        for i, a in enumerate(names):
+            for b in names[i + 1 :]:
+                delta = abs(meds[a] - meds[b])
+                if delta > CONTROL_TOL_NS:
+                    raise BenchFail(
+                        f"TEST FAIL: first-connect control |{a} − {b}| = "
+                        f"{delta:.0f} ns ({a}={meds[a]:.0f} {b}={meds[b]:.0f}) "
+                        f"> 1 ms"
+                    )
+
+
+def s_trial_ns(row: dict) -> int:
+    """S = (E4 − first_connect) − pcap(ARP → FIN). Not a CSV column."""
+    syn = row.get("synack_to_http_ns", "")
+    if syn is None or syn == "":
+        extracted = require_pcap_intervals(
+            ROOT / row["pcap_path"],
+            require_tshark(),
+            system=row.get("system", "whimbrel"),
+        )
+        syn_ns = int(extracted["synack_to_http_ns"])
+        w_ns = int(extracted["w_ns"])
+        d_fin_ns = int(extracted["d_fin_ns"])
+    else:
+        syn_ns = int(syn)
+        w_ns = int(row["w_ns"])
+        d_fin_ns = int(row["d_fin_ns"])
+    return (int(row["e0_to_e4_ns"]) - int(row["e0_to_first_connect_ns"])) - (
+        w_ns + syn_ns + d_fin_ns
+    )
+
+
+def s_header_lines(runs: list[dict]) -> list[str]:
+    rec = [r for r in runs if int(r["warmup"]) == 0]
+    if not rec:
+        raise BenchFail("TEST FAIL: no recorded trials for s_ns header")
+    vals = [s_trial_ns(r) for r in rec]
+    by_cfg: dict[str, list[int]] = {}
+    for r, s in zip(rec, vals):
+        by_cfg.setdefault(r["config"], []).append(s)
+    med = statistics.median(vals)
+    lines = [
+        f"s_ns={med:.0f} iqr={iqr([float(v) for v in vals]):.0f} n={len(vals)}",
+    ]
+    fast_vals = by_cfg.get(FAST_CONFIG, [])
+    safe_vals = by_cfg.get(SAFE_CONFIG, [])
+    fast_s = f"{statistics.median(fast_vals):.0f}" if fast_vals else "absent"
+    safe_s = f"{statistics.median(safe_vals):.0f}" if safe_vals else "absent"
+    lines.append(f"s_ns_fast={fast_s} s_ns_safe={safe_s}")
+    if fast_vals and safe_vals:
+        mf = statistics.median(fast_vals)
+        ms = statistics.median(safe_vals)
+        delta = abs(mf - ms)
+        if delta > CONTROL_TOL_NS:
+            raise BenchFail(
+                f"TEST FAIL: |s_ns_fast − s_ns_safe| = {delta:.0f} ns "
+                f"(fast={mf:.0f} safe={ms:.0f}) > 1 ms"
+            )
+    return lines
 
 
 def percentile(sorted_vals: list[float], p: float) -> float:
@@ -556,6 +664,7 @@ def read_csv(path: Path) -> list[dict]:
 def assert_aggregatable(runs: list[dict], *, allow_dirty: bool = False) -> None:
     if not runs:
         raise BenchFail("TEST FAIL: zero-trial CSV (nothing to aggregate)")
+    runs_schema(runs[0].keys())
     recorded = [r for r in runs if int(r["warmup"]) == 0]
     if not recorded:
         raise BenchFail("TEST FAIL: zero-trial CSV (all warmup or empty recorded)")
@@ -591,13 +700,14 @@ def assert_aggregatable(runs: list[dict], *, allow_dirty: bool = False) -> None:
             )
 
 
-def metric_table(runs: list[dict], phases: list[dict]) -> dict[str, list[float]]:
+def metric_table(
+    runs: list[dict], phases: list[dict], schema: str | None = None
+) -> dict[str, list[float]]:
     recorded_runs = [r for r in runs if int(r["warmup"]) == 0]
-    metrics: dict[str, list[float]] = {
-        "e0_to_first_connect_ns": [],
-        "e0_to_e3w_ns": [],
-        "e0_to_e4_ns": [],
-    }
+    if schema is None:
+        schema = runs_schema(recorded_runs[0].keys() if recorded_runs else runs[0].keys())
+    run_keys = NEW_RUN_METRICS if schema == "new" else OLD_RUN_METRICS
+    metrics: dict[str, list[float]] = {k: [] for k in run_keys}
     for r in recorded_runs:
         for k in metrics:
             metrics[k].append(float(r[k]))
@@ -807,19 +917,16 @@ def run_trial(
     phases = parse_phases(serial_text)
     e0_to_connect = int(client_data["first_connect_mono_ns"]) - e0_mono
     e0_to_e4 = int(client_data["first_byte_mono_ns"]) - e0_mono
-    e0_to_e3w = e0_to_e3w_ns(pcap, tshark, e0_to_connect)
-    if e0_to_e3w < 0:
-        raise BenchFail(f"TEST FAIL: e0_to_e3w_ns is negative ({e0_to_e3w})")
-    if e0_to_e4 < e0_to_e3w:
-        raise BenchFail(
-            f"TEST FAIL: E4 before E3w (e0_to_e4={e0_to_e4} e0_to_e3w={e0_to_e3w})"
-        )
+    extracted = require_pcap_intervals(pcap, tshark, system="whimbrel")
     return {
         "e0_mono_ns": e0_mono,
         "e0_wall_ns": e0_wall,
         "e0_to_first_connect_ns": e0_to_connect,
         "e0_to_e4_ns": e0_to_e4,
-        "e0_to_e3w_ns": e0_to_e3w,
+        "w_ns": extracted["w_ns"],
+        "d_ack_ns": extracted["d_ack_ns"],
+        "d_fin_ns": extracted["d_fin_ns"],
+        "synack_to_http_ns": extracted["synack_to_http_ns"],
         "attempts": int(client_data["attempts"]),
         "phases": phases,
         "qemu_status": qemu_p.returncode,
@@ -964,8 +1071,11 @@ def cmd_run(args: argparse.Namespace) -> int:
                 "e0_mono_ns": result["e0_mono_ns"],
                 "e0_wall_ns": result["e0_wall_ns"],
                 "e0_to_first_connect_ns": result["e0_to_first_connect_ns"],
-                "e0_to_e3w_ns": result["e0_to_e3w_ns"],
                 "e0_to_e4_ns": result["e0_to_e4_ns"],
+                "w_ns": result["w_ns"],
+                "d_ack_ns": result["d_ack_ns"],
+                "d_fin_ns": result["d_fin_ns"],
+                "synack_to_http_ns": result["synack_to_http_ns"],
                 "attempts": result["attempts"],
                 "pcap_path": rel_pcap,
             }
@@ -1006,6 +1116,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             stability=batches >= 2,
             expect_n=n,
             allow_dirty=args.allow_dirty,
+            runs=run_rows,
+            phases=phase_rows,
         )
     )
     if args.kind == "fp-ab" and rc == 0:
@@ -1132,26 +1244,34 @@ def steal_diagnosis(runs: list[dict], phases: list[dict]) -> list[str]:
 
 def cmd_summarize(args: argparse.Namespace) -> int:
     out_dir = Path(args.out_dir)
-    runs = read_csv(out_dir / "runs.csv")
-    phases = read_csv(out_dir / "phases.csv")
+    runs = getattr(args, "runs", None) or read_csv(out_dir / "runs.csv")
+    phases = getattr(args, "phases", None) or read_csv(out_dir / "phases.csv")
+    schema = runs_schema(runs[0].keys()) if runs else runs_schema(RUNS_FIELDS)
     assert_aggregatable(runs, allow_dirty=getattr(args, "allow_dirty", False))
     expect_n = getattr(args, "expect_n", None)
     lines = [
         "# bench summary (D-0055): n / median / IQR / min / max; warmup excluded",
         f"qemu_version={runs[0]['qemu_version']}",
         f"qemu_hash={runs[0]['qemu_hash']}",
-        f"git_sha={runs[0]['git_sha']} dirty={runs[0]['dirty']}",
-        f"host_kernel={runs[0]['host_kernel']}",
-        f"cpu_model={runs[0]['cpu_model']}",
-        f"governor={runs[0]['governor']} "
-        f"smt_control={runs[0].get('smt_control', 'absent')} "
-        f"cpufreq_boost={runs[0].get('cpufreq_boost', 'absent')} "
-        f"virt={runs[0].get('virt', 'absent')} "
-        f"steal_start_ticks={runs[0].get('steal_start_ticks', 'absent')} "
-        f"loadavg_1m={runs[0]['loadavg_1m']}",
-        f"client_granularity_ns={runs[0]['client_granularity_ns']}",
-        "",
     ]
+    if schema == "new":
+        require_first_connect_control(runs)
+        lines.extend(s_header_lines(runs))
+    lines.extend(
+        [
+            f"git_sha={runs[0]['git_sha']} dirty={runs[0]['dirty']}",
+            f"host_kernel={runs[0]['host_kernel']}",
+            f"cpu_model={runs[0]['cpu_model']}",
+            f"governor={runs[0]['governor']} "
+            f"smt_control={runs[0].get('smt_control', 'absent')} "
+            f"cpufreq_boost={runs[0].get('cpufreq_boost', 'absent')} "
+            f"virt={runs[0].get('virt', 'absent')} "
+            f"steal_start_ticks={runs[0].get('steal_start_ticks', 'absent')} "
+            f"loadavg_1m={runs[0]['loadavg_1m']}",
+            f"client_granularity_ns={runs[0]['client_granularity_ns']}",
+            "",
+        ]
+    )
     if "shuffle_seed" in runs[0]:
         lines.insert(-1, f"shuffle_seed={runs[0]['shuffle_seed']}")
     oh_vals = [
@@ -1181,7 +1301,7 @@ def cmd_summarize(args: argparse.Namespace) -> int:
             raise BenchFail(
                 f"TEST FAIL: {key} has {len(rec)} recorded trials, want {expect_n}"
             )
-        mets = metric_table(rs, phase_groups.get(key, []))
+        mets = metric_table(rs, phase_groups.get(key, []), schema)
         metric_by_group[key] = mets
         title = f"{key[1]} {key[2]} batch={key[0]} n_recorded={len(rec)}"
         lines.extend(summarize_group(title, mets))
@@ -1272,8 +1392,11 @@ def _write_fixture_runs(path: Path, rows: list[dict]) -> None:
         "e0_mono_ns": 0,
         "e0_wall_ns": 0,
         "e0_to_first_connect_ns": 10_000_000,
-        "e0_to_e3w_ns": 11_000_000,
-        "e0_to_e4_ns": 12_000_000,
+        "e0_to_e4_ns": 50_000_000,
+        "w_ns": 25_000_000,
+        "d_ack_ns": 40_000,
+        "d_fin_ns": 150_000,
+        "synack_to_http_ns": 1_000_000,
         "attempts": 12,
         "pcap_path": "x.pcap",
     }
@@ -1478,6 +1601,383 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
     if sched_a == sequential:
         raise BenchFail("recorded_schedule did not shuffle (seed 42)")
     fired.append(f"recorded_schedule shuffled: {sched_a}")
+
+    def expect_fail(fn, needle: str, label: str) -> None:
+        try:
+            fn()
+            raise BenchFail(f"{label} did not fire")
+        except BenchFail as e:
+            if needle not in str(e):
+                raise
+            fired.append(f"{label}: {e}")
+
+    if "e0_to_e3w_ns" in RUNS_FIELDS:
+        raise BenchFail("TEST FAIL: RUNS_FIELDS still has e0_to_e3w_ns")
+    for col in ("w_ns", "d_ack_ns", "d_fin_ns"):
+        if col not in RUNS_FIELDS:
+            raise BenchFail(f"TEST FAIL: RUNS_FIELDS missing {col}")
+
+    new_csv = tmp / "new-schema.csv"
+    _write_fixture_runs(new_csv, [{"trial": 1}])
+    new_rows = read_csv(new_csv)
+    if "e0_to_e3w_ns" in new_rows[0]:
+        raise BenchFail("TEST FAIL: selftest row still has e0_to_e3w_ns")
+    if runs_schema(new_rows[0].keys()) != "new":
+        raise BenchFail("TEST FAIL: fixture schema is not new")
+    fired.append("new-schema fixture has w_ns/d_ack_ns/d_fin_ns, no e0_to_e3w_ns")
+
+    mixed_fields = list(RUNS_FIELDS) + ["e0_to_e3w_ns"]
+    mixed = tmp / "mixed-schema.csv"
+    write_csv(mixed, mixed_fields, [{**new_rows[0], "e0_to_e3w_ns": 11_000_000}])
+    expect_fail(
+        lambda: runs_schema(read_csv(mixed)[0].keys()),
+        "mixed runs.csv schema",
+        "mixed schema",
+    )
+    expect_fail(
+        lambda: assert_aggregatable(read_csv(mixed)),
+        "mixed runs.csv schema",
+        "mixed schema via aggregate",
+    )
+
+    neither_fields = [
+        f for f in RUNS_FIELDS if f not in ("w_ns", "d_ack_ns", "d_fin_ns")
+    ]
+    neither = tmp / "neither-schema.csv"
+    write_csv(neither, neither_fields, [{k: new_rows[0][k] for k in neither_fields}])
+    expect_fail(
+        lambda: runs_schema(read_csv(neither)[0].keys()),
+        "incomplete runs.csv schema",
+        "neither schema",
+    )
+
+    old_fields = neither_fields + ["e0_to_e3w_ns"]
+    old_csv = tmp / "old-schema.csv"
+    write_csv(
+        old_csv,
+        old_fields,
+        [{**{k: new_rows[0][k] for k in neither_fields}, "e0_to_e3w_ns": 11_000_000}],
+    )
+    if runs_schema(read_csv(old_csv)[0].keys()) != "old":
+        raise BenchFail(
+            "TEST FAIL: historical e0_to_e3w_ns-only header is not old schema"
+        )
+    fired.append("old-schema header (e0_to_e3w_ns, no W/D_*) still detects as old")
+
+    partial_fields = [
+        f for f in RUNS_FIELDS if f not in ("d_ack_ns", "d_fin_ns")
+    ] + ["e0_to_e3w_ns"]
+    partial = tmp / "partial-schema.csv"
+    write_csv(
+        partial,
+        partial_fields,
+        [
+            {
+                **{k: new_rows[0][k] for k in partial_fields if k != "e0_to_e3w_ns"},
+                "e0_to_e3w_ns": 11_000_000,
+            }
+        ],
+    )
+    expect_fail(
+        lambda: runs_schema(read_csv(partial)[0].keys()),
+        "mixed runs.csv schema",
+        "partial new columns with e0_to_e3w_ns",
+    )
+
+    tshark = require_tshark()
+    frames = _D0070._selftest_frames()
+
+    def write_frames(path: Path, chosen: list[tuple[bytes, int]]) -> None:
+        _D0070._write_pcap(path, chosen)
+
+    def retimed(times: list[int]) -> list[tuple[bytes, int]]:
+        return [(pkt, t) for (pkt, _), t in zip(frames, times)]
+
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        ok = td_path / "ok.pcap"
+        write_frames(ok, frames)
+        got = require_pcap_intervals(ok, tshark, system="whimbrel")
+        want = {
+            "w_ns": 30_000_000,
+            "d_ack_ns": 36_000,
+            "d_fin_ns": 212_000,
+            "synack_to_http_ns": 1_000_000,
+            "http_len": 92,
+        }
+        if got != want:
+            raise BenchFail(f"TEST FAIL: imported extract {got} want {want}")
+        fired.append("imported D-0070 extract on synthetic pcap")
+
+        empty = td_path / "empty.pcap"
+        empty.write_bytes(b"")
+        expect_fail(
+            lambda: require_pcap_intervals(empty, tshark, system="whimbrel"),
+            "pcap missing or empty",
+            "empty pcap",
+        )
+        missing = td_path / "no-such.pcap"
+        expect_fail(
+            lambda: require_pcap_intervals(missing, tshark, system="whimbrel"),
+            "pcap missing or empty",
+            "missing pcap",
+        )
+
+        dropped = [
+            ("no slirp ARP", frames[1:]),
+            ("no guest SYN/ACK", frames[:1] + frames[2:]),
+            ("no HTTP 200", frames[:2] + frames[3:]),
+            ("no pure ACK", frames[:3] + frames[4:]),
+            ("no client FIN", frames[:4]),
+        ]
+        for i, (needle, chosen) in enumerate(dropped):
+            p = td_path / f"drop-{i}.pcap"
+            write_frames(p, chosen)
+            expect_fail(
+                lambda p=p, needle=needle: require_pcap_intervals(
+                    p, tshark, system="whimbrel"
+                ),
+                needle,
+                f"missing {needle}",
+            )
+
+        arp_f, syn_f, http_f, ack_f, fin_f = frames
+        order_cases = [
+            (
+                "SYN/ACK before slirp ARP",
+                [
+                    (syn_f[0], 0),
+                    (arp_f[0], 30_000),
+                    (http_f[0], 31_000),
+                    (ack_f[0], 31_036),
+                    (fin_f[0], 31_212),
+                ],
+            ),
+            (
+                "HTTP frame before SYN/ACK",
+                [
+                    (arp_f[0], 0),
+                    (http_f[0], 30_000),
+                    (syn_f[0], 31_000),
+                    (ack_f[0], 31_036),
+                    (fin_f[0], 31_212),
+                ],
+            ),
+            (
+                "ACK-of-response before HTTP",
+                [
+                    (arp_f[0], 0),
+                    (syn_f[0], 30_000),
+                    (http_f[0], 31_036),
+                    (ack_f[0], 31_000),
+                    (fin_f[0], 31_212),
+                ],
+            ),
+            (
+                "client FIN before HTTP",
+                [
+                    (arp_f[0], 0),
+                    (syn_f[0], 30_000),
+                    (http_f[0], 31_000),
+                    (ack_f[0], 31_036),
+                    (fin_f[0], 30_900),
+                ],
+            ),
+        ]
+        for i, (needle, chosen) in enumerate(order_cases):
+            p = td_path / f"order-{i}.pcap"
+            write_frames(p, chosen)
+            expect_fail(
+                lambda p=p, needle=needle: require_pcap_intervals(
+                    p, tshark, system="whimbrel"
+                ),
+                needle,
+                needle,
+            )
+
+        long_fin = td_path / "long-fin.pcap"
+        write_frames(long_fin, retimed([0, 30_000, 31_000, 31_036, 41_000]))
+        linux_long = require_pcap_intervals(long_fin, tshark, system="linux")
+        if linux_long["d_fin_ns"] != 10_000_000:
+            raise BenchFail(
+                f"TEST FAIL: long-fin d_fin_ns={linux_long['d_fin_ns']} want 10000000"
+            )
+        fired.append("linux d_fin_ns ≥ 10 ms is recorded, not a tripwire")
+        expect_fail(
+            lambda: require_pcap_intervals(long_fin, tshark, system="whimbrel"),
+            "d_fin_ns=",
+            "whimbrel d_fin_ns ≥ 10 ms",
+        )
+
+    orig_extract = _D0070.extract_pcap
+
+    def fake_len(_pcap, _tshark, **_kw):
+        return {
+            "w_ns": 1,
+            "d_ack_ns": 1,
+            "d_fin_ns": 1,
+            "synack_to_http_ns": 1,
+            "http_len": 91,
+        }
+
+    _D0070.extract_pcap = fake_len
+    try:
+        expect_fail(
+            lambda: require_pcap_intervals(
+                Path("/dev/null"), "tshark", system="whimbrel"
+            ),
+            "HTTP tcp.len=91 want 92",
+            "HTTP tcp.len ≠ 92",
+        )
+    finally:
+        _D0070.extract_pcap = orig_extract
+
+    def fake_neg_w(_pcap, _tshark, **_kw):
+        return {
+            "w_ns": -1,
+            "d_ack_ns": 1,
+            "d_fin_ns": 1,
+            "synack_to_http_ns": 1,
+            "http_len": 92,
+        }
+
+    _D0070.extract_pcap = fake_neg_w
+    try:
+        expect_fail(
+            lambda: require_pcap_intervals(
+                Path("/dev/null"), "tshark", system="whimbrel"
+            ),
+            "w_ns is negative",
+            "negative w_ns",
+        )
+    finally:
+        _D0070.extract_pcap = orig_extract
+
+    def fake_neg_ack(_pcap, _tshark, **_kw):
+        return {
+            "w_ns": 1,
+            "d_ack_ns": -2,
+            "d_fin_ns": 1,
+            "synack_to_http_ns": 1,
+            "http_len": 92,
+        }
+
+    _D0070.extract_pcap = fake_neg_ack
+    try:
+        expect_fail(
+            lambda: require_pcap_intervals(
+                Path("/dev/null"), "tshark", system="whimbrel"
+            ),
+            "d_ack_ns is negative",
+            "negative d_ack_ns",
+        )
+    finally:
+        _D0070.extract_pcap = orig_extract
+
+    def fake_neg_fin(_pcap, _tshark, **_kw):
+        return {
+            "w_ns": 1,
+            "d_ack_ns": 1,
+            "d_fin_ns": -3,
+            "synack_to_http_ns": 1,
+            "http_len": 92,
+        }
+
+    _D0070.extract_pcap = fake_neg_fin
+    try:
+        expect_fail(
+            lambda: require_pcap_intervals(
+                Path("/dev/null"), "tshark", system="whimbrel"
+            ),
+            "d_fin_ns is negative",
+            "negative d_fin_ns",
+        )
+    finally:
+        _D0070.extract_pcap = orig_extract
+
+    require_first_connect_control(
+        [
+            {
+                "warmup": 0,
+                "system": "whimbrel",
+                "config": SAFE_CONFIG,
+                "e0_to_first_connect_ns": 18_500_000,
+            },
+            {
+                "warmup": 0,
+                "system": "whimbrel",
+                "config": FAST_CONFIG,
+                "e0_to_first_connect_ns": 18_600_000,
+            },
+        ]
+    )
+    fired.append("first-connect control accepts |safe − fast| ≤ 1 ms")
+    expect_fail(
+        lambda: require_first_connect_control(
+            [
+                {
+                    "warmup": 0,
+                    "system": "whimbrel",
+                    "config": SAFE_CONFIG,
+                    "e0_to_first_connect_ns": 18_500_000,
+                },
+                {
+                    "warmup": 0,
+                    "system": "whimbrel",
+                    "config": FAST_CONFIG,
+                    "e0_to_first_connect_ns": 20_000_000,
+                },
+            ]
+        ),
+        "first-connect control |safe − fast|",
+        "first-connect |safe − fast| > 1 ms",
+    )
+    expect_fail(
+        lambda: require_first_connect_control(
+            [
+                {
+                    "warmup": 0,
+                    "system": "whimbrel",
+                    "config": FAST_CONFIG,
+                    "e0_to_first_connect_ns": 18_500_000,
+                },
+                {
+                    "warmup": 0,
+                    "system": "linux",
+                    "config": "linux-trimmed",
+                    "e0_to_first_connect_ns": 20_000_000,
+                },
+            ]
+        ),
+        "first-connect control |linux − whimbrel|",
+        "first-connect cross-system > 1 ms",
+    )
+
+    def s_pair(safe_e4: int, fast_e4: int) -> list[dict]:
+        common = {
+            "warmup": 0,
+            "system": "whimbrel",
+            "w_ns": 25_000_000,
+            "d_fin_ns": 150_000,
+            "synack_to_http_ns": 1_000_000,
+            "e0_to_first_connect_ns": 18_500_000,
+        }
+        return [
+            {**common, "config": SAFE_CONFIG, "e0_to_e4_ns": safe_e4, "trial": 1},
+            {**common, "config": FAST_CONFIG, "e0_to_e4_ns": fast_e4, "trial": 2},
+        ]
+
+    s_ok = s_header_lines(s_pair(51_450_000, 51_450_000))
+    if not s_ok[0].startswith("s_ns=6800000 ") or "n=2" not in s_ok[0]:
+        raise BenchFail(f"TEST FAIL: unexpected s_ns header {s_ok}")
+    if s_ok[1] != "s_ns_fast=6800000 s_ns_safe=6800000":
+        raise BenchFail(f"TEST FAIL: unexpected s_ns_fast/safe header {s_ok[1]}")
+    fired.append("s_ns header pools both configs; |fast − safe| ≤ 1 ms")
+    expect_fail(
+        lambda: s_header_lines(s_pair(51_450_000, 52_650_000)),
+        "|s_ns_fast − s_ns_safe|",
+        "|s_ns_fast − s_ns_safe| > 1 ms",
+    )
 
     print("TEST PASS: bench fail-closed selftest")
     for line in fired:

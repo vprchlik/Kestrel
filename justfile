@@ -728,9 +728,9 @@ test-fast-release:
 bench-whimbrel:
     bash scripts/bench.sh whimbrel
 
-# Fail-closed checks for the new asserts (missing tshark, malformed
-# PHASE, zero-trial CSV, QEMU/git mismatch, dirty tree, host controls,
-# origin sync).
+# Fail-closed checks (missing tshark, malformed PHASE, zero-trial CSV,
+# QEMU/git mismatch, dirty tree, host controls, origin sync, D-0071
+# schema / S / first-connect / pcap intervals).
 bench-selftest:
     bash scripts/bench.sh selftest
 
