@@ -203,6 +203,19 @@ item is mitigated-and-measured or stated.
     subsystems must not be attributed to either without an
     instrument that sees the boundary.**
 
+    **Superseding corollary (D-0076, fifth instance).** The
+    boundary framing was too narrow. In all five instances — `W`
+    attributed to delivery, Δ(E0→E4) read as a delivery signature,
+    D-0069's linear projection from an aggregate, the margin called
+    continuous from three points, and the announce distribution
+    summarised by cross-run percentiles when the per-boot join
+    existed — **the instrument was present and the analysis
+    aggregated past the grain at which the effect lived.** The last
+    of these overturned a published conclusion in one query against
+    data already on disk. The rule: before summarising, check that
+    the summary's grain is finer than the structure being claimed,
+    and when per-item data exists, join it before pooling it.
+
     Two harness facts are recorded rather than fixed:
     (a) **Gate asymmetry — a gap, not just a fact.** The SYN-grid
     gate tests the relative interval t(SYN) − t(guest first TX)

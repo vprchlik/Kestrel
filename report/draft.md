@@ -754,7 +754,12 @@ maintained in [threats-to-validity.md](threats-to-validity.md).
     guest-stamp split; the recurrence is why the corollary is an
     instrument rule, not vigilance: a metric spanning two subsystems
     must not be attributed to either without an instrument that sees
-    the boundary. Two harness facts are recorded, not fixed: the
+    the boundary. D-0076 supersedes that with a wider rule after a
+    fifth instance: in all five the instrument was present and the
+    analysis aggregated past the grain at which the effect lived, so
+    check that a summary's grain is finer than the structure being
+    claimed, and join per-item data before pooling it. Two harness
+    facts are recorded, not fixed: the
     SYN-grid gate tests a relative interval (blind to absolute
     first-TX time, so it catches only stalls that cross slirp's ~1 s
     ARP-pending drop) and runs only on Linux trials — coverage

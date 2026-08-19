@@ -4745,17 +4745,67 @@ D-0011 onward are working decisions made under those constraints.
      boots' worth, and every statement of the form "no event in N
      thousand boots" in this log and in the report must be read with
      that denominator.
+- **The three strikes, stated as strikes.**
+  1. **The collision-window bound (166.3, 167.6) ms is withdrawn.**
+     Not narrowed, not qualified — withdrawn. It was an artifact of
+     computing from cross-run percentiles.
+  2. **The event rate is reclassified as a host state.** 4.55 %
+     (04:08) and 1.17 % (13:20) on the same source. Any campaign
+     that needs a rate must **re-measure it on the day**, never
+     inherit 25/550 or the 1/50 pilot. D-0074's P(campaign
+     completes) figures are conditional on that morning's host.
+  3. **"0 in 5000" is restated as "0 in 7 exposed", and the actual
+     evidence base for the fix is 11 exposed boots** — the sum
+     across every fix-bearing arm (validated 7, Arm C 3, Arm S 1).
+     This is the correction that matters most, because it is the
+     number the rest was resting on: the campaign-safety argument,
+     the D-0075 validation verdict, and the decision to run T4.8b
+     all quoted a denominator of thousands for a quantity that only
+     eleven boots could speak to. **The fix's support is far thinner
+     than the headline implied.** It is not absent — 0/11 against a
+     within-mode rate of 70–96 % is real — but it is eleven boots.
+- **Meta-pattern, fifth instance: the instrument existed; the
+  analysis used it at the wrong grain.** Earlier entries filed this
+  as attribution across a boundary. That framing was too narrow.
+  The unifying failure is **grain**:
+  - `W` fuses guest boot with delivery, and was attributed to
+    delivery while per-phase guest stamps existed (item 17, D-0071).
+  - Δ(E0→E4) ≈ Δ(`W`) was read as a delivery signature one step
+    after that lesson was written down (threats item 19).
+  - The optimisation projection scaled linearly from an aggregate
+    whose components did not scale alike (D-0069).
+  - The margin was called continuous from three points, and was
+    discrete at 550 (D-0074 Outcome).
+  - Here: the announce distribution was summarised by cross-run
+    percentiles when the per-boot join was in `boots.jsonl` the
+    whole time — and that join, applied afterwards, overturned the
+    conclusion in one query.
+  In none of these was the instrument missing. In all of them the
+  analysis aggregated past the grain at which the effect lived.
+  The rule this yields is stronger than the boundary corollary and
+  supersedes it: **before summarising, check that the summary's
+  grain is finer than the structure being claimed — and when the
+  per-item data exists, join it before pooling it.**
 - **What survives.** The deployed image is not worse than the
   pre-fix one on any measurement taken; the passive signature
-  logging counts any recurrence; and the shift plausibly protects
-  within the early mode. What does **not** survive is the claim that
-  the mechanism is understood, and the specific numbers struck
-  above.
+  logging counts any recurrence; and the shift is associated with
+  0 collisions in 11 exposed boots where the unshifted case gives
+  70–96 %. What does **not** survive is the claim that the
+  mechanism is understood, and the three numbers struck above.
 - Revisit trigger: any falsifier; a QEMU, kernel or Buildroot
   change, which re-rolls the boot timeline and therefore the
   collision — if events reappear in a later campaign, the passive
   signature logging (D-0075) counts them and this entry is where to
   start. Add to that any change that makes `/init`'s pre-announce
-  path faster. **The next real question is what puts a boot into the
-  ~156.4 ms early mode**, which is now the one thing worth
-  instrumenting and has never been looked at.
+  path faster.
+- **Open item (recorded, deliberately not chased before T4.8b):
+  what puts a boot into the ~156.4 ms early mode.** That is the
+  actual mechanism; everything in D-0074, D-0075 and D-0076 has been
+  downstream of it. The announce is ~9 ms early on those boots, so
+  the divergence is upstream of `/init`'s announce and probably
+  upstream of `/init` — a boot-timeline instrument (per-initcall or
+  per-phase guest stamps joined per boot, D-0072's shape) is what
+  would name it, and per the grain rule above it must be joined per
+  boot, not pooled. Until then the honest statement is that the
+  event is a property of the boot timeline, observed but not
+  explained.

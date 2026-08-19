@@ -41,6 +41,14 @@ after probing it via BASE (D-0015). OpenSBI v1.3 implements it and drives the
 passes to the kernel in register `a1`. Real kernels parse it for portability;
 we print the pointer but hardcode the `virt` layout instead (see D-0012).
 
+**early mode.** The cluster of boots whose Linux `/init` announce lands
+at ~156.4 ms guest-mono instead of the ~165.6 ms clean median — about
+9 ms early, and the only boots on which the guest's first ARP solicit is
+ever lost. Its frequency is a host state, not an image property: 4.73%
+of boots one morning and 1.67% the same afternoon on identical sources
+(D-0076). Only early-mode boots are *exposed* to the race, which is why
+no-event counts must quote the exposed denominator.
+
 **ecall.** The RISC-V instruction that requests service from a higher
 privilege level by raising a synchronous exception. From S-mode it is how we
 call OpenSBI (SBI calls); from U-mode it will be how the app makes syscalls
