@@ -737,17 +737,18 @@ maintained in [threats-to-validity.md](threats-to-validity.md).
     trimmed-vs-stock delta are unmoved (≤ 0.037 ms). The one ~1 s
     anomaly is a single T4.8b warmup trial; the SYN-grid gate fired
     and nothing published. It is not an egress fault but a guest-side
-    lost ARP solicit (D-0074), reproduced 1 in 50 on the bench host:
-    the first solicit never reached the TX ring and the guest's own
-    `neigh` retransmit re-sent it 1.03 s later, past slirp's
-    ARP-pending drop. An earlier revision of this item offered the
+    lost ARP solicit (D-0074), measured at 25 in 550 boots on the
+    bench host: the first solicit never reached the TX ring and the
+    guest's own `neigh` retransmit re-sent it 1.03 s later, past
+    slirp's ARP-pending drop. An earlier revision of this item offered the
     absence of comparable stalls across the recorded campaigns as
     evidence of robustness; that claim is withdrawn, not weakened —
     it was an absence of observation under a detector blind below the
-    cliff, and the quantity that governs the race (the margin between
-    the announce and the last virtio ctrl-vq completion, ~12.4 ms
-    typical against 0.199 ms on the failing boot) was never measured
-    on the older images. During this diagnosis the fused metric
+    cliff, and the one quantity that separated event boots from clean
+    ones (the margin between the announce and the last virtio ctrl-vq
+    completion, ~12.4 ms typical against ~0.2 ms on every event boot;
+    a marker, not a cause — D-0076) was never measured on the older
+    images. During this diagnosis the fused metric
     briefly produced the same misattribution item 17 records — one
     step after that lesson was written down — reversed by the
     guest-stamp split; the recurrence is why the corollary is an
@@ -766,6 +767,26 @@ maintained in [threats-to-validity.md](threats-to-validity.md).
     reply through Whimbrel's own stack, so it bounds guest-side loss
     as well as egress hold — where Linux's fire-and-forget `/init`
     announce observes neither (D-0074).
+
+20. **T4.8b's Linux `/init` is not T4.8's** (D-0075/D-0076). The
+    ~4.5% lost-solicit event is campaign-fatal, so `/init` now
+    shortens the `neigh` retransmit from 1 s to 50 ms via one
+    `RTM_SETNEIGHTBL` before the announce. That call is on the
+    measured path and inflates the Linux baseline by a measured
+    **2.87 ms** (`T_NEIGH` stamp; ~1.5% of the 188 ms cross-system
+    delta) — a bias toward Whimbrel, applied identically to stock and
+    trimmed so the trim comparison is unaffected. An earlier
+    "sub-millisecond" estimate was wrong by 3x, which is why the cost
+    is stamped rather than argued. The heal it installs is
+    **unexercised**: the event did not recur once in 6200 boots
+    across three configurations, so the timer-wheel arithmetic behind
+    the 50 ms constant is read out of the 6.18.7 source and has never
+    been observed. Why the events stopped is likewise not established
+    — the call takes `rtnl_lock` and serialises against the netdev
+    machinery, or the announce simply lands >= 2.7 ms later; no
+    instrument separates them. Per-trial `guest_ftx_ns` /
+    `guest_arp_req_n` make any recurrence countable rather than
+    fatal.
 
 ---
 

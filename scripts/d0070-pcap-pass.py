@@ -594,6 +594,20 @@ def _selftest_frames() -> list[tuple[bytes, int]]:
         + bytes.fromhex("0a00020f")
     )
     arp += bytes(60 - len(arp))
+    # D-0075: the guest's own solicit for the gateway. Its presence
+    # separates guest_ftx_ns from w_ns in the fixture, which is the
+    # whole point of recording it.
+    guest_arp_req = (
+        bcast
+        + guest_mac
+        + bytes.fromhex("0806")
+        + bytes.fromhex("0001080006040001")
+        + guest_mac
+        + ip_guest
+        + bytes(6)
+        + ip_gw
+    )
+    guest_arp_req += bytes(60 - len(guest_arp_req))
     synack = tcp_frame(
         slirp_mac,
         guest_mac,
@@ -635,6 +649,7 @@ def _selftest_frames() -> list[tuple[bytes, int]]:
     )
     return [
         (arp, 0),
+        (guest_arp_req, 20_000),
         (synack, 30_000),
         (http, 31_000),
         (pure_ack, 31_036),
@@ -654,6 +669,8 @@ def cmd_selftest() -> int:
         "d_fin_ns": 212_000,
         "synack_to_http_ns": 1_000_000,
         "http_len": 92,
+        "guest_ftx_ns": 20_000_000,
+        "guest_arp_req_n": 1,
     }
     if got != want:
         raise PassFail(f"TEST FAIL: selftest extract {got} want {want}")

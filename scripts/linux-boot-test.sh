@@ -34,10 +34,23 @@ IMAGE="$ART/$IMAGE_NAME"
 CPIO="$ART/rootfs.cpio"
 INIT="$ART/init"
 
-WORKDIR=$(mktemp -d)
+WORKDIR=$(mktemp -d -t linux-boot-test.XXXXXXXX)
 man_out=$(mktemp)
 man_err=$(mktemp)
-cleanup() { rm -rf "$WORKDIR"; rm -f "$man_out" "$man_err"; }
+# D-0074 item 4, one level up: a failing boot is evidence, not litter.
+# Deleting the serial and pcap on the way out cost attribution twice on
+# 2026-08-19. Success still cleans up, so the directory only survives
+# when there is something in it worth reading.
+cleanup() {
+    local st=$?
+    if [[ $st -eq 0 ]]; then
+        rm -rf "$WORKDIR"
+    else
+        echo "linux-boot-test: kept $WORKDIR" >&2
+        ls -1 "$WORKDIR" 2>/dev/null | sed 's/^/linux-boot-test:   /' >&2
+    fi
+    rm -f "$man_out" "$man_err"
+}
 trap cleanup EXIT
 
 if ! python3 "$ROOT/scripts/bench.py" check-linux-artifacts \

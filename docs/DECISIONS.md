@@ -3632,8 +3632,9 @@ D-0011 onward are working decisions made under those constraints.
 
 ## D-0074: The T4.8b stall is a lost guest ARP solicit; measure the rate first
 - Date: 2026-08-19 — Status: accepted (mechanism reproduced on the
-  bench host under D-0055 controls; rate experiment pre-registered,
-  not yet run; the `/init` change is conditional on its verdict)
+  bench host under D-0055 controls; rate experiment run — 25 events
+  in 550 boots, **not runnable as-is**; the `/init` change is
+  authorised by item 3 and specified in D-0075)
 - **Decision:**
   1. **Name the mechanism.** The T4.8b `20260818T143032Z-1`
      trimmed/02 stall is **not** an egress fault. The guest's first
@@ -3928,10 +3929,15 @@ D-0011 onward are working decisions made under those constraints.
      stop. D-0073's falsifiers 3–5 are unaffected.
   4. T4.8b's Linux arms will run a different `/init` than T4.8's.
      Disclose it: the addition is one netlink round trip before the
-     announce, bounded by the `T_NEIGH` stamp, sub-millisecond
-     against a 188 ms cross-system delta, and applied identically to
-     stock and trimmed, so the trimmed-vs-stock comparison is
-     unaffected.
+     announce, bounded by the `T_NEIGH` stamp, and applied
+     identically to stock and trimmed, so the trimmed-vs-stock
+     comparison is unaffected. **Correction (2026-08-19, measured):**
+     "sub-millisecond" was wrong. `T_NEIGH − T_IFUP` is **2.87 ms**
+     (2.826–2.895 ms over six boots), ~1.5 % of the 188 ms
+     cross-system delta, inflating the Linux baseline and therefore
+     biasing toward Whimbrel. It is measured per trial, so the
+     report subtracts a number rather than waving at one — which is
+     why the stamp exists (D-0075).
   5. Diagnostic tooling stays outside the repo and uncommitted
      (`~/whimbrel-diag/`): the boot engine, the classifier/rate tool
      and the pre-registered experiment wrapper. The wrapper refuses
@@ -3958,6 +3964,605 @@ D-0011 onward are working decisions made under those constraints.
   or any future `Image` respin, which re-rolls the phase race and
   invalidates the measured rate — the margin distribution must be
   re-measured, not assumed to carry over.
+- **Outcome (2026-08-19, experiment complete).** 550 boots, current
+  `Image-trimmed` (`1bf91509…`), `prereg.txt` frozen at
+  2026-08-19T08:08:11Z against git `2aae7d8` with a clean tree and
+  the three script hashes. **k = 25**, p̂ = 4.55 %, 95 % CI
+  [2.96 %, 6.64 %], one-sided 95 % upper 6.29 %. P(198-boot campaign
+  completes) rounds to 0 % at p̂ *and* at the upper bound, so the
+  decision rule refuses **not runnable as-is** without needing the
+  full 5000: the one-directional early stop fired at 25 events, and
+  it can only fire once runnability is already refused, so it bounds
+  how long the rate was measured, never the verdict. k ≥ 3 puts item
+  3 into force.
+  - **Signature conformance 25/25**, all six tests, and `ftx −
+    announce` spans **1028.4–1029.3 ms** — 0.9 ms across 25 events.
+    That is one mechanism with one healing deadline, not a family of
+    stalls that happen to share a magnitude. Falsifiers 1–5 did not
+    fire; the deferred question (naming the in-guest drop site)
+    therefore stays deferred, as decided.
+- **Correction: the margin is discrete, not continuous.** The bullet
+  above reads "not a binary event but a race whose margin is
+  measurable on every boot", generalised from 100 boots with a
+  single intermediate point at 3.917 ms. At n = 550 the middle is
+  **empty**: 25 events at 0.182–0.240 ms, two boots at 8.82 / 8.94
+  ms, 523 clean at 12.30–12.73 ms, nothing between (p1 0.192, p10
+  12.338, median 12.441 ms; zero near-misses in the pre-registered
+  8 ms band). The pilot's 3.917 ms boot does not recur. The two
+  intermediate boots moved `ftx − announce` from ≈ −8.4 ms to ≈ −4.6
+  ms as well — ARP and announce shifting **together** by ~1 jiffy
+  (4 ms at `CONFIG_HZ=250`), which is what a tick-quantised margin
+  looks like.
+  - The half that survives: margin is observable on every boot, so
+    it remains the per-boot risk observable. The half that does not:
+    it is a **classifier over a few quantised states**, not a
+    regression on a continuum. Reading a trend off three points was
+    the D-0069 failure mode again — an estimate that flattered the
+    model — and 550 points, not more care, is what corrected it.
+  - **This is why the D-0075 fix is sound rather than lucky.** A
+    discrete collision window means shortening `RETRANS_TIME`
+    changes the *consequence* of a collision and not its
+    probability: the ~4.5 % of boots that collide will still
+    collide, and must. That converts the post-fix rate check from a
+    hoped-for improvement into a **falsifier** — a rate move beyond
+    the pre-registered 2× means the intervention perturbed the race
+    itself, and pre/post are then not comparable.
 
 
 
+
+## D-0075: Shorten the guest ARP retransmit in `/init`; validate before T4.8b
+
+- Date: 2026-08-19 — Status: accepted (code written and statically
+  verified; the validation run is pre-registered below and has not
+  been run; T4.8b does not start before its verdict)
+- **Decision:**
+  1. In `bench/linux/server.c`, between `ifup` and the announce, one
+     `RTM_SETNEIGHTBL` over `AF_NETLINK` sets **eth0's** `arp_cache`
+     parameters: `NDTPA_RETRANS_TIME` = 50 ms and
+     `NDTPA_MCAST_PROBES` = 20. This is D-0074 item 3 made concrete;
+     the rate experiment returned k = 25 in 550 boots, which puts
+     that item into force.
+  2. A `T_NEIGH` stamp brackets the call, so the cost it adds to the
+     Linux baseline is **measured per trial**, not argued about.
+  3. `bench.py` records two passive per-trial columns on every
+     trial of both systems — `guest_ftx_ns` and `guest_arp_req_n` —
+     and `bench.py arp-signature` counts events per arm afterwards.
+     Recording only; nothing here can fail or drop a trial.
+  4. Rebuild the cpio, re-run `just test-linux`, then the
+     pre-registered validation run, then T4.8b. In that order.
+- **The parameter arithmetic (read out of the 6.18.7 tree we build,
+  not from memory).**
+  `net/core/neighbour.c:__neigh_event_send()` arms the retransmit at
+  `now + max(NEIGH_VAR(parms, RETRANS_TIME), HZ/100)` and probes
+  immediately regardless, so **the first solicit's timing is not
+  touched by any value chosen here** — only the deadline that heals
+  its loss.
+  - `arp_tbl.parms` ships `RETRANS_TIME = 1*HZ`. At `CONFIG_HZ=250`
+    that is 250 jiffies. `kernel/time/timer.c` puts a delta of 250
+    in wheel **level 1** (`LVL_START(1)=63`, `LVL_START(2)=504`),
+    granularity 8 jiffies, and `calc_index()` rounds up by one
+    bucket so it can never fire early: expiry lands 251–258 jiffies
+    out, i.e. **1004–1032 ms**.
+  - `msecs_to_jiffies(50)` is `(50 + 4 - 1)/4 = 13` jiffies
+    (`MSEC_PER_SEC/HZ = 4`). A delta of 13 is below `LVL_START(1)`,
+    so it sits in **level 0** at 1-jiffy granularity, and the same
+    round-up makes the expiry exactly **14 jiffies = 56 ms**.
+    `max(13, HZ/100 = 2)` keeps the parameter, not the floor, as the
+    thing being measured — which is why 50 ms and not 8 ms.
+  - Probe budget: `neigh_max_probes()` is
+    `UCAST_PROBES + APP_PROBES + MCAST_PROBES` and `neigh->probes`
+    starts at `UCAST_PROBES`, so `MCAST_PROBES` is exactly the
+    number of solicits before `NUD_FAILED`. Today: 3 at 1 s ≈ 3 s of
+    coverage. After: 20 at 52 ms ≈ 1.04 s — the same order of
+    coverage, reached 20× sooner. More than ~19 would only convert a
+    loud timeout into a slow pass that the cliff detector catches
+    anyway, so the budget stops there.
+- **`NDTPA_IFINDEX` is mandatory, and its absence would fail
+  silently.** `neigh_parms_alloc()` does `kmemdup(&tbl->parms, …)`
+  when the netdev registers, so eth0 holds a **private copy** of the
+  table defaults. Writing the table default (ifindex 0) sets a
+  struct nothing reads, and the kernel still acks 0 — a fix that
+  looks applied and is not. `lookup_neigh_parms()` matches
+  `p->dev->ifindex`, so the request must name eth0.
+- **Placement.** After `ifup` because eth0's IPv4 `arp_parms` follow
+  its `in_device`; before the announce because that datagram is what
+  forces the solicit. Any placement before the announce shifts the
+  announce by the same amount, so the choice is about correctness,
+  not about phase.
+- **Static verification, before any boot.** The `/init` binary
+  cross-compiles with the campaign's own musl toolchain under
+  `-Wall -Werror`. The 68-byte message the code emits was decoded
+  and asserted field by field against the guest kernel's own uapi
+  headers — 13/13: `nlmsg_len` = message length,
+  `RTM_SETNEIGHTBL`, `NLM_F_REQUEST|NLM_F_ACK`,
+  `ndtm_family = AF_INET`, `NDTA_NAME = "arp_cache\0"`, nested
+  `NDTA_PARMS` carrying `NDTPA_IFINDEX` (u32), `NDTPA_RETRANS_TIME`
+  (u64, milliseconds — `nla_get_msecs`) and `NDTPA_MCAST_PROBES`
+  (u32), every length consuming exactly to `nlmsg_len`. That check
+  builds the message with the socket calls stubbed, so it never
+  touched the host's own `arp_cache`. At runtime `NLM_F_ACK` plus
+  `die_num` turns any rejection into
+  `INIT FAIL: RTM_SETNEIGHTBL rejected (-N)` on the serial, which
+  every gate already greps: a malformed message cannot pass quietly.
+- **What the passive logging can and cannot see — stated rather than
+  proxied.**
+  - Recorded: `guest_ftx_ns` (guest's first wire TX − slirp's ARP
+    request, the same anchor as `W`, so pcap-internal per D-0071)
+    and `guest_arp_req_n`.
+  - **Margin is not recordable in a campaign.** It is defined
+    against the last virtio ctrl-vq completion, which only a QEMU
+    `virtqueue_pop` trace exposes, and enabling that trace would
+    change the measured configuration. So the campaign records the
+    **consequence** and margin stays a bench-diagnostic quantity.
+    Naming the limit instead of substituting a proxy is the item-19
+    discipline.
+  - **`guest_arp_req_n` is blind to the event this entry is about,
+    and that blindness is its designed scope.** It can see exactly
+    one condition: a loss window that outlives one retransmit, which
+    puts a **second** request on the wire. The D-0074 event puts
+    **one** request there — the solicit is lost before it reaches
+    the ring, so the retransmit is the only frame that ever exists
+    — and a clean boot also shows one, before and after this
+    change. It follows that `guest_arp_req_n = 1` across a whole
+    campaign is **not evidence that no events occurred**: that
+    column reads the same at 0 events and at all of them. Treating
+    a clean value as absence would be threats item 19 in miniature
+    — a conclusion drawn from an instrument that does not span the
+    thing being concluded about. The detection path is
+    `guest_ftx_ns` against the arm's own median; `guest_arp_req_n`
+    bounds the loss window's **length** and nothing else, which is
+    why it appears again as falsifier 4 below.
+  - Detection is therefore per-arm and after the fact:
+    `bench.py arp-signature` flags trials whose `guest_ftx_ns`
+    exceeds their **own arm's** median by > 20 ms. A fixed threshold
+    cannot work — `guest_ftx_ns` contains the whole guest boot,
+    which differs per arm. 20 ms sits an order of magnitude above
+    the within-arm clean spread (~1 ms) and well under the smallest
+    event this change can produce (~52 ms).
+- **Effect on the published baseline, disclosed in the direction
+  that matters.** The netlink round trip is on the measured path and
+  inflates **every** Linux trial, which biases the cross-system
+  comparison **in Whimbrel's favour**. `T_NEIGH − T_IFUP` bounds it
+  per trial; it is applied identically to stock and trimmed, so
+  trimmed-vs-stock is unaffected. The first measurement of it comes
+  out of the validation run, and the report quotes that number
+  rather than "sub-millisecond".
+- **Deliberately not changed.** `report-exhibits.py`'s
+  `INIT_STAMP_ORDER` keeps its seven names: it is a
+  required-presence list applied to **pinned git objects** whose
+  serials predate `neigh`, so adding the name there would break
+  T4.6 / T4.8 exhibit regeneration. The new stamp is recorded by the
+  harness, never by the pinned decomposition. Both `Image` hashes
+  stay put (D-0074 consequence 3). The wire shape stays as D-0074
+  described it.
+- **Pre-registration — validation run, fixed before it starts.**
+  5000 boots on the new cpio via `~/whimbrel-diag/stall-validate.sh`,
+  same D-0055 host controls, same event and cliff definitions,
+  script hashes frozen into `prereg.txt` before boot 1. It is a
+  **sibling** of `stall-rate.sh`, not an edit to it: that script is
+  the frozen D-0074 instrument and its pre-registration hardcodes
+  the pre-fix heal band [0.95, 1.10] s, under which every post-fix
+  event would read as nonconforming. A different pre-registration
+  gets a different script and a different frozen `prereg.txt`. The
+  new wrapper additionally refuses to run against the pre-fix
+  `init` hash or an `init` with no `RTM_SETNEIGHTBL` string, and
+  records `git diff HEAD` plus its sha256 so a run made against an
+  uncommitted tree stays reproducible. No early stop: events are
+  expected, so the run measures all 5000.
+  - **Binding acceptance is D-0074's and is not restated more
+    loosely here:** zero cliff crossings; every event heals within
+    **[40, 120] ms**; loss-event rate within **2×** of 4.55 %.
+  - **Sharper expectations declared now** (a stricter prediction
+    added before the run is legitimate; a looser one after it is
+    not). Predicted heal: the deadline moves from 258 to 14 jiffies,
+    a shift of 976 ms, so `ftx − announce` should land at
+    **52.4–53.3 ms** against the observed 1028.4–1029.3 ms. The
+    ~5–8 ms the wheel model does not account for (one tick of
+    `neigh_timer_handler` plus the pcap write) is common to both
+    configurations, which is why the **shift** is predicted more
+    confidently than the absolute. Also expected: `guest_arp_req_n`
+    = 1 on every boot; and the margin distribution unchanged in
+    **shape** — three tight clusters with empty gaps — but **not**
+    in location, for the reason measured below.
+- **Measured before the run, on the rebuilt cpio (40 clean boots
+  plus 6 with stamps kept; `just test-linux` green).**
+  - **The netlink round trip costs 2.87 ms** (`T_NEIGH − T_IFUP`,
+    2.826–2.895 ms, n = 6) — not the sub-millisecond D-0074
+    assumed. Corrected there. Under TCG a socket, an ioctl, a
+    `sendto`, an ack `recv` and a `close` through `rtnl_lock` is
+    simply not free, and guessing was the wrong move; the stamp is.
+  - **The margin's location moves by exactly that cost**: clean
+    median 12.44 ms before, **15.29 ms** after, a shift of 2.85 ms
+    against a measured 2.87 ms. That is mechanical, not
+    coincidental — the netlink call delays the announce and does
+    not touch the virtio ctrl-vq completions the margin is measured
+    from. `ready − e0` (280 → 283 ms) and E0→E4 (282 → 285.5 ms)
+    move by the same amount, which is the cross-check.
+  - **This is a known perturbation of the race's phase, declared
+    before the run rather than discovered after it.** The margin is
+    tick-quantised (D-0074 Outcome), so moving the announce 2.87 ms
+    later moves it ~0.7 jiffies away from the collision point. The
+    rate may therefore move for a reason that has nothing to do
+    with `RETRANS_TIME`. Falsifier 3 already covers it; what
+    changes is that a rate move is now **expected as a live
+    possibility**, not a surprise, and it must not be reported as
+    the fix working.
+  - 0 events in 40 pre-flight boots is consistent with 4.5 %
+    (P = 15.7 %) and is not evidence of anything.
+- **The k = 0 branch, decided in advance.** If the 5000-boot run
+  finds no events at all, the shortened retransmit is **untested**:
+  no event means no heal to time, so the [40, 120] ms criterion
+  cannot pass — it can only fail to apply. The report must then say
+  the heal path is untested and that the observed change is
+  consistent with the 2.87 ms phase shift having moved the race off
+  its collision point, which is not a result anyone designed for.
+  What still holds: the wire shape, the detector, and the permanent
+  signature logging that makes a later event countable.
+  - **Falsifiers.**
+    1. Any cliff crossing → the change did not work. Stop; T4.8b
+       does not run.
+    2. Any event outside [40, 120] ms → mechanism or arithmetic
+       wrong; re-open the diagnosis.
+    3. Rate outside [2.3 %, 9.1 %] → the intervention perturbed the
+       race rather than its consequence. Disclose; pre- and post-fix
+       rates are then not comparable and no improvement is claimed.
+    4. Any boot with ≥ 2 guest ARP requests → the loss window
+       outlives one retransmit; the one-shot model is wrong and the
+       probe budget must be re-derived.
+    5. More than 1 % of boots with margin in 0.3–8 ms → the discrete
+       collision window recorded in D-0074's Outcome is wrong.
+    6. Any `INIT FAIL: RTM_SETNEIGHTBL …` → the netlink path is not
+       robust on this kernel. Stop.
+  - **A heal well under 1 s but outside [40, 70] ms** falsifies the
+    wheel arithmetic while leaving the mechanism intact. That is a
+    weaker and separately recorded outcome, not a reason to re-open
+    the diagnosis — it is written down here so the two cannot be
+    conflated afterwards.
+  - Abort policy is unchanged from D-0074: one attempt, disclosed as
+    an attempt count with the aborted batch ID recorded.
+- **Alternatives considered.**
+  - **Pre-seed the neighbour entry** (`RTM_NEWNEIGH`,
+    `NUD_PERMANENT`, gateway MAC `52:55:0a:00:02:02`). Removes the
+    race outright instead of shortening it, and D-0062 already
+    allows a warm cache. Rejected twice over: it deletes ARP
+    resolution from the Linux baseline while Whimbrel still pays for
+    it — a bias toward Linux, larger than the one this change
+    introduces — and it hardcodes libslirp's derived MAC into the
+    baseline, the clever-over-legible trade this project refuses.
+  - **Emit a raw ARP from `AF_PACKET`.** Same objection, plus
+    `/init` would stop exercising the ordinary send path, so the
+    baseline would no longer be what an ordinary Linux service does.
+  - **Enable `CONFIG_PROC_FS` and write the sysctl.** Refused in
+    D-0074: it changes the Image and makes it a different arm, which
+    D-0072 already refused for the same reason.
+  - **Patch or lengthen slirp's ARP-pending drop** — D-0074 item 6;
+    it is the detector.
+  - **Retry failed batches** — D-0074 item 7.
+  - **200 ms instead of 50 ms.** Still 5× under the cliff and still
+    wheel level 0, so no mechanical advantage, and it leaves less
+    headroom if the loss window is longer than 550 boots showed.
+  - **8 ms instead of 50 ms.** The `max(…, HZ/100)` floor takes
+    over and the constant stops meaning what it says.
+- **Rationale.** The campaign-fatal quantity was never the stall's
+  existence but its **length**: ~1.03 s is just past slirp's
+  ARP-pending drop, and the drop is what snaps the queued SYN onto a
+  ~6 s RTO. Moving the heal two decades earlier leaves the race, the
+  wire shape and the detector exactly where they were, and converts
+  a destroyed trial into a ~+52 ms outlier that is published rather
+  than lost. Every constant here is read out of the kernel we
+  actually build, so the prediction is falsifiable before the run
+  rather than fitted after it.
+- **Consequences.**
+  1. MANIFEST `init` and `rootfs.cpio` hashes move; both `Image`
+     hashes must not. A moved Image hash means the cpio change
+     triggered a kernel rebuild — stop.
+  2. `runs.csv` gains `guest_ftx_ns` and `guest_arp_req_n`.
+     Historical objects lack both; `arp-signature` **refuses** such
+     a CSV rather than reporting a clean run off a column that was
+     never recorded.
+  3. The shared synthetic pcap fixture gains a guest ARP request, so
+     `d0070-pcap-pass.py` and `bench.py selftest` expectations move
+     together. Both selftests pass; `bench.py selftest` additionally
+     plants a +52 ms event and asserts the classifier finds it and
+     ignores ordinary jitter.
+  4. T4.8b's Linux arms run a different `/init` than T4.8's, with
+     the cost bounded by `T_NEIGH` (D-0074 consequence 4).
+  5. New glossary terms land with D-0074's: **margin**, **loss
+     event**, **cliff crossing**.
+- **Loose end, recorded not fixed:** `scripts/linux-boot-test.sh`
+  removes its `mktemp -d` workdir in an `EXIT` trap, so a failing
+  boot destroys its own serial and pcap. Two consecutive failures of
+  that gate were observed on 2026-08-19 with the output discarded
+  and could not be attributed; 40 subsequent runs passed. Keeping
+  the workdir on failure is the obvious repair and is exactly what
+  D-0074 item 4 asks for one level up — countable, not merely fatal.
+- **Outcome (2026-08-19, validation run complete).** 5000 boots on
+  the post-fix cpio (`rootfs.cpio 258c9325…`, `init b6cb40b4…`;
+  both `Image` hashes unmoved), D-0055 controls verified before and
+  after. **k = 0.** All six falsifiers pass; the campaign is
+  statistically runnable. **The shortened retransmit is untested** —
+  the k = 0 branch above applies verbatim: no event means no heal to
+  time, so the [40, 120] ms criterion could only fail to apply. "The
+  events stopped" and "the mechanism is fixed" are different claims
+  and only the first is supported. D-0076 builds the diagnostic that
+  tries to make the second one testable.
+- **Correction: the margin distribution changed shape, not only
+  location — and falsifier 5 was too narrow to catch it.** The
+  expectation declared above was "unchanged in shape, not in
+  location". Location moved as predicted (median 12.44 → 15.20 ms,
+  +2.76 against a measured 2.87 ms cost). Shape did not survive:
+
+  | mode (ms) | pre-fix, n=550 | post-fix, n=5000 |
+  |---|---|---|
+  | main | 12.44 (95.1 %) | 15.20 (95.3 %) |
+  | main − 1.7 | — | 13.5 (2.6 %) |
+  | main − 3.7 | 8.8 (0.4 %) | 11.5 (0.9 %) |
+  | main − 8.7 | — | 6.5 (0.18 %) |
+  | main + 4.3 | — | 19.5 (0.4 %) |
+  | main − 12.24 | **0.2 (4.5 %, every event)** | **absent** |
+
+  Falsifier 5 tested a fixed absolute window (0.3–8 ms) and passed
+  on 0.18 %. A shape test would have failed. Writing an absolute
+  window for a quantity whose location was expected to move was the
+  error, and it is the same error in miniature as the rest of this
+  log: the instrument did not span the thing being concluded about.
+- **What the vanished mode implies, and it is not what D-0075
+  assumed.** If margin were an independent input, the `main − 12.24`
+  mode should still occur at ~4.5 % post-fix and simply land at
+  2.96 ms instead of 0.2 ms. It does not occur at all — 9 boots in
+  the whole 0.3–8 ms window, none near 3 ms. So that mode does not
+  exist apart from the event: **the ~0.2 ms margin is co-occurrent
+  with the loss, not an independent cause of it.** The margin is a
+  marker, not a knob, which is a further demotion of the "predictor"
+  reading D-0074's Outcome already corrected once.
+- **A second candidate explanation, not yet separated.** The netlink
+  round trip is not only 2.87 ms of delay: `RTM_SETNEIGHTBL` takes
+  `rtnl_lock`, so it is also a **synchronisation barrier** against
+  the netdev machinery that is the prime suspect for eating the
+  solicit. "The announce moved 2.87 ms later" and "the announce now
+  happens after an rtnl barrier" both explain k = 0, and this run
+  cannot tell them apart. D-0076 is designed to.
+- Revisit trigger: any falsifier above; a QEMU, kernel or host
+  change on the bench machine, since every constant here is derived
+  from `CONFIG_HZ`, the timer-wheel geometry and `arp_tbl`'s
+  defaults; or a Buildroot/kernel bump, which must re-derive the
+  jiffy arithmetic rather than inherit it.
+
+## D-0076: A diagnostic image that restores the collision, to test the heal path
+
+- Date: 2026-08-19 — Status: accepted (both arms run; k = 0 in both,
+  so the heal path is **still** unexercised — see Outcome).
+  Diagnostic only: **never a campaign arm, never a published row,
+  never in `bench/linux/artifacts/` or MANIFEST.**
+- **Why.** D-0075's validation returned k = 0 in 5000 boots. The
+  campaign is runnable, but the shortened retransmit never fired, so
+  the heal is untested. T4.8b should not run on "the events stopped"
+  when the claim we need is "a lost solicit heals at ~52 ms".
+- **Decision:**
+  1. Build a variant `/init` **outside the repo**
+     (`~/whimbrel-diag/margin-probe/`), from the committed
+     `bench/linux/server.c` plus one mechanical patch, into its own
+     cpio. `bench/linux/artifacts/` and MANIFEST stay pinned at
+     `rootfs.cpio 258c9325…` / `init b6cb40b4…`, and the boot engine
+     gains a `CPIO_OVERRIDE` env so nothing in the repo moves.
+  2. **Arm C (`early`) — the primary.** Move the netlink call from
+     between `ifup` and the announce to **before `ifup`**. The
+     announce returns to its pre-fix instant and the margin to
+     ~12.44 ms, with the shortened retransmit still active.
+  3. **Arm A (`early+pad`) — the discriminator**, built now and run
+     only if Arm C's result needs it. Same reorder plus a
+     spin-only 2.87 ms delay before the announce, restoring the
+     *validated* image's announce instant.
+  4. Report to a fresh output dir with its own frozen
+     pre-registration. `stall-rate.sh` and `stall-validate.sh` are
+     not touched.
+- **Correction to the proposed design: a compensating delay moves
+  the margin the wrong way.** `margin = announce − last ctrl-vq
+  pop`, and the ctrl-vq completions are caused by `ifup` itself
+  (the D-0074 timeline puts them at +0.262–0.269 s, at `ifup`, not
+  at the +0.217 s probe kicks). The post-fix stamps confirm it:
+  `ifup` 153.8 ms, `neigh` 156.7, `announce` 168.9 — `announce −
+  ifup` = 15.1 ms against a measured margin of 15.29. **The margin
+  is essentially the `ifup`→`announce` interval.** Adding a delay
+  before the announce therefore *increases* it, moving further from
+  the collision, not back to it. Restoring ~12.44 ms requires
+  **removing** the 2.87 ms from that interval, which a reorder does
+  and a delay cannot.
+  - Moving the call before `ifup` is legal:
+    `net/ipv4/devinet.c:inetdev_event()` calls `inetdev_init()` at
+    **`NETDEV_REGISTER`**, so `in_dev->arp_parms` exists from
+    virtio-net probe, long before the interface has an address.
+    `SIOCGIFINDEX` likewise needs only registration. The earlier
+    "after `ifup`, because eth0's arp_parms follow its `in_device`"
+    (D-0075) was the right instinct and the wrong trigger.
+  - A reorder is also **stricter** than the requested delay against
+    the second constraint: the netlink write is byte-identical and
+    the announce is untouched, and nothing new executes at all.
+- **What Arm A separates, and why it is worth building now.** The
+  netlink call is not only 2.87 ms of delay: `RTM_SETNEIGHTBL` takes
+  `rtnl_lock`, so it is also a barrier against the netdev machinery
+  that is the prime suspect for eating the solicit. Three positions,
+  two variables:
+
+  | arm | barrier | announce instant | events? |
+  |---|---|---|---|
+  | validated (D-0075) | late | late | 0 / 5000 |
+  | C `early` | early | early (pre-fix) | ? |
+  | A `early+pad` | early | late | ? |
+
+  Events in C only → the announce instant is what matters. Events in
+  both → the barrier's **position** matters, not the timing. Events
+  in neither → neither, and the margin story is wrong.
+- **The pad is a spin, not a sleep.** `nanosleep` would idle the
+  hart and let softirqs and workqueues run, which is itself a change
+  to the race; the 2.87 ms it replaces is spent CPU-busy inside a
+  syscall. A `clock_gettime(CLOCK_MONOTONIC)` spin is the closer
+  analogue and touches no network state.
+- **Pre-registration — fixed before the run.**
+  - **Protocol.** Arm C, N = 600 boots, `Image-trimmed` unchanged,
+    diagnostic cpio, campaign argv and pins, D-0055 host controls
+    checked before and after, script and cpio hashes frozen into
+    `prereg.txt` before boot 1. No early stop.
+  - **Predicted heal, three bands, and which one binds.** Binding is
+    D-0074's **[40, 120] ms**, unchanged. Declared point prediction:
+    **[52.4, 53.3] ms** — the pre-fix events healed at
+    1028.4–1029.3 ms and the armed deadline moves 258 → 14 jiffies,
+    i.e. 976 ms at `CONFIG_HZ=250`. The naive first-principles value
+    is ~47.5 ms (14 jiffies = 56 ms, less the 8.46 ms by which the
+    clean solicit precedes the announce stamp); the ~5 ms gap is the
+    unmodelled `neigh_timer_handler` + pcap-write residual D-0075
+    already named, and it is the reason the **shift** is predicted
+    rather than the absolute. A heal inside [40, 70] ms but outside
+    [52.4, 53.3] falsifies the arithmetic, not the mechanism, and is
+    recorded separately.
+  - **Predicted rate:** near the pre-fix 4.5455 % (25/550). Band
+    **[2.27 %, 9.09 %]** (2× either way). At N = 600 and p = 4.5 %
+    that is ~27 events, enough to bound the heal band tightly.
+  - **Predicted margin:** median back to 12.44 ± 0.3 ms, and the
+    event cluster back at ~0.2 ms.
+  - **Falsifiers.**
+    1. Any heal outside [40, 120] ms → the retransmit or the timer
+       arithmetic is wrong. Stop.
+    2. Any cliff crossing → the shortened retransmit does not heal
+       below slirp's drop, i.e. D-0075's fix does not work. Stop;
+       T4.8b does not run.
+    3. Any boot with ≥ 2 guest ARP requests → the loss window
+       outlives one retransmit; the probe budget must be re-derived.
+    4. Rate outside [2.27 %, 9.09 %] → restoring the announce
+       instant did not restore the collision probability, so the
+       2.87 ms phase shift was not the whole story.
+    5. Margin median not back within 0.3 ms of 12.44 → the reorder
+       did not do what it was built to do; the run says nothing
+       about the heal either way.
+  - **The k = 0 branch, again and in advance.** If Arm C produces no
+    events, say exactly that: position alone does not restore the
+    collision, the margin is not the mechanism, and **the heal path
+    remains untested**. That is not a claim that the fix works, and
+    it is not a reason to run T4.8b on the strength of D-0075's
+    k = 0. The next step would be Arm A, and after that a forced
+    drop, which tests the retransmit at the cost of no longer
+    testing the original loss site.
+- **Alternatives considered.**
+  - **A compensating delay, as proposed.** Directionally wrong; see
+    the correction above. Kept as Arm A's pad, where its purpose is
+    to *restore* the validated instant, not to reduce the margin.
+  - **Force a drop instead of restoring the race** (a tiny
+    `txqueuelen`, or a zero `QUEUE_LEN_BYTES`). Would give a 100 %
+    event rate and a clean test of the retransmit and the timer —
+    but at a different drop site, so it would verify the heal while
+    no longer verifying the mechanism D-0074 named. Held in reserve
+    for the k = 0 branch, where a partial answer beats none.
+  - **Revert to the pre-fix `/init` and re-measure.** Restores the
+    race exactly, but with the 1 s retransmit, so it tests nothing
+    about the fix.
+  - **Ship the reorder to production.** Deliberately deferred until
+    this run says what it does. If Arm C restores a 4.5 % event rate
+    that heals at ~52 ms, then the reorder is arguably the *better*
+    production placement — it validates on the real mechanism
+    instead of accidentally suppressing it — and that is a decision
+    to take on evidence, in its own entry, not as a side effect.
+- **Rationale.** k = 0 is a good campaign outcome and a bad
+  scientific one. The cheapest way to earn the second claim is to
+  put the announce back where the collision lives while keeping the
+  shortened deadline, and the cheapest way to do *that* turns out to
+  be moving code rather than adding it.
+- **Consequences.**
+  1. `~/whimbrel-diag/stall-repro.sh` gains `CPIO_OVERRIDE`; with it
+     set, the run records the override's sha256 and still hashes the
+     MANIFEST artifacts for batch-start IO fidelity.
+  2. A third pre-registration and a third wrapper. `stall-rate.sh`
+     (D-0074) and `stall-validate.sh` (D-0075) stay frozen: each
+     pre-registration owns its script.
+  3. The diagnostic cpio is never hashed into MANIFEST and never
+     boots a campaign trial. Its own gate refuses to run if the
+     repo's `init` hash has moved.
+- **Outcome (2026-08-19, both arms run).** Arm C (`early`) and Arm A
+  (`early+pad`), 600 boots each, D-0055 controls verified before and
+  after, campaign artifacts confirmed untouched. **k = 0 in both.**
+  With D-0075's validation that is **0 events in 6200 boots across
+  three configurations**, against 25/550 = 4.5455 % pre-fix.
+
+  | config | netlink | `rtnl_lock` at | announce (guest-mono) | margin | k |
+  |---|---|---|---|---|---|
+  | pre-fix, n=550 | absent | — | 165.4 ms | 12.44 ms | **25 (4.55 %)** |
+  | validated, n=5000 | present | ~156 ms (post-`ifup`) | 168.2 ms | 15.20 ms | 0 |
+  | Arm C, n=600 | present | ~148 ms (pre-`ifup`) | 168.1 ms | 12.35 ms | 0 |
+  | Arm A, n=600 | present | ~148 ms (pre-`ifup`) | 170.9 ms | 15.13 ms | 0 |
+
+  - **Margin is ruled out.** Arm C restored it to 12.348 ms — 0.09 ms
+    from the pre-fix median, inside falsifier 5's tolerance — and
+    nothing fired. Across the three post-fix arms margin took
+    12.35 / 15.13 / 15.20 ms, spanning the pre-fix value, with k = 0
+    throughout. The margin is not the coordinate the race lives in.
+    D-0074's Outcome demoted it from predictor to classifier; this
+    demotes it again, to a marker with no causal content.
+  - **Barrier *position* is ruled out.** `rtnl_lock` was taken after
+    `ifup` in the validated image and ~8 ms before it in both probe
+    arms. No difference. In particular the natural form of the
+    serialisation story — that the call waits out `ifup`'s deferred
+    linkwatch work — is **refuted**: in Arms C and A the lock is
+    released before `ifup` is even called.
+- **What this establishes, and what it does not.** Two candidates
+  remain, and they are **perfectly confounded** by every arm run so
+  far:
+  1. **The call's presence** — `RTM_SETNEIGHTBL` takes `rtnl_lock`
+     (`net/core/neighbour.c:3922` registers it without
+     `RTNL_FLAG_DOIT_UNLOCKED`, so `rtnl_lock()` is taken at
+     `net/core/rtnetlink.c:6957`), serialising against the netdev
+     machinery that is the prime suspect for eating the solicit.
+     This is the leading reading and is mechanically grounded.
+  2. **The absolute announce instant.** Every post-fix arm announces
+     at **168.1–170.9 ms**; pre-fix announces at **165.4 ms**. No arm
+     restored the pre-fix absolute instant, because the call costs
+     2.7–5.5 ms and nothing was removed to pay for it. If the
+     collision partner is anchored to boot time rather than to
+     `ifup`, "the announce now happens ≥ 2.7 ms later" explains k = 0
+     on its own, with no serialisation involved.
+
+  Arm C is what forces this caveat: it holds the margin at the
+  pre-fix value while the absolute announce stays late, so it
+  separates margin from absolute time but not presence from absolute
+  time. **Recording (1) as established would be the fourth instance
+  of this log's recurring failure** — attributing to a subsystem
+  across a boundary no instrument spans (D-0071, threats item 19,
+  D-0074's classifier overturn). It is recorded as the leading
+  hypothesis, not as the finding.
+  - **The experiment that would separate them** is one arm and ~5
+    minutes: **no netlink call at all** (pre-fix `neigh` parameters)
+    plus a spin sized to put the announce at ~168.2 ms. Events back
+    at ~4.5 % → the call's presence is the cause. k = 0 → the
+    absolute announce instant is, and the serialisation reading is
+    wrong. It tests the *mechanism*, not the deployed fix, which is
+    why it is named rather than run by default.
+- **What remains untested, stated plainly.** The shortened
+  retransmit **never fired in 6200 boots**. Therefore:
+  - the wheel arithmetic (250 → 13 jiffies armed, level 1 → level 0,
+    fires at 14 jiffies) is **unverified** — it is read correctly out
+    of the 6.18.7 source and has never been observed;
+  - the declared heal band [52.4, 53.3] ms and the binding [40, 120]
+    ms are **unexercised**; falsifier 1 reads FAIL in both probe
+    reports for exactly that reason (`0 outside, 0 timed`), which is
+    "could not apply", not "failed";
+  - `MCAST_PROBES = 20` is likewise unexercised.
+  The deployed change is justified by source reading and by the
+  absence of events, not by an observed heal. T4.8b runs on that
+  basis, and the report says so.
+- **The forced drop is declined, not deferred.** Shrinking
+  `txqueuelen` (or zeroing `QUEUE_LEN_BYTES`) would drop a frame at
+  the qdisc and let the `neigh` retransmit heal it, which would
+  verify the timer arithmetic at a 100 % event rate. It would not
+  touch the fix that is actually deployed: the loss D-0074 named
+  happens somewhere in the `ifup`→first-xmit path, and a qdisc drop
+  is a different site with a different trigger. The retransmit that
+  heals it is the same code, so the run would produce a real number
+  and an unreal claim — the appearance of completeness bought by
+  testing the wrong thing. An unexercised path recorded as
+  unexercised is worth more than a green result about a mechanism we
+  did not deploy.
+- Revisit trigger: any falsifier; T4.8b being run before this
+  question is closed, which the entry exists to prevent; or a QEMU,
+  kernel or Buildroot change, which re-rolls the boot timeline and
+  therefore the collision — if events reappear in a later campaign,
+  the passive signature logging (D-0075) counts them and this entry
+  is where to start.

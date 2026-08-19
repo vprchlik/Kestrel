@@ -110,6 +110,8 @@ RUNS_FIELDS = [
     "w_ns",
     "d_ack_ns",
     "d_fin_ns",
+    "guest_ftx_ns",
+    "guest_arp_req_n",
     "attempts",
     "pcap_path",
 ]
@@ -1096,6 +1098,8 @@ def run_trial(
         "d_ack_ns": extracted["d_ack_ns"],
         "d_fin_ns": extracted["d_fin_ns"],
         "synack_to_http_ns": extracted["synack_to_http_ns"],
+        "guest_ftx_ns": extracted["guest_ftx_ns"],
+        "guest_arp_req_n": extracted["guest_arp_req_n"],
         "attempts": int(client_data["attempts"]),
         "phases": phases,
         "qemu_status": qemu_p.returncode,
@@ -1370,6 +1374,8 @@ def cmd_run(args: argparse.Namespace) -> int:
                 "d_ack_ns": result["d_ack_ns"],
                 "d_fin_ns": result["d_fin_ns"],
                 "synack_to_http_ns": result["synack_to_http_ns"],
+                "guest_ftx_ns": result["guest_ftx_ns"],
+                "guest_arp_req_n": result["guest_arp_req_n"],
                 "attempts": result["attempts"],
                 "pcap_path": rel_pcap,
             }
@@ -1707,10 +1713,79 @@ def _write_fixture_runs(path: Path, rows: list[dict]) -> None:
         "d_ack_ns": 40_000,
         "d_fin_ns": 150_000,
         "synack_to_http_ns": 1_000_000,
+        "guest_ftx_ns": 237_000_000,
+        "guest_arp_req_n": 1,
         "attempts": 12,
         "pcap_path": "x.pcap",
     }
     write_csv(path, RUNS_FIELDS, [{**base, **r} for r in rows])
+
+
+# D-0074 item 4 / D-0075. A lost solicit leaves the wire looking normal
+# — one ARP request, correct order — and shows only as a late first
+# guest TX. So the threshold cannot live in the CSV: guest_ftx_ns
+# carries the whole guest boot, which differs per arm. Classify per
+# arm at analysis time instead, against that arm's own median.
+#
+# 20 ms: the within-arm clean spread is ~1 ms (D-0074, 525 clean boots
+# at 12.30–12.73 ms margin, first TX inside 1 ms), the post-fix heal is
+# ~52 ms and the pre-fix heal ~1029 ms. Nothing observed lies between.
+ARP_LOSS_MARGIN_NS = 20_000_000
+
+
+def arp_signature(runs: list[dict]) -> list[dict]:
+    """Per-arm outliers in guest_ftx_ns. Counts events; never drops them."""
+    if not runs or "guest_ftx_ns" not in runs[0]:
+        raise BenchFail(
+            "TEST FAIL: runs.csv has no guest_ftx_ns column "
+            "(pre-D-0075 batch; the loss signature was not recorded)"
+        )
+    by_arm: dict[tuple[str, str], list[dict]] = {}
+    for r in runs:
+        by_arm.setdefault((r["system"], r["config"]), []).append(r)
+    out: list[dict] = []
+    for (system, config), rows in sorted(by_arm.items()):
+        vals = sorted(
+            int(r["guest_ftx_ns"]) for r in rows if r["guest_ftx_ns"] != ""
+        )
+        if not vals:
+            continue
+        med = vals[len(vals) // 2]
+        for r in rows:
+            if r["guest_ftx_ns"] == "":
+                continue
+            ftx = int(r["guest_ftx_ns"])
+            if ftx - med > ARP_LOSS_MARGIN_NS:
+                out.append(
+                    {
+                        "system": system,
+                        "config": config,
+                        "batch_id": r["batch_id"],
+                        "trial": r["trial"],
+                        "warmup": r["warmup"],
+                        "guest_ftx_ns": ftx,
+                        "arm_median_ns": med,
+                        "excess_ns": ftx - med,
+                        "guest_arp_req_n": r.get("guest_arp_req_n", ""),
+                    }
+                )
+    return out
+
+
+def cmd_arp_signature(args: argparse.Namespace) -> int:
+    runs = read_csv(Path(args.runs))
+    events = arp_signature(runs)
+    print(f"trials {len(runs)}   loss-signature events {len(events)}")
+    for e in events:
+        print(
+            f"  {e['system']}/{e['config']} batch={e['batch_id']} "
+            f"trial={e['trial']} warmup={e['warmup']} "
+            f"excess={e['excess_ns'] / 1e6:.1f} ms "
+            f"(ftx {e['guest_ftx_ns'] / 1e6:.1f} ms vs arm median "
+            f"{e['arm_median_ns'] / 1e6:.1f} ms) "
+            f"arp_req={e['guest_arp_req_n']}"
+        )
+    return 0
 
 
 def cmd_selftest(_args: argparse.Namespace) -> int:
@@ -2014,6 +2089,8 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
             "d_fin_ns": 212_000,
             "synack_to_http_ns": 1_000_000,
             "http_len": 92,
+            "guest_ftx_ns": 20_000_000,
+            "guest_arp_req_n": 1,
         }
         if got != want:
             raise BenchFail(f"TEST FAIL: imported extract {got} want {want}")
@@ -2033,12 +2110,13 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
             "missing pcap",
         )
 
+        # frames = [slirp ARP, guest ARP request, SYN/ACK, HTTP, ACK, FIN]
         dropped = [
             ("no slirp ARP", frames[1:]),
-            ("no guest SYN/ACK", frames[:1] + frames[2:]),
-            ("no HTTP 200", frames[:2] + frames[3:]),
-            ("no pure ACK", frames[:3] + frames[4:]),
-            ("no client FIN", frames[:4]),
+            ("no guest SYN/ACK", frames[:2] + frames[3:]),
+            ("no HTTP 200", frames[:3] + frames[4:]),
+            ("no pure ACK", frames[:4] + frames[5:]),
+            ("no client FIN", frames[:5]),
         ]
         for i, (needle, chosen) in enumerate(dropped):
             p = td_path / f"drop-{i}.pcap"
@@ -2051,7 +2129,24 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
                 f"missing {needle}",
             )
 
-        arp_f, syn_f, http_f, ack_f, fin_f = frames
+        arp_f, garp_f, syn_f, http_f, ack_f, fin_f = frames
+
+        # The signature is passive: a pcap with no guest ARP request
+        # still extracts, and records zero. It can never fail a trial.
+        no_garp = td_path / "no-guest-arp.pcap"
+        write_frames(no_garp, frames[:1] + frames[2:])
+        got_no_garp = require_pcap_intervals(no_garp, tshark, system="whimbrel")
+        if got_no_garp["guest_arp_req_n"] != 0:
+            raise BenchFail(
+                "TEST FAIL: guest_arp_req_n "
+                f"{got_no_garp['guest_arp_req_n']} want 0 without a guest ARP"
+            )
+        if got_no_garp["guest_ftx_ns"] != 30_000_000:
+            raise BenchFail(
+                "TEST FAIL: guest_ftx_ns "
+                f"{got_no_garp['guest_ftx_ns']} want 30000000 (the SYN/ACK)"
+            )
+        fired.append("guest ARP-loss signature is passive (absent → 0, no fail)")
         order_cases = [
             (
                 "SYN/ACK before slirp ARP",
@@ -2106,7 +2201,7 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
             )
 
         long_fin = td_path / "long-fin.pcap"
-        write_frames(long_fin, retimed([0, 30_000, 31_000, 31_036, 41_000]))
+        write_frames(long_fin, retimed([0, 20_000, 30_000, 31_000, 31_036, 41_000]))
         linux_long = require_pcap_intervals(long_fin, tshark, system="linux")
         if linux_long["d_fin_ns"] != 10_000_000:
             raise BenchFail(
@@ -2445,6 +2540,37 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
         )
     fired.append("linux-boot-test fail-closed without artifacts")
 
+    # D-0075: the loss classifier must find a planted event, ignore
+    # ordinary jitter, and refuse a pre-D-0075 CSV rather than report
+    # a clean run off a column that was never recorded.
+    sig_rows = [
+        {"system": "linux", "config": "trimmed", "batch_id": "b", "trial": i,
+         "warmup": 0, "guest_ftx_ns": 237_000_000 + i * 200_000,
+         "guest_arp_req_n": 1}
+        for i in range(9)
+    ]
+    if len(arp_signature(sig_rows)) != 0:
+        raise BenchFail("TEST FAIL: arp_signature flagged ordinary jitter")
+    planted = sig_rows + [
+        {"system": "linux", "config": "trimmed", "batch_id": "b", "trial": 9,
+         "warmup": 0, "guest_ftx_ns": 237_000_000 + 52_000_000,
+         "guest_arp_req_n": 1}
+    ]
+    hits = arp_signature(planted)
+    if len(hits) != 1 or int(hits[0]["trial"]) != 9:
+        raise BenchFail(f"TEST FAIL: arp_signature missed the planted event: {hits}")
+    try:
+        arp_signature([{k: v for k, v in sig_rows[0].items()
+                        if k != "guest_ftx_ns"}])
+        raise BenchFail("pre-D-0075 runs.csv did not fire")
+    except BenchFail as e:
+        if "no guest_ftx_ns column" not in str(e):
+            raise
+        fired.append(f"arp signature schema: {e}")
+    fired.append(
+        "arp signature: planted +52 ms event found, jitter ignored"
+    )
+
     print("TEST PASS: bench fail-closed selftest")
     for line in fired:
         print(f"  fired: {line}")
@@ -2512,6 +2638,13 @@ def main() -> int:
 
     st = sub.add_parser("selftest")
     st.set_defaults(func=cmd_selftest)
+
+    sig = sub.add_parser(
+        "arp-signature",
+        help="count guest ARP-loss events in a runs.csv (D-0074 item 4)",
+    )
+    sig.add_argument("runs")
+    sig.set_defaults(func=cmd_arp_signature)
 
     chk = sub.add_parser("check-serial", help="assert PHASE deltas sum to E2→E3g")
     chk.add_argument("serial")

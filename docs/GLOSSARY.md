@@ -19,6 +19,13 @@ use it. A wrong checksum is a silent drop at slirp: hung curl, clean serial.
 The pcap asserts `tcp.checksum.status` good; the kernel self-test is
 `CHECKSUM OK`.
 
+**cliff crossing.** A boot where the guest's first wire TX arrives after
+slirp has already dropped the ARP-pending frame (~1 s), so the queued
+hostfwd SYN is only retried on slirp's ~6 s RTO grid and E0→E4 jumps by
+about six seconds. Measured as `e0→E4 > 3 s`. It is campaign-fatal, and
+D-0074 keeps slirp's drop precisely because it is what makes the
+underlying loss visible at all.
+
 **CSR (Control and Status Register).** Per-hart special registers (e.g.
 `sstatus`, `satp`, `scause`) accessed by dedicated instructions (`csrr`,
 `csrw`) rather than loads/stores. They configure privileged behavior and record
@@ -95,6 +102,13 @@ identity-mapped kernel address `0x80200000`. Build a PA with bit 31 set
 from a positive `lui` plus `addi`/`slli`, or mask the high half after.
 This will bite again anywhere a test names a high address.
 
+**loss event.** A boot on which the guest's first ARP solicit never
+reaches the TX ring, so the frame on the wire is the `neigh` retransmit
+rather than the original. Measured as `ftx_wall − announce_wall >
+100 ms`; ~4.5 % of boots on the D-0074 host. The wire shows exactly one
+ARP request either way, which is why it needs a stamp rather than a
+frame count to detect (D-0074, D-0075).
+
 **mret / sret.** "Return from trap" instructions for M-mode and S-mode
 respectively: they restore the previous privilege level and interrupt-enable
 state from status-register fields (`MPP`/`SPP`, `MPIE`/`SPIE`) and jump to the
@@ -106,6 +120,13 @@ OpenSBI on this platform sets `0xf0b509`: codes 0, 3, 8, 10, 12, 13, 15,
 20–23 are delegated; 1, 2, 4, 5, 6, 7, 9 are not. An illegal instruction
 from a task (cause 2) therefore dumps in firmware, not in our handler
 (D-0034). We read the boot log; we do not write `medeleg`.
+
+**margin.** The announce instant minus the last virtio control-queue
+completion before it — the per-boot risk observable for a loss event.
+Over 550 boots it is discrete, not continuous: ~0.2 ms on every event,
+~12.4 ms on every clean boot, nothing in between (D-0074 Outcome). It
+needs a QEMU `virtqueue_pop` trace, so it is a bench-diagnostic
+quantity and is deliberately not recorded during a campaign.
 
 **measurement edges (E0–E4).** Named timestamps for boot-to-first-HTTP-byte
 (D-0043): E0 = host clock at QEMU exec; E1 = machine start (`mtime` ≈ 0);

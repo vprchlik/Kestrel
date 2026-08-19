@@ -1067,6 +1067,51 @@ helpers (`NET_9P` … `EXPORTFS`, plus `FHANDLE` / overlay /
 `KEYS` / …) are in the fragment; 3b lists the other-parent
 children. No Image, no T4.8b CSV, no MANIFEST rewrite.
 
+## Bench-host spec (D-0074 / D-0075): passive ARP-loss signature
+
+The guest's first ARP solicit is lost inside the guest on ~4.5 % of
+boots (D-0074, 25 events in 550). D-0075 shortens the `neigh`
+retransmit in `/init` so the loss heals at ~52 ms instead of ~1029 ms,
+below slirp's ARP-pending drop. The event still happens at the same
+rate and still has to be **counted**, so the harness records it on
+every trial of both systems and never drops one.
+
+Two columns, both from the existing per-trial pcap, both extracted by
+`scripts/pcap_http.py` (still the only copy of the filters):
+
+| column | definition | tshark |
+|---|---|---|
+| `guest_ftx_ns` | t(guest's first wire TX) − t(first slirp ARP request for 10.0.2.15) | `eth.src != 52:55:0a:00:02:02` |
+| `guest_arp_req_n` | count of guest-sourced ARP requests | `arp.opcode==1 && eth.src != 52:55:0a:00:02:02` |
+
+Neither can fail a trial. A pcap with no guest ARP request extracts
+normally and records 0; `bench.py selftest` asserts that.
+
+`guest_arp_req_n` is **not** the event detector and cannot be: a
+solicit lost before it reaches the TX ring leaves exactly one request
+on the wire, the same as a clean boot. Detection is `guest_ftx_ns`
+below. Read a column of 1s as "no loss window outlived a retransmit",
+never as "no events".
+
+**Detection is per arm, after the fact**, because `guest_ftx_ns`
+contains the whole guest boot and so has no cross-arm threshold:
+
+```
+python3 scripts/bench.py arp-signature results/runs.csv
+```
+
+flags trials whose `guest_ftx_ns` exceeds their own arm's median by
+more than 20 ms — an order of magnitude above the within-arm clean
+spread (~1 ms) and well under the ~52 ms a healed loss now costs. It
+**refuses** a pre-D-0075 `runs.csv` rather than reporting a clean run
+off a column that was never recorded.
+
+**Margin is deliberately not recorded here.** It is defined against
+the last virtio ctrl-vq completion, which needs a QEMU
+`virtqueue_pop` trace, and enabling that trace would change the
+measured configuration. The campaign records the consequence; margin
+stays a bench-diagnostic quantity (`~/whimbrel-diag/`, uncommitted).
+
 ## `runs.csv` — one row per trial
 
 
@@ -1105,6 +1150,8 @@ children. No Image, no T4.8b CSV, no MANIFEST rewrite.
 | `w_ns` | **D-0071.** pcap: guest SYN/ACK − first slirp ARP for 10.0.2.15. Guest-boot wait. Not a cross-system column. |
 | `d_ack_ns` | **D-0071.** pcap: slirp pure ACK of payload+FIN − HTTP frame. |
 | `d_fin_ns` | **D-0071.** pcap: client FIN − HTTP frame. Delivery bound. |
+| `guest_ftx_ns` | **D-0075.** pcap: guest's first wire TX − slirp's ARP request. Passive loss signature; same anchor as `w_ns`. |
+| `guest_arp_req_n` | **D-0075.** pcap: guest-sourced ARP requests. Bounds the loss window's length, and nothing else: 1 on a clean boot *and* on a loss event, so a column of 1s is **not** evidence that no events occurred. ≥ 2 means the window outlived one retransmit. |
 | `attempts` | client connect attempts until first-connect |
 | `pcap_path` | repo-relative filter-dump path |
 

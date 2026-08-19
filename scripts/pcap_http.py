@@ -36,6 +36,13 @@ SYN_IN_FILTER = (
 # frame not sourced from this address — ARP or the UDP announce.
 SLIRP_MAC = "52:55:0a:00:02:02"
 GUEST_TX_FILTER = f"eth.src != {SLIRP_MAC}"
+# D-0074 item 4 / D-0075: the passive loss signature. guest_ftx_ns is
+# the guest's first wire TX on the same anchor as W (slirp's ARP), so
+# it is a pcap-internal interval like the rest. guest_arp_req_n is the
+# falsifier for the one-shot-collision model: a solicit that never
+# reached the ring leaves exactly one request on the wire, so a second
+# request means the loss window outlived one retransmit.
+GUEST_ARP_REQ_FILTER = f"arp.opcode==1 && eth.src != {SLIRP_MAC}"
 SYN_GRID_LIMIT_S = 0.001
 HTTP_LEN = 92
 
@@ -182,12 +189,17 @@ def extract_pcap(pcap: Path, tshark: str) -> dict[str, int]:
         )
     if t_fin < t_http:
         raise PcapExtractError(f"TEST FAIL: client FIN before HTTP in {pcap}")
+    # Passive only: neither of these can fail a trial (D-0074 item 4).
+    ftx_rows = tshark_table(pcap, tshark, GUEST_TX_FILTER)
+    arp_req_rows = tshark_table(pcap, tshark, GUEST_ARP_REQ_FILTER)
     return {
         "w_ns": t_syn - t_arp,
         "d_ack_ns": t_ack - t_http,
         "d_fin_ns": t_fin - t_http,
         "synack_to_http_ns": t_http - t_syn,
         "http_len": int(http["tcp.len"]),
+        "guest_ftx_ns": (_time_ns(ftx_rows[0]) - t_arp) if ftx_rows else "",
+        "guest_arp_req_n": len(arp_req_rows),
     }
 
 

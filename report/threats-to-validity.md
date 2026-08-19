@@ -162,8 +162,10 @@ item is mitigated-and-measured or stated.
     first solicit never reached the TX ring, and the guest's own
     `neigh` retransmit re-sent it 1.03 s later — past slirp's ~1 s
     ARP-pending drop, which snapped the queued SYN to the ~6 s RTO.
-    Reproduced 1 in 50 on the bench host under D-0055 controls,
-    matching this trial's `/init` stamps to 0.22 ms.
+    Reproduced on the bench host under D-0055 controls, matching
+    this trial's `/init` stamps to 0.22 ms, and then measured at
+    **25 in 550 boots (4.55 %)** — a rate at which a 198-boot
+    campaign completes with probability ~0.
 
     **Correction to this item's earlier supporting evidence.** An
     earlier revision of this item offered the absence of any
@@ -171,12 +173,15 @@ item is mitigated-and-measured or stated.
     robustness. That claim is **withdrawn**, not weakened. It was
     an absence of *observation* under a detector that fires only
     when the delay crosses slirp's ~1 s drop and that runs only on
-    Linux trials (a), and it recorded nothing about the quantity
-    that governs the race: the margin between the guest's announce
-    and the last virtio ctrl-vq completion — ~12.4 ms on the
-    current `Image-trimmed`, 0.199 ms on the failing boot. That
-    margin was never measured on any earlier image and cannot be
-    recovered from the recorded artifacts. Those clean boots are
+    Linux trials (a), and it recorded nothing about the one
+    quantity that separated event boots from clean ones: the
+    margin between the guest's announce and the last virtio
+    ctrl-vq completion — ~12.4 ms on the current `Image-trimmed`,
+    ~0.2 ms on every event boot. That margin was never measured on
+    any earlier image and cannot be recovered from the recorded
+    artifacts. (It is a *marker*, not a cause: D-0076 restored it
+    to 12.348 ms with the fix in place and no event fired, so it
+    is not the coordinate the race lives in.) Those clean boots are
     equally consistent with the older images having had a larger
     margin, with sub-cliff instances passing unremarked, and with
     luck; the evidence does not distinguish them. What is measured
@@ -226,3 +231,37 @@ item is mitigated-and-measured or stated.
     this visibility to ≥ 10 ms tick grain (D-0056.3's finding-13
     corollary already constrains such a rung); the protection is
     contingent, not guaranteed.
+
+20. **T4.8b's Linux `/init` is not T4.8's, and the change costs the
+    baseline 2.87 ms.** D-0074 found that the guest's first ARP
+    solicit is lost inside the guest on ~4.5 % of boots (25/550),
+    healing on the `neigh` retransmit ~1.03 s later — past slirp's
+    ARP-pending drop, which snaps the queued hostfwd SYN onto a
+    ~6 s RTO and destroys the trial. D-0075 shortens that
+    retransmit from 1 s to 50 ms with one `RTM_SETNEIGHTBL` before
+    the announce. Three consequences for these numbers, in
+    decreasing order of how much they should worry a reader.
+    (a) **The added call sits on the measured path and inflates
+    Linux, i.e. it biases toward Whimbrel.** It is measured, not
+    assumed: the `T_NEIGH` stamp puts it at **2.87 ms**
+    (2.826–2.895 ms), ~1.5 % of the 188 ms cross-system delta, and
+    every trial records it. An earlier estimate of
+    "sub-millisecond" was wrong by 3×, which is why the stamp
+    exists. It is applied identically to stock and trimmed, so the
+    trim comparison is unaffected.
+    (b) **The heal path it installs was never exercised.** Across
+    6200 boots in three configurations the event did not recur
+    once (D-0076), so the shortened retransmit never fired: the
+    timer-wheel arithmetic behind the 50 ms constant is read out of
+    the 6.18.7 source and has never been observed. The change is
+    justified by source reading and by the absence of events, not
+    by a measured heal. If an event does occur in a campaign it
+    should cost ~+52 ms, and `guest_ftx_ns` / `guest_arp_req_n`
+    record it per trial rather than losing it (D-0075).
+    (c) **Why the events stopped is not established.** Two
+    explanations survive every arm run: the call takes `rtnl_lock`
+    and serialises against the netdev machinery, or the announce
+    simply happens ≥ 2.7 ms later in absolute terms. No instrument
+    separates them, so neither is claimed. The margin — the
+    quantity D-0074 first offered as a predictor — is ruled out as
+    the coordinate the race lives in (D-0076).
