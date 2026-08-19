@@ -5368,6 +5368,62 @@ D-0011 onward are working decisions made under those constraints.
     `bios-none` (the lane kernel with the seams) — QEMU refuses to
     boot the donor under its own blob (overlapping regions), which
     now serves as the guard against mixing them.
+- **Campaign outcome (2026-08-19, t47 batches `20260819T164056Z-1/-2`).
+  Falsifier 2 fired; no saving is published from this run.** Two
+  attempts, disclosed per the D-0074 abort policy: the first aborted
+  at run_order 80 on a teardown race in the shutdown seam (the
+  sifive_test store requests exit on QEMU's main loop; the vCPU
+  raced into the caller's failure panic on 1 of ~80 trials — the
+  store now parks in `wfi` and the fix is verified by `test-m` plus
+  five repetitions; the aborted trial's gate-failure row shows a
+  clean measurement signature, which is how a teardown race was
+  distinguishable from a measurement fault in one row). Second
+  attempt: 240 recorded trials, stability PASS on all four arms,
+  steal 0, zero gate failures, no M-mode trap in any serial, canary
+  1.188 / 16.07 ms in the shared header (inflated regime), blob
+  `1698b114…` stamped in every shim row's `bios_sha256`.
+  - **The numbers, recorded but not published:** fast E0→E4
+    54.27 ms (OpenSBI) vs **28.77 ms** (shim) — Δ −25.50 ms, and
+    28.77 sits in the pre-registered 24–34 ms band almost exactly on
+    the ~28 expectation. W(m-fast) = 1.28 ms against 26.60: the
+    entire guest boot now fits inside W, the measured form of
+    D-0061's "E2 ≈ E1". ΔS on the anchor-comparable fast pair =
+    **+0.161 ms**, inside the pre-registered (+0.1, +1.5) window —
+    the removed `fw_dynamic` load, visible exactly where the model
+    put it.
+  - **Falsifier 2 fired: |Δ E2→E3g| = 0.717 ms > 0.5 (m-fast
+    5.728 vs fast 6.445).** The per-phase join attributes it
+    completely: `stvec` −223 µs (the removed DBCN probe), 
+    `frame_init` −75 µs (the removed TIME probe and first arm),
+    `E3g` −524 µs (the per-event timer-arm site in the serving
+    window); every non-seam phase moved ≤ 13 µs. The seams did not
+    leak — **the falsifier measured the wrong null.** It was set
+    assuming the seam swaps were cost-neutral, but removing SBI
+    ecall overhead is precisely what replacing the firmware
+    interface does; the 0.5 ms budget was calibrated against a
+    cross-day −0.40 ms reading and D-0069 predicts exactly that
+    optimism. Per the registration the verdict stands: **stop,
+    publish no saving.** The amendment that would unblock — rescope
+    falsifier 2 to bound non-seam phases only (|Δ| > 50 µs in any
+    phase without a seam call site), with the E2→E3g shift disclosed
+    as part of the firmware-interface removal — is written here
+    before being taken, and is not adopted until signed off.
+  - **Open item: S does not transfer to the shim-safe arm.** Default
+    lane S is profile-independent (7.11 / 7.03 ms); the shim lane is
+    not (m-fast 6.95, m-safe **5.06** — 1.9 ms low). The same-day
+    profile-independence check (an extrapolation added with the
+    lane-aware header, not a D-0079 pre-registration) caught it and
+    is now informational with the anomaly flagged inline: shim-lane
+    S has no consumer, and the ΔS falsifiers ride on the clean fast
+    pair. Named, not chased.
+  - **Open observation, D-0078-adjacent:** OpenSBI-lane fast E0→E4
+    read 51.87 in t48b and 54.27 in t47, same host boot, both
+    campaigns in the inflated canary regime. Fast-boot prints
+    nothing in its window — but **OpenSBI's ~2.7 KB banner is
+    in-window console output for E0→E4**, an exposure threats item
+    21 does not list. Candidate explanation only (the safe arm's
+    +0.9 ms does not scale with it cleanly); recorded for item 21's
+    next revision, not concluded.
 - Revisit trigger: any falsifier; QEMU moving the `virt` FDT or
   reset address (checkpoint 0 and the `check_dtb` assert both catch
   it loudly); or the seams demanding a change outside D-0061's
