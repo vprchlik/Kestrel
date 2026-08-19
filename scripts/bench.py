@@ -759,6 +759,41 @@ def require_first_connect_control(runs: list[dict]) -> None:
                     )
 
 
+# D-0078 act-on: one release-default boot before trial 1 of any
+# campaign. Its stvec / page_verify deltas are that day's serial-byte
+# cost made visible in the batch header — the safe profile prints
+# ~13.1 KB inside its measured window, so those two deltas move ~14 %
+# / ~36 % between serial-cost regimes while fast-boot moves 0. The
+# canary is not a trial: it never enters runs.csv.
+CANARY_PHASES = ("stvec", "page_verify")
+
+
+def canary_values(phases: list[dict]) -> dict:
+    """Fail-closed: a canary without its PHASE deltas aborts the campaign."""
+    by = {p["phase"]: int(p["delta_ns"]) for p in phases}
+    missing = [n for n in CANARY_PHASES if n not in by]
+    if missing:
+        raise BenchFail(
+            f"TEST FAIL: canary boot produced no PHASE dump for {missing} "
+            "(D-0078; refusing to start a campaign without the day's "
+            "serial-cost measurement)"
+        )
+    return {f"canary_{n}_ns": by[n] for n in CANARY_PHASES}
+
+
+def canary_header_lines(canary: dict | None) -> list[str]:
+    if not canary:
+        return []
+    return [
+        f"canary_stvec_ns={canary['canary_stvec_ns']} "
+        f"canary_page_verify_ns={canary['canary_page_verify_ns']} "
+        "(D-0078: one release-default boot before trial 1; that day's "
+        "serial-byte regime. T4.8 regime ~1.03/11.9 ms, T4.8b ~1.17/16.2 "
+        "ms. Safe-profile numbers compare across campaigns only when "
+        "these agree.)"
+    ]
+
+
 def s_trial_ns(row: dict) -> int:
     """S = (E4 − first_connect) − pcap(ARP → FIN). Not a CSV column."""
     syn = row.get("synack_to_http_ns", "")
@@ -1377,6 +1412,46 @@ def cmd_run(args: argparse.Namespace) -> int:
             continue
         raise BenchFail(f"TEST FAIL: unknown system {arm.system}")
 
+    # D-0078: canary boot. Reuse the campaign's release-default kernel
+    # when the arm exists (whimbrel / t48); build it otherwise (fp-ab).
+    if SAFE_CONFIG in kernels:
+        canary_kernel, _h, canary_arm = kernels[SAFE_CONFIG]
+    else:
+        canary_kernel = kdir / SAFE_CONFIG
+        shutil.copy2(cargo_build([]), canary_kernel)
+        canary_arm = Arm(config=SAFE_CONFIG, system="whimbrel")
+    canary_dir = out_dir / "trials" / f"{stamp}-canary" / SAFE_CONFIG / "01"
+    canary_dir.mkdir(parents=True, exist_ok=True)
+    print("bench: canary boot (D-0078, release-default, not a trial)", flush=True)
+    try:
+        canary_result = run_trial(
+            arm=canary_arm,
+            extra=guest_qemu_extra(canary_arm, canary_kernel, None, None),
+            pcap=canary_dir / "qemu.pcap",
+            serial_path=canary_dir / "serial.log",
+            client_out=canary_dir / "client.json",
+            ready_path=canary_dir / "client.ready",
+            qemu_cpu=qemu_cpu,
+            client_cpu=client_cpu,
+            port=port,
+            client_timeout_s=client_timeout_s,
+            qemu_wait_s=qemu_timeout_s("whimbrel", client_timeout_s),
+        )
+    except BenchFail as e:
+        record_gate_failure(
+            batch_id=f"{stamp}-canary", trial=1, is_warmup=1,
+            system="whimbrel", config=SAFE_CONFIG, run_order=0,
+            pcap=canary_dir / "qemu.pcap", gate=str(e),
+        )
+        raise
+    canary = canary_values(canary_result["phases"])
+    print(
+        f"bench: canary stvec={canary['canary_stvec_ns'] / 1e6:.3f} ms "
+        f"page_verify={canary['canary_page_verify_ns'] / 1e6:.3f} ms "
+        "(D-0078 serial-byte regime)",
+        flush=True,
+    )
+
     shuffle_seed = getattr(args, "shuffle_seed", None)
     if shuffle_seed is None:
         env_seed = os.environ.get("BENCH_SHUFFLE_SEED")
@@ -1528,6 +1603,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             phases=phase_rows,
             client_timeout_s=client_timeout_s,
             linux_meta=linux_meta,
+            canary=canary,
         )
     )
     if args.kind == "fp-ab" and rc == 0:
@@ -1666,6 +1742,7 @@ def cmd_summarize(args: argparse.Namespace) -> int:
     if schema == "new":
         require_first_connect_control(runs)
         lines.extend(s_header_lines(runs))
+    lines.extend(canary_header_lines(getattr(args, "canary", None)))
     lines.extend(
         linux_header_lines(
             client_timeout_s=getattr(args, "client_timeout_s", None),
@@ -2748,6 +2825,27 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
     fired.append(
         "arp signature: planted +52 ms event found, jitter ignored"
     )
+
+    # D-0078: the canary must fail closed without its PHASE deltas and
+    # must render the header line from a complete measurement.
+    good = [{"phase": "stvec", "delta_ns": 1_030_000},
+            {"phase": "page_verify", "delta_ns": 11_900_000}]
+    c = canary_values(good)
+    if c != {"canary_stvec_ns": 1_030_000, "canary_page_verify_ns": 11_900_000}:
+        raise BenchFail(f"TEST FAIL: canary_values wrong: {c}")
+    hdr = canary_header_lines(c)
+    if len(hdr) != 1 or "canary_stvec_ns=1030000" not in hdr[0]             or "canary_page_verify_ns=11900000" not in hdr[0]:
+        raise BenchFail(f"TEST FAIL: canary header line wrong: {hdr}")
+    if canary_header_lines(None) != []:
+        raise BenchFail("TEST FAIL: absent canary must add no header line")
+    try:
+        canary_values([{"phase": "stvec", "delta_ns": 1}])
+        raise BenchFail("canary without page_verify did not fire")
+    except BenchFail as e:
+        if "canary boot produced no PHASE dump" not in str(e):
+            raise
+        fired.append(f"canary fail-closed: {e}")
+    fired.append("canary header line renders from a complete measurement")
 
     print("TEST PASS: bench fail-closed selftest")
     for line in fired:

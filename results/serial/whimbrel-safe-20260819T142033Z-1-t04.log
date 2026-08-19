@@ -1,0 +1,303 @@
+
+OpenSBI v1.8
+   ____                    _____ ____ _____
+  / __ \                  / ____|  _ \_   _|
+ | |  | |_ __   ___ _ __ | (___ | |_) || |
+ | |  | | '_ \ / _ \ '_ \ \___ \|  _ < | |
+ | |__| | |_) |  __/ | | |____) | |_) || |_
+  \____/| .__/ \___|_| |_|_____/|____/_____|
+        | |
+        |_|
+
+Platform Name               : riscv-virtio,qemu
+Platform Features           : medeleg
+Platform HART Count         : 1
+Platform HART Protection    : pmp
+Platform IPI Device         : aclint-mswi
+Platform Timer Device       : aclint-mtimer @ 10000000Hz
+Platform Console Device     : uart8250
+Platform HSM Device         : ---
+Platform PMU Device         : ---
+Platform Reboot Device      : syscon-reboot
+Platform Shutdown Device    : syscon-poweroff
+Platform Suspend Device     : ---
+Platform CPPC Device        : ---
+Firmware Base               : 0x80000000
+Firmware Size               : 321 KB
+Firmware RW Offset          : 0x40000
+Firmware RW Size            : 65 KB
+Firmware Heap Offset        : 0x47000
+Firmware Heap Size          : 37 KB (total), 0 KB (reserved), 12 KB (used), 23 KB (free)
+Firmware Scratch Size       : 4096 B (total), 1464 B (used), 2632 B (free)
+Runtime SBI Version         : 3.0
+Standard SBI Extensions     : ipi,pmu,srst,sse,hsm,rfnc,fwft,time,base,legacy,dbcn,dbtr
+Experimental SBI Extensions : none
+
+Domain0 Name                : root
+Domain0 Boot HART           : 0
+Domain0 HARTs               : 0*
+Domain0 Region00            : 0x0000000080040000-0x000000008005ffff M: (F,R,W) S/U: ()
+Domain0 Region01            : 0x0000000080000000-0x000000008003ffff M: (F,R,X) S/U: ()
+Domain0 Region02            : 0x0000000000100000-0x0000000000100fff M: (I,R,W) S/U: (R,W)
+Domain0 Region03            : 0x0000000010000000-0x0000000010000fff M: (I,R,W) S/U: (R,W)
+Domain0 Region04            : 0x0000000002000000-0x000000000200ffff M: (I,R,W) S/U: ()
+Domain0 Region05            : 0x000000000c400000-0x000000000c5fffff M: (I,R,W) S/U: (R,W)
+Domain0 Region06            : 0x000000000c000000-0x000000000c3fffff M: (I,R,W) S/U: (R,W)
+Domain0 Region07            : 0x0000000000000000-0xffffffffffffffff M: () S/U: (R,W,X)
+Domain0 Next Address        : 0x0000000080200000
+Domain0 Next Arg1           : 0x0000000087e00000
+Domain0 Next Mode           : S-mode
+Domain0 SysReset            : yes
+Domain0 SysSuspend          : yes
+
+Boot HART ID                : 0
+Boot HART Domain            : root
+Boot HART Priv Version      : v1.12
+Boot HART Base ISA          : rv64imafdch
+Boot HART ISA Extensions    : sstc,zicntr,zihpm,zicboz,zicbom,sdtrig,svadu
+Boot HART PMP Count         : 16
+Boot HART PMP Granularity   : 2 bits
+Boot HART PMP Address Bits  : 54
+Boot HART MHPM Info         : 16 (0x0007fff8)
+Boot HART Debug Triggers    : 2 triggers
+Boot HART MIDELEG           : 0x0000000000001666
+Boot HART MEDELEG           : 0x0000000000f4b509
+whimbrel: hello from hart 0, dtb at 0x87e00000
+sstatus 0x8000000200006000
+sie 0x0
+stvec 0x80200000
+sscratch 0x0
+satp 0x0
+CSR OK
+sscratch 0x0
+trap scause=3 (breakpoint) sepc=0x80208eb8 stval=0x80208eb8 sp=0x80239c10
+TRAP OK
+tick 1
+tick 2
+tick 3
+frames 31852 heap_start=0x80294000 heap_end=0x80394000 ram_end=0x88000000
+FRAME OK
+tasks 4 reserve=88KiB each utext=0x8023a000..0x8023b000 tasks=0x8023c000..0x80294000
+fabricated sstatus 0x200000020 (SPIE=1 SPP=U SIE=0 FS=Off UXL=64)
+task 0 Exited frame=0x80251ef0 sepc=0x0 kstack_top=0x80252000 ustack_top=0x8023f000 brk=0x8023f000..0x8024f000 (at 0x8023f000) exit=0
+task 1 Exited frame=0x80267ef0 sepc=0x0 kstack_top=0x80268000 ustack_top=0x80255000 brk=0x80255000..0x80265000 (at 0x80255000) exit=0
+task 2 Exited frame=0x8027def0 sepc=0x0 kstack_top=0x8027e000 ustack_top=0x8026b000 brk=0x8026b000..0x8027b000 (at 0x8026b000) exit=0
+task 3 Ready frame=0x80293ef0 sepc=0x8023a00c kstack_top=0x80294000 ustack_top=0x80281000 brk=0x80281000..0x80291000 (at 0x80281000) exit=0
+root_pa=0x80396000 tables=5 satp_would_write=0x8000000000080396 (MODE=8 << 60 | PPN=0x80396, not written)
+va               pa              flags            lvl
+kernel entry     0x0080200000 -> 0x0080200000  V R   X U=0 A D  L0  ok
+.text            0x0080211fff -> 0x0080211fff  V R   X U=0 A D  L0  ok
+.rodata          0x0080212000 -> 0x0080212000  V R     U=0 A D  L0  ok
+.data/.bss       0x0080218000 -> 0x0080218000  V R W   U=0 A D  L0  ok
+stack            0x0080239ff0 -> 0x0080239ff0  V R W   U=0 A D  L0  ok
+heap             0x0080294000 -> 0x0080294000  V R W   U=0 A D  L0  ok
+free frames      0x0080394000 -> 0x0080394000  V R W   U=0 A D  L0  ok
+first 2M         0x0080400000 -> 0x0080400000  V R W   U=0 A D  L1  ok
+last RAM         0x0087fff000 -> 0x0087fff000  V R W   U=0 A D  L1  ok
+page table       0x0080396000 -> 0x0080396000  V R W   U=0 A D  L0  ok
+guard            0x0080229000    unmapped            V=0 at L0 pte=0x0  ok
+OpenSBI          0x0080000000    unmapped            V=0 at L1 pte=0x0  ok
+above RAM        0x0090000000    unmapped            V=0 at L1 pte=0x0  ok
+UART MMIO        0x0010000000    unmapped            V=0 at L0 pte=0x0  ok
+virtio lo        0x0010001000 -> 0x0010001000  V R W   U=0 A D  L0  ok
+virtio hi        0x0010008fff -> 0x0010008fff  V R W   U=0 A D  L0  ok
+.udata           empty               0x008023c000..0x008023c000  0 pages  ok
+.ubss            empty               0x008023c000..0x008023c000  0 pages  ok
+.utext lo        0x008023a000 -> 0x008023a000  V R   X U=1 A D  L0  ok
+.utext hi        0x008023afff -> 0x008023afff  V R   X U=1 A D  L0  ok
+.urodata lo      0x008023b000 -> 0x008023b000  V R     U=1 A D  L0  ok
+.urodata hi      0x008023bfff -> 0x008023bfff  V R     U=1 A D  L0  ok
+uguard0          0x008023c000    unmapped            V=0 at L0 pte=0x0  ok
+ustack0 lo       0x008023d000 -> 0x008023d000  V R W   U=1 A D  L0  ok
+ustack0 hi       0x008023efff -> 0x008023efff  V R W   U=1 A D  L0  ok
+ubrk0 lo         0x008023f000 -> 0x008023f000  V R W   U=1 A D  L0  ok
+ubrk0 hi         0x008024efff -> 0x008024efff  V R W   U=1 A D  L0  ok
+kguard0          0x008024f000    unmapped            V=0 at L0 pte=0x0  ok
+kstack0 lo       0x0080250000 -> 0x0080250000  V R W   U=0 A D  L0  ok
+kstack0 hi       0x0080251fff -> 0x0080251fff  V R W   U=0 A D  L0  ok
+uguard1          0x0080252000    unmapped            V=0 at L0 pte=0x0  ok
+ustack1 lo       0x0080253000 -> 0x0080253000  V R W   U=1 A D  L0  ok
+ustack1 hi       0x0080254fff -> 0x0080254fff  V R W   U=1 A D  L0  ok
+ubrk1 lo         0x0080255000 -> 0x0080255000  V R W   U=1 A D  L0  ok
+ubrk1 hi         0x0080264fff -> 0x0080264fff  V R W   U=1 A D  L0  ok
+kguard1          0x0080265000    unmapped            V=0 at L0 pte=0x0  ok
+kstack1 lo       0x0080266000 -> 0x0080266000  V R W   U=0 A D  L0  ok
+kstack1 hi       0x0080267fff -> 0x0080267fff  V R W   U=0 A D  L0  ok
+uguard2          0x0080268000    unmapped            V=0 at L0 pte=0x0  ok
+ustack2 lo       0x0080269000 -> 0x0080269000  V R W   U=1 A D  L0  ok
+ustack2 hi       0x008026afff -> 0x008026afff  V R W   U=1 A D  L0  ok
+ubrk2 lo         0x008026b000 -> 0x008026b000  V R W   U=1 A D  L0  ok
+ubrk2 hi         0x008027afff -> 0x008027afff  V R W   U=1 A D  L0  ok
+kguard2          0x008027b000    unmapped            V=0 at L0 pte=0x0  ok
+kstack2 lo       0x008027c000 -> 0x008027c000  V R W   U=0 A D  L0  ok
+kstack2 hi       0x008027dfff -> 0x008027dfff  V R W   U=0 A D  L0  ok
+uguard3          0x008027e000    unmapped            V=0 at L0 pte=0x0  ok
+ustack3 lo       0x008027f000 -> 0x008027f000  V R W   U=1 A D  L0  ok
+ustack3 hi       0x0080280fff -> 0x0080280fff  V R W   U=1 A D  L0  ok
+ubrk3 lo         0x0080281000 -> 0x0080281000  V R W   U=1 A D  L0  ok
+ubrk3 hi         0x0080290fff -> 0x0080290fff  V R W   U=1 A D  L0  ok
+kguard3          0x0080291000    unmapped            V=0 at L0 pte=0x0  ok
+kstack3 lo       0x0080292000 -> 0x0080292000  V R W   U=0 A D  L0  ok
+kstack3 hi       0x0080293fff -> 0x0080293fff  V R W   U=0 A D  L0  ok
+PAGETABLE OK
+PAGING OK
+virtio-mmio 0 0x10001000 magic=0x74726976 version=2 device=0 (empty)
+virtio-mmio 1 0x10002000 magic=0x74726976 version=2 device=0 (empty)
+virtio-mmio 2 0x10003000 magic=0x74726976 version=2 device=0 (empty)
+virtio-mmio 3 0x10004000 magic=0x74726976 version=2 device=0 (empty)
+virtio-mmio 4 0x10005000 magic=0x74726976 version=2 device=0 (empty)
+virtio-mmio 5 0x10006000 magic=0x74726976 version=2 device=0 (empty)
+virtio-mmio 6 0x10007000 magic=0x74726976 version=2 device=0 (empty)
+virtio-mmio 7 0x10008000 magic=0x74726976 version=2 device=1 (net)
+virtio-mmio: net at slot 7
+virtq: pool 0x8021b000..0x80228000 (53248 bytes) bss_end=0x80229000 guard=0x8022a000 heap_start=0x80294000
+virtq: q0 QueueDesc write 0x8021b000 lo=0x8021b000 hi=0x0 @0x80
+virtq: q0 QueueDriver write 0x8021b100 lo=0x8021b100 hi=0x0 @0x90
+virtq: q0 QueueDevice write 0x8021b124 lo=0x8021b124 hi=0x0 @0xa0
+virtq: q1 QueueDesc write 0x8021b1b0 lo=0x8021b1b0 hi=0x0 @0x80
+virtq: q1 QueueDriver write 0x8021b2b0 lo=0x8021b2b0 hi=0x0 @0x90
+virtq: q1 QueueDevice write 0x8021b2d4 lo=0x8021b2d4 hi=0x0 @0xa0
+virtq: q0 QueueDesc read  lo=0x0 hi=0x0 (want lo=0x8021b000 hi=0x0)
+virtq: q0 QueueDesc low @0x80 wrote=0x8021b000 read=0 (write-only MMIO, not a match)
+virtq: q0 QueueDriver read  lo=0x0 hi=0x0 (want lo=0x8021b100 hi=0x0)
+virtq: q0 QueueDriver low @0x90 wrote=0x8021b100 read=0 (write-only MMIO, not a match)
+virtq: q0 QueueDevice read  lo=0x0 hi=0x0 (want lo=0x8021b124 hi=0x0)
+virtq: q0 QueueDevice low @0xa0 wrote=0x8021b124 read=0 (write-only MMIO, not a match)
+virtq: q1 QueueDesc read  lo=0x0 hi=0x0 (want lo=0x8021b1b0 hi=0x0)
+virtq: q1 QueueDesc low @0x80 wrote=0x8021b1b0 read=0 (write-only MMIO, not a match)
+virtq: q1 QueueDriver read  lo=0x0 hi=0x0 (want lo=0x8021b2b0 hi=0x0)
+virtq: q1 QueueDriver low @0x90 wrote=0x8021b2b0 read=0 (write-only MMIO, not a match)
+virtq: q1 QueueDevice read  lo=0x0 hi=0x0 (want lo=0x8021b2d4 hi=0x0)
+virtq: q1 QueueDevice low @0xa0 wrote=0x8021b2d4 read=0 (write-only MMIO, not a match)
+VIRTQ OK
+virtio-net: reset status=0
+virtio-net: ACKNOWLEDGE status=0x1
+virtio-net: DRIVER status=0x3
+virtio-net: device features word0=0x30bf8024 word1=0x101
+virtio-net: offered MAC=true MRG_RXBUF=true STATUS=true EVENT_IDX=true VERSION_1=true
+virtio-net: driver features word0=0x20 word1=0x1 (MAC|VERSION_1 only); declining word0=0x30bf8004 word1=0x100
+virtio-net: FEATURES_OK status=0xb
+virtq: q0 QueueNum=16 (max=1024)
+virtq: q1 QueueNum=16 (max=1024)
+virtq: q0 QueueDesc write 0x8021b000 lo=0x8021b000 hi=0x0 @0x80
+virtq: q0 QueueDriver write 0x8021b100 lo=0x8021b100 hi=0x0 @0x90
+virtq: q0 QueueDevice write 0x8021b124 lo=0x8021b124 hi=0x0 @0xa0
+virtq: q1 QueueDesc write 0x8021b1b0 lo=0x8021b1b0 hi=0x0 @0x80
+virtq: q1 QueueDriver write 0x8021b2b0 lo=0x8021b2b0 hi=0x0 @0x90
+virtq: q1 QueueDevice write 0x8021b2d4 lo=0x8021b2d4 hi=0x0 @0xa0
+virtq: q0 QueueDesc read  lo=0x0 hi=0x0 (want lo=0x8021b000 hi=0x0)
+virtq: q0 QueueDesc low @0x80 wrote=0x8021b000 read=0 (write-only MMIO, not a match)
+virtq: q0 QueueDriver read  lo=0x0 hi=0x0 (want lo=0x8021b100 hi=0x0)
+virtq: q0 QueueDriver low @0x90 wrote=0x8021b100 read=0 (write-only MMIO, not a match)
+virtq: q0 QueueDevice read  lo=0x0 hi=0x0 (want lo=0x8021b124 hi=0x0)
+virtq: q0 QueueDevice low @0xa0 wrote=0x8021b124 read=0 (write-only MMIO, not a match)
+virtq: q1 QueueDesc read  lo=0x0 hi=0x0 (want lo=0x8021b1b0 hi=0x0)
+virtq: q1 QueueDesc low @0x80 wrote=0x8021b1b0 read=0 (write-only MMIO, not a match)
+virtq: q1 QueueDriver read  lo=0x0 hi=0x0 (want lo=0x8021b2b0 hi=0x0)
+virtq: q1 QueueDriver low @0x90 wrote=0x8021b2b0 read=0 (write-only MMIO, not a match)
+virtq: q1 QueueDevice read  lo=0x0 hi=0x0 (want lo=0x8021b2d4 hi=0x0)
+virtq: q1 QueueDevice low @0xa0 wrote=0x8021b2d4 read=0 (write-only MMIO, not a match)
+virtq: verify after FEATURES_OK (QueueReady still 0)
+virtio-net: QueueReady=1 (device owns the rings)
+virtio-net: posted 16 RX buffers avail.idx=16
+virtio-net: DRIVER_OK status=0xf
+DRIVER_OK
+virtio-net: mac 52:54:00:12:34:56
+ARP CACHE WRAP OK
+CHECKSUM OK
+ICMP REPLY BUILD OK
+UDP ECHO BUILD OK
+TCP SYN/ACK BUILD OK
+TCP LISTEN
+net: dump status=0xf isr=0x0 rx avail=16 used=0 posted=16 completed=0 tx avail=0 used=0 posted=0 completed=0 drop_short=0 drop_other=0 arp_drop short=0 htype=0 ptype=0 hlen=0 plen=0 op=0 tpa=0 ip_drop short=0 ver=0 ihl=0 csum=0 frag=0 dst=0 proto=0 icmp_drop short=0 csum=0 type=0 udp_drop short=0 len=0 csum=0 port=0 tcp_drop short=0 doff=0 csum=0 opt=0 port=0 noarp=0 busy=0 unexpected=0 established=0 rexmit=0
+virtio-net: TX ARP request for 10.0.2.2
+virtio-net: TX ARP request completed=1 id=0 len=0
+virtio-net: RX arp used.len=76 hdr=12 frame.len=64
+  52 54 00 12 34 56 52 55  0a 00 02 02 08 06 00 01 
+  08 00 06 04 00 02 52 55  0a 00 02 02 0a 00 02 02 
+  52 54 00 12 34 56 0a 00  02 0f 00 00 00 00 00 00 
+  00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00 
+arp: reply spa=10.0.2.2
+tcp: SYN_RCVD sport=39388 their_isn=1 mss=1460 our_isn=1024004
+virtio-net: TX TCP SYN/ACK seq=1024004 ack=2 dport=39388
+virtio-net: TX TCP SYN/ACK completed=2 id=0 len=0
+TCP ESTABLISHED
+virtio-net: TX TCP seg seq=1024005 ack=37 flags=0x10 dlen=0
+virtio-net: TX TCP seg completed=3 id=0 len=0
+virtio-net: gateway 10.0.2.2 MAC learned
+net: dump status=0xf isr=0x1 rx avail=20 used=4 posted=20 completed=4 tx avail=3 used=3 posted=3 completed=3 drop_short=0 drop_other=0 arp_drop short=0 htype=0 ptype=0 hlen=0 plen=0 op=0 tpa=0 ip_drop short=0 ver=0 ihl=0 csum=0 frag=0 dst=0 proto=0 icmp_drop short=0 csum=0 type=0 udp_drop short=0 len=0 csum=0 port=0 tcp_drop short=0 doff=0 csum=0 opt=0 port=0 noarp=0 busy=0 unexpected=0 established=1 rexmit=0
+virtio-net: GARP 42 bytes (padded to 60):
+  ff ff ff ff ff ff 52 54  00 12 34 56 08 06 00 01 
+  08 00 06 04 00 01 52 54  00 12 34 56 0a 00 02 0f 
+  00 00 00 00 00 00 0a 00  02 0f 
+virtio-net: TX GARP posted=1 len=72 (hdr 12 + eth 60)
+virtio-net: TX GARP completed=4 id=0 len=0
+net: dump status=0xf isr=0x1 rx avail=20 used=4 posted=20 completed=4 tx avail=4 used=4 posted=4 completed=4 drop_short=0 drop_other=0 arp_drop short=0 htype=0 ptype=0 hlen=0 plen=0 op=0 tpa=0 ip_drop short=0 ver=0 ihl=0 csum=0 frag=0 dst=0 proto=0 icmp_drop short=0 csum=0 type=0 udp_drop short=0 len=0 csum=0 port=0 tcp_drop short=0 doff=0 csum=0 opt=0 port=0 noarp=0 busy=0 unexpected=0 established=1 rexmit=0
+virtio-net: TX ICMP echo id=1 seq=1 to 10.0.2.2
+virtio-net: TX ICMP echo completed=5 id=0 len=0
+virtio-net: RX icmp echo-reply id=1 seq=1
+PING RTT dst=10.0.2.2 id=1 seq=1 tx=1088821 rx=1093878 ticks=5057 ns=505700
+net: dump status=0xf isr=0x1 rx avail=21 used=5 posted=21 completed=5 tx avail=5 used=5 posted=5 completed=5 drop_short=0 drop_other=0 arp_drop short=0 htype=0 ptype=0 hlen=0 plen=0 op=0 tpa=0 ip_drop short=0 ver=0 ihl=0 csum=0 frag=0 dst=0 proto=0 icmp_drop short=0 csum=0 type=0 udp_drop short=0 len=0 csum=0 port=0 tcp_drop short=0 doff=0 csum=0 opt=0 port=0 noarp=0 busy=0 unexpected=0 established=1 rexmit=0
+heap init:
+  free[0] pa=0x80294000 size=1048576
+  blocks=1 bytes=1048576
+vec len=10000 cap=16384
+heap after vec:
+  free[0] pa=0x80294018 size=65712
+  free[1] pa=0x802b40d8 size=917288
+  blocks=2 bytes=983000
+align64 user=0x80294040
+heap after align64:
+  free[0] pa=0x80294018 size=24
+  free[1] pa=0x80294080 size=65608
+  free[2] pa=0x802b40d8 size=917288
+  blocks=3 bytes=982920
+heap after drop+realloc:
+  free[0] pa=0x80294018 size=1048552
+  blocks=1 bytes=1048552
+HEAP OK
+M1 FUNDAMENTALS OK
+frames consumed: tables=5 selftest=2 held=7
+frames frozen: free=31845
+enter task 3 sepc=0x8023a00c frame=0x80293ef0 kstack_top=0x80294000
+USER OK
+SYSCALL OK
+HTTP READY
+tcp: FIN_WAIT_1
+tcp: TX FIN seq=1024097 snd_nxt 1024005 -> 1024098 ack=37 (FIN consumes 1)
+virtio-net: TX TCP seg seq=1024005 ack=37 flags=0x19 dlen=92
+virtio-net: TX TCP seg completed=6 id=0 len=0
+PHASE ticks (10 MHz, 100 ns/tick); ns = ticks * 100
+PHASE _start ticks=258752 ns=25875200 since_start=0 ns=0 delta=0 ns=0
+PHASE stamp_a ticks=259272 ns=25927200 since_start=520 ns=52000 delta=520 ns=52000
+PHASE stamp_b ticks=259326 ns=25932600 since_start=574 ns=57400 delta=54 ns=5400
+PHASE stvec ticks=271087 ns=27108700 since_start=12335 ns=1233500 delta=11761 ns=1176100
+PHASE frame_init ticks=575142 ns=57514200 since_start=316390 ns=31639000 delta=304055 ns=30405500
+PHASE task_init ticks=616961 ns=61696100 since_start=358209 ns=35820900 delta=41819 ns=4181900
+PHASE page_build ticks=625145 ns=62514500 since_start=366393 ns=36639300 delta=8184 ns=818400
+PHASE page_verify ticks=788804 ns=78880400 since_start=530052 ns=53005200 delta=163659 ns=16365900
+PHASE activate ticks=791956 ns=79195600 since_start=533204 ns=53320400 delta=3152 ns=315200
+PHASE virtq_init ticks=884289 ns=88428900 since_start=625537 ns=62553700 delta=92333 ns=9233300
+PHASE DRIVER_OK ticks=967967 ns=96796700 since_start=709215 ns=70921500 delta=83678 ns=8367800
+PHASE first_rx ticks=1008575 ns=100857500 since_start=749823 ns=74982300 delta=40608 ns=4060800
+PHASE syn_rx ticks=1023977 ns=102397700 since_start=765225 ns=76522500 delta=15402 ns=1540200
+PHASE established ticks=1033785 ns=103378500 since_start=775033 ns=77503300 delta=9808 ns=980800
+PHASE serving_ready ticks=1044494 ns=104449400 since_start=785742 ns=78574200 delta=10709 ns=1070900
+PHASE net_init_done ticks=1114983 ns=111498300 since_start=856231 ns=85623100 delta=70489 ns=7048900
+PHASE heap_init ticks=1115203 ns=111520300 since_start=856451 ns=85645100 delta=220 ns=22000
+PHASE accounting ticks=1142142 ns=114214200 since_start=883390 ns=88339000 delta=26939 ns=2693900
+PHASE freeze ticks=1143439 ns=114343900 since_start=884687 ns=88468700 delta=1297 ns=129700
+PHASE sret ticks=1146388 ns=114638800 since_start=887636 ns=88763600 delta=2949 ns=294900
+PHASE E3g ticks=1166868 ns=116686800 since_start=908116 ns=90811600 delta=20480 ns=2048000
+PHASE E3g_doorbell ticks=1171325 ns=117132500 since_start=912573 ns=91257300 delta=4457 ns=445700
+M3 UNIKERNEL OK
+tcp: FIN_WAIT_2
+tcp: RX FIN seq=37 rcv_nxt 37 -> 38 (FIN consumes 1)
+TCP TIME_WAIT (truncated) → LISTEN
+virtio-net: TX TCP seg seq=1024098 ack=38 flags=0x10 dlen=0
+virtio-net: TX TCP seg completed=7 id=0 len=0
+HTTP DONE
+task 3 exit 0
+net: dump status=0xf isr=0x1 rx avail=23 used=7 posted=23 completed=7 tx avail=7 used=7 posted=7 completed=7 drop_short=0 drop_other=0 arp_drop short=0 htype=0 ptype=0 hlen=0 plen=0 op=0 tpa=0 ip_drop short=0 ver=0 ihl=0 csum=0 frag=0 dst=0 proto=0 icmp_drop short=0 csum=0 type=0 udp_drop short=0 len=0 csum=0 port=0 tcp_drop short=0 doff=0 csum=0 opt=0 port=0 noarp=0 busy=0 unexpected=0 established=1 rexmit=0
+HTTP OK
+no ready task; shutting down

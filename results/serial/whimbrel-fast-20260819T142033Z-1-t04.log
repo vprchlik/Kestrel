@@ -1,0 +1,90 @@
+
+OpenSBI v1.8
+   ____                    _____ ____ _____
+  / __ \                  / ____|  _ \_   _|
+ | |  | |_ __   ___ _ __ | (___ | |_) || |
+ | |  | | '_ \ / _ \ '_ \ \___ \|  _ < | |
+ | |__| | |_) |  __/ | | |____) | |_) || |_
+  \____/| .__/ \___|_| |_|_____/|____/_____|
+        | |
+        |_|
+
+Platform Name               : riscv-virtio,qemu
+Platform Features           : medeleg
+Platform HART Count         : 1
+Platform HART Protection    : pmp
+Platform IPI Device         : aclint-mswi
+Platform Timer Device       : aclint-mtimer @ 10000000Hz
+Platform Console Device     : uart8250
+Platform HSM Device         : ---
+Platform PMU Device         : ---
+Platform Reboot Device      : syscon-reboot
+Platform Shutdown Device    : syscon-poweroff
+Platform Suspend Device     : ---
+Platform CPPC Device        : ---
+Firmware Base               : 0x80000000
+Firmware Size               : 321 KB
+Firmware RW Offset          : 0x40000
+Firmware RW Size            : 65 KB
+Firmware Heap Offset        : 0x47000
+Firmware Heap Size          : 37 KB (total), 0 KB (reserved), 12 KB (used), 23 KB (free)
+Firmware Scratch Size       : 4096 B (total), 1464 B (used), 2632 B (free)
+Runtime SBI Version         : 3.0
+Standard SBI Extensions     : ipi,pmu,srst,sse,hsm,rfnc,fwft,time,base,legacy,dbcn,dbtr
+Experimental SBI Extensions : none
+
+Domain0 Name                : root
+Domain0 Boot HART           : 0
+Domain0 HARTs               : 0*
+Domain0 Region00            : 0x0000000080040000-0x000000008005ffff M: (F,R,W) S/U: ()
+Domain0 Region01            : 0x0000000080000000-0x000000008003ffff M: (F,R,X) S/U: ()
+Domain0 Region02            : 0x0000000000100000-0x0000000000100fff M: (I,R,W) S/U: (R,W)
+Domain0 Region03            : 0x0000000010000000-0x0000000010000fff M: (I,R,W) S/U: (R,W)
+Domain0 Region04            : 0x0000000002000000-0x000000000200ffff M: (I,R,W) S/U: ()
+Domain0 Region05            : 0x000000000c400000-0x000000000c5fffff M: (I,R,W) S/U: (R,W)
+Domain0 Region06            : 0x000000000c000000-0x000000000c3fffff M: (I,R,W) S/U: (R,W)
+Domain0 Region07            : 0x0000000000000000-0xffffffffffffffff M: () S/U: (R,W,X)
+Domain0 Next Address        : 0x0000000080200000
+Domain0 Next Arg1           : 0x0000000087e00000
+Domain0 Next Mode           : S-mode
+Domain0 SysReset            : yes
+Domain0 SysSuspend          : yes
+
+Boot HART ID                : 0
+Boot HART Domain            : root
+Boot HART Priv Version      : v1.12
+Boot HART Base ISA          : rv64imafdch
+Boot HART ISA Extensions    : sstc,zicntr,zihpm,zicboz,zicbom,sdtrig,svadu
+Boot HART PMP Count         : 16
+Boot HART PMP Granularity   : 2 bits
+Boot HART PMP Address Bits  : 54
+Boot HART MHPM Info         : 16 (0x0007fff8)
+Boot HART Debug Triggers    : 2 triggers
+Boot HART MIDELEG           : 0x0000000000001666
+Boot HART MEDELEG           : 0x0000000000f4b509
+HTTP READY
+PHASE ticks (10 MHz, 100 ns/tick); ns = ticks * 100
+PHASE _start ticks=231564 ns=23156400 since_start=0 ns=0 delta=0 ns=0
+PHASE stamp_a ticks=232029 ns=23202900 since_start=465 ns=46500 delta=465 ns=46500
+PHASE stamp_b ticks=232081 ns=23208100 since_start=517 ns=51700 delta=52 ns=5200
+PHASE stvec ticks=234586 ns=23458600 since_start=3022 ns=302200 delta=2505 ns=250500
+PHASE frame_init ticks=235962 ns=23596200 since_start=4398 ns=439800 delta=1376 ns=137600
+PHASE task_init ticks=241799 ns=24179900 since_start=10235 ns=1023500 delta=5837 ns=583700
+PHASE page_build ticks=245664 ns=24566400 since_start=14100 ns=1410000 delta=3865 ns=386500
+PHASE page_verify ticks=252881 ns=25288100 since_start=21317 ns=2131700 delta=7217 ns=721700
+PHASE activate ticks=253756 ns=25375600 since_start=22192 ns=2219200 delta=875 ns=87500
+PHASE virtq_init ticks=262177 ns=26217700 since_start=30613 ns=3061300 delta=8421 ns=842100
+PHASE DRIVER_OK ticks=267526 ns=26752600 since_start=35962 ns=3596200 delta=5349 ns=534900
+PHASE first_rx ticks=270613 ns=27061300 since_start=39049 ns=3904900 delta=3087 ns=308700
+PHASE syn_rx ticks=273286 ns=27328600 since_start=41722 ns=4172200 delta=2673 ns=267300
+PHASE established ticks=275860 ns=27586000 since_start=44296 ns=4429600 delta=2574 ns=257400
+PHASE serving_ready ticks=279365 ns=27936500 since_start=47801 ns=4780100 delta=3505 ns=350500
+PHASE net_init_done ticks=282150 ns=28215000 since_start=50586 ns=5058600 delta=2785 ns=278500
+PHASE heap_init ticks=282371 ns=28237100 since_start=50807 ns=5080700 delta=221 ns=22100
+PHASE accounting ticks=282626 ns=28262600 since_start=51062 ns=5106200 delta=255 ns=25500
+PHASE freeze ticks=282747 ns=28274700 since_start=51183 ns=5118300 delta=121 ns=12100
+PHASE sret ticks=282938 ns=28293800 since_start=51374 ns=5137400 delta=191 ns=19100
+PHASE E3g ticks=295251 ns=29525100 since_start=63687 ns=6368700 delta=12313 ns=1231300
+PHASE E3g_doorbell ticks=296006 ns=29600600 since_start=64442 ns=6444200 delta=755 ns=75500
+M3 UNIKERNEL OK
+HTTP DONE

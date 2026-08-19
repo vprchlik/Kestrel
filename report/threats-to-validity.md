@@ -300,8 +300,10 @@ item is mitigated-and-measured or stated.
     only with a same-day control.** Between T4.8 and T4.8b —
     kernel, QEMU, argv, pins and governor byte-identical — the
     serial-byte path (DBCN ecall → 16550 MMIO → chardev write)
-    stepped from ~5.8 to ~6.8 µs/byte (+17 %), flat within each
-    host boot and stepping only across one (D-0078). The evidence
+    stepped from ~5.8 to ~6.8 µs/byte (+17 %) — initially read as
+    per-boot; the canary's first uses showed the state flips on a
+    minutes timescale, with campaigns internally uniform (D-0078
+    act-on). The evidence
     grain is phases×bytes: every safe-profile phase grew in
     proportion to the bytes it prints (~1.0 µs/byte across a 30×
     range of segment sizes), `frame_init`'s mtime-anchored tick
@@ -329,6 +331,9 @@ item is mitigated-and-measured or stated.
     the variable is constant within a day. Detection needs a
     cross-campaign anchor: `stock` served as one here by luck of
     being pinned; D-0078 recommends a recorded per-campaign
-    canary (one safe boot, PHASE deltas kept) so the day's regime
-    is visible in the artifacts rather than reconstructed from
-    them.
+    canary (one safe boot, PHASE deltas kept) so the campaign's
+    starting regime is visible in the batch header rather than
+    reconstructed from the trials — implemented same-day, and its
+    first two runs caught a flip the per-boot framing had missed.
+    A mid-campaign flip remains checkable at trial grain from the
+    safe arm's own deltas.

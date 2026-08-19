@@ -1067,6 +1067,40 @@ helpers (`NET_9P` … `EXPORTFS`, plus `FHANDLE` / overlay /
 `KEYS` / …) are in the fragment; 3b lists the other-parent
 children. No Image, no T4.8b CSV, no MANIFEST rewrite.
 
+## Bench-host spec (D-0078): canary boot in the batch header
+
+The cost of a guest serial byte is a time-varying host state (~5.8 vs
+~6.8 µs/byte regimes observed; flips on a minutes timescale, campaigns
+internally uniform so far). Numbers containing in-window console
+output — safe-profile deltas, the observer-cost cell — are comparable
+across campaigns only when the regimes agree, and the stability gate
+cannot see this because it compares within a campaign.
+
+So every campaign invocation measures it before trial 1: **one
+release-default boot** (the canary; never a trial, never in
+`runs.csv`), its artifacts under `trials/<stamp>-canary/`, and its two
+regime-sensitive deltas in the batch header beside `s_ns`:
+
+```
+canary_stvec_ns=… canary_page_verify_ns=… (D-0078: …)
+```
+
+`stvec` (~134 in-window serial bytes) and `page_verify` (~4.25 KB) are
+the chosen indicators: they move ~14 % / ~36 % between the observed
+regimes while `frame_init` (tick-anchored) and fast-boot (zero
+in-window bytes) move 0. Known regimes on this host: **~1.03 / 11.9
+ms** (T4.8) and **~1.17 / 16.2 ms** (T4.8b).
+
+Fail-closed: a canary that produces no PHASE dump aborts the campaign
+before trial 1 (`canary_values`), and the failure is recorded to
+`gate-failures.csv`. For kinds that build no `release-default` arm
+(fp-ab) the harness builds it for the canary.
+
+A start-of-campaign canary is necessary, not sufficient: a
+mid-campaign flip would show as bimodal safe-profile deltas in
+`phases.csv` (whimbrel/t48 kinds carry the safe arm throughout), which
+is the post-hoc check if a campaign's numbers look regime-mixed.
+
 ## Bench-host spec (D-0074 / D-0075): passive ARP-loss signature
 
 The guest's first ARP solicit is lost inside the guest on ~4.5 % of

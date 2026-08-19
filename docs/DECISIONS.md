@@ -5078,7 +5078,37 @@ D-0011 onward are working decisions made under those constraints.
      demonstrated cross-campaign parity control.
   3. `arp-signature`'s per-arm design is unaffected (it compares
      within arm, within campaign).
+- **Act-on + correction (2026-08-19, same day).** The canary is
+  implemented: one release-default boot before trial 1 of every
+  campaign invocation (`bench.py cmd_run`), its `stvec` /
+  `page_verify` deltas printed to the console and written into the
+  batch header (`summary.txt`) beside `s_ns`; fail-closed if the
+  boot yields no PHASE dump (`canary_values`), with the failure
+  recorded to `gate-failures.csv`. Spec: **Bench-host spec
+  (D-0078)** in `results/README.md`.
+  - **Its first two executions corrected this entry.** Seven
+    minutes apart on the same host boot they read 1.024 / 11.80 ms
+    (normal) and 1.170 / 16.26 ms (inflated). "Per-boot" was
+    over-claimed from the 17-batch series: the state **fluctuates
+    on a minutes timescale**, and the series looked per-boot only
+    because each campaign happened to sit inside one regime for its
+    duration (the tight within-campaign IQRs show that uniformity).
+    The load correlation now has three legs, all the same sign —
+    busy host fast (T4.8, load 0.52, normal), idle host slow
+    (T4.8b, load 0.18, inflated), and the flips landing right after
+    vs. away from bursts of host activity — which is the C-state
+    signature, still a hypothesis.
+  - **Consequence for the control.** A start-of-campaign canary is
+    necessary but not sufficient; a mid-campaign flip is the
+    residual risk. For campaign kinds that include the safe arm
+    (whimbrel, t48) the arm itself is the continuous monitor — a
+    flip shows as bimodal safe-profile deltas in `phases.csv`,
+    checkable post-hoc at trial grain. The canary's job is to name
+    the starting regime in the header so no reader has to
+    reconstruct it from the trials.
 - Revisit trigger: any future campaign whose canary boot lands
-  outside the day's expected regime; a host kernel or QEMU change
-  touching the chardev path; or adoption of the residency recording,
-  which supersedes the manual A/B this entry rests on.
+  outside a known regime; bimodal safe-profile deltas within one
+  campaign (the mid-campaign flip, not yet observed); a host kernel
+  or QEMU change touching the chardev path; or adoption of the
+  residency recording, which supersedes the manual A/B this entry
+  rests on.
