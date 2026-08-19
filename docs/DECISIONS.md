@@ -4270,6 +4270,20 @@ D-0011 onward are working decisions made under those constraints.
      the cost bounded by `T_NEIGH` (D-0074 consequence 4).
   5. New glossary terms land with D-0074's: **margin**, **loss
      event**, **cliff crossing**.
+- **Scope correction (2026-08-19, after T4.8b's per-trial logging
+  went live): the ≥ 2-ARP falsifier and the `guest_arp_req_n` ≥ 2
+  reading apply to Linux boots only — on Whimbrel arms they are
+  inapplicable, not merely unlikely to fire.** Whimbrel's D-0046
+  wire shape is two ARP requests by construction: the gateway
+  solicit, then a gratuitous ARP (`arp.isgratuitous`, sender =
+  target = 10.0.2.15) ~1–7 ms later. Every Whimbrel trial therefore
+  records `guest_arp_req_n = 2` in a clean boot, and "a second
+  request means the loss window outlived one retransmit" is a
+  statement about Linux `/init`'s single forced solicit that has no
+  Whimbrel reading at all. The falsifier as pre-registered was
+  applied only to Linux boots (D-0074/D-0075/D-0076 runs), so no
+  conclusion is affected; what was wrong was the unscoped wording
+  here and in `results/README.md`, both now scoped.
 - **Loose end, recorded not fixed:** `scripts/linux-boot-test.sh`
   removes its `mktemp -d` workdir in an `EXIT` trap, so a failing
   boot destroys its own serial and pcap. Two consecutive failures of
@@ -4952,3 +4966,119 @@ D-0011 onward are working decisions made under those constraints.
   configurations (each one is a candidate for the same class of
   gate assumption); or a libslirp change to how the guest MAC is
   learned, which is what the new anchor encodes.
+
+## D-0078: Serial-byte cost is an uncontrolled per-boot host variable
+
+- Date: 2026-08-19 — Status: accepted (measured; the control gap is
+  named in D-0055 terms; threats item 21 carries the reader-facing
+  statement)
+- **Decision:**
+  1. The cost of one guest serial byte (DBCN ecall → OpenSBI LSR
+     poll → 16550 MMIO → QEMU chardev `write(2)` to the serial
+     file) is a **per-boot host variable**, not a constant of the
+     platform. Between T4.8 (host boot of Aug 17 17:26) and T4.8b
+     (host boot of Aug 19 02:24) it stepped from ~5.8 to ~6.8
+     µs/byte (+17 %), with the kernel, QEMU binary, argv, pins and
+     governor all byte-for-byte identical.
+  2. Numbers that contain in-window console output are therefore
+     comparable across campaigns **only with a same-day control**.
+     The T4.8b exhibit says so where the safe column appears.
+  3. Two additions are recommended for D-0055's control list —
+     **recorded, not clamped**: per-batch cpuidle residency deltas,
+     and one release-default canary boot per campaign whose PHASE
+     deltas make the day's serial-cost regime visible in the
+     artifacts. Clamping C-states is *not* adopted (below).
+- **Evidence — growth strictly proportional to bytes printed.** The
+  safe profile emits 13,117 serial bytes inside its measured window;
+  fast-boot emits 0 (its 4,975 bytes print after the response,
+  D-0068). Per-phase growth T4.8 → T4.8b against bytes printed in
+  that phase's delta:
+
+  | phase | bytes in delta | growth | implied cost |
+  |---|---:|---:|---:|
+  | stvec | ~134 | +0.142 ms | 1.06 µs/B |
+  | page_verify | ~4,250 | +4.255 ms | 1.00 µs/B |
+  | virtq_init | ~2,049 | +2.147 ms | 1.05 µs/B |
+  | whole window (`w_ns` 86.44 → 99.44) | 13,117 | +13.00 ms | 0.99 µs/B |
+
+  The non-movers are the controls:
+  - **`frame_init`, 30.5 ms, moved 0.0 %** — its delta contains the
+    `ticks() < 3` `wfi` wait, which is mtime-anchored: print time
+    spent before it is absorbed by the wait. A zero exactly where a
+    wall-clock anchor predicts one.
+  - **fast-boot, every phase 1.00×** (E0→E4 52.28 → 51.87 ms) —
+    zero in-window bytes.
+  - **stock, E0→E4 948.11 → 948.10 ms across campaigns** — ~900 ms
+    of TCG, virtio, slirp and hostfwd, moved 0.01 ms. This is the
+    parity control that excludes general host drift, thermals, TCG
+    speed and slirp behaviour in one number. What moved is the
+    serial byte, and only the serial byte.
+- **When it stepped.** Safe-profile deltas recovered from PHASE
+  lines across all 17 on-disk batches and four host boots: stable at
+  stvec 1.01–1.03 / page_verify 11.6–13.2 ms through Aug 17–18
+  (three host boots, twelve batches, including the 14:30Z abort in
+  the boot of Aug 18 09:58); stepped to 1.17–1.18 / 16.1–16.2 in
+  the boot of Aug 19 02:24 and flat within it. No kernel, microcode
+  or QEMU package change in `dpkg.log` between the campaigns; two
+  reboots between them.
+- **Launcher exonerated by same-day A/B.** All normal batches had
+  been user-launched and all inflated batches agent-launched, a
+  perfect confound. Closed 2026-08-19: the same release-default
+  boot-test run minutes apart from both shells —
+
+  | | stvec | page_verify | virtq_init | frame_init |
+  |---|---:|---:|---:|---:|
+  | user shell | 1.214 | 17.62 | 9.94 | 30.377 |
+  | agent shell | 1.219 | 18.31 | 10.02 | 30.361 |
+
+  Both squarely in the inflated regime, matching to a few percent,
+  `frame_init` flat in both. (Unpinned boot-test runs sit ~10 %
+  above campaign values; the regimes are ~40 % apart, so the verdict
+  does not depend on that.) Foreground and `setsid nohup` launches
+  had already matched exactly, and the agent cgroup carries no
+  cpu/memory/io limits.
+- **The cpuidle hypothesis — what would be checked, and why it is
+  not being clamped.** Host: `acpi_idle`/`menu`, states POLL / C1
+  (1 µs) / C2 (18 µs) / C3 (350 µs exit latency), all enabled;
+  cmdline has no idle controls; D-0055 controls cover governor, SMT,
+  boost, steal — **not cpuidle**. Load was 0.52 during T4.8 and 0.18
+  during T4.8b, so the *quieter* host was the slower one — the right
+  sign for wakeup latency, the wrong sign for contention. The check
+  that discriminates, read-only: per-CPU
+  `cpuidle/state*/{usage,time}` deltas across one safe boot, on the
+  QEMU CPU and on the unpinned CPUs that host QEMU's non-vCPU
+  threads. Deep-state residency during the boot that correlates
+  with the inflated regime confirms it; flat residency refutes it
+  and points back at the write path. Not run to completion here: one
+  half of the comparison needs a host boot that is back in the
+  normal regime, which cannot be produced on demand without changing
+  host state. Clamping (`processor.max_cstate=1`, `cpuidle.off=1`,
+  or per-state `disable`) is rejected for now: it changes the
+  thermal and frequency envelope of the whole campaign to fix a
+  path that the measured profile does not exercise — record first,
+  clamp only if a recorded correlation earns it.
+- **Why the mechanism can sit below the byte and still be honest.**
+  ~1 µs per byte is the measured *symptom*; whether it is the
+  chardev `write(2)`, the MMIO exit, or a timer wakeup between them
+  is not established, and the entry does not pretend otherwise. The
+  grain rule cuts both ways: the per-byte law is established at the
+  grain of phases×bytes; the syscall-level attribution would need a
+  finer instrument (`perf`/ftrace on the host, out of scope here).
+- **Alternatives considered.** Clamp C-states in D-0055 (rejected
+  above); declare the safe profile unmeasurable (overreach — it is
+  measurable within a day, which is how D-0055 uses it); anchor all
+  campaigns to a reference boot via a scaling factor (rejected: a
+  correction factor derived from the thing being corrected is the
+  D-0069 shape).
+- **Consequences.**
+  1. Threats item 21 (both report files) carries the exposure list
+     and the reader warning.
+  2. The T4.8b cross-system exhibit lands with a same-day scoping
+     note on its safe row, and cites stock 948.11 → 948.10 as the
+     demonstrated cross-campaign parity control.
+  3. `arp-signature`'s per-arm design is unaffected (it compares
+     within arm, within campaign).
+- Revisit trigger: any future campaign whose canary boot lands
+  outside the day's expected regime; a host kernel or QEMU change
+  touching the chardev path; or adoption of the residency recording,
+  which supersedes the manual A/B this entry rests on.

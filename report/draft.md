@@ -799,6 +799,24 @@ maintained in [threats-to-validity.md](threats-to-validity.md).
     `guest_arp_req_n` make any recurrence countable rather than
     fatal.
 
+21. **Serial-byte cost is a per-boot host variable** (D-0078). With
+    kernel, QEMU, argv and pins byte-identical, the guest serial path
+    stepped from ~5.8 to ~6.8 µs/byte between T4.8's and T4.8b's host
+    boots; every safe-profile phase grew in proportion to the bytes
+    it prints (~1.0 µs/byte), `frame_init`'s tick-anchored wait
+    absorbed it, and a same-day two-shell A/B exonerated the
+    launcher. Exposed: safe-profile deltas, its `W`/E0→E4 (+15.8 ms
+    between the tables — the day's serial cost, not a regression),
+    the instrumented−trimmed observer cost, and safe/fast pooling
+    across campaigns. Not exposed: the headline — `release-fast-boot`
+    prints nothing in its window (52.28 → 51.87 ms), Linux quiet rows
+    print ~6 bytes, and `stock` moved 948.11 → 948.10 ms across
+    campaigns, the parity control that excludes general host drift.
+    The stability gate cannot catch this: it compares within a day,
+    and the variable is constant within a day. Detection needs a
+    cross-campaign anchor; a recorded per-campaign canary boot is the
+    D-0078 recommendation.
+
 ---
 
 ## Future work

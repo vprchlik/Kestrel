@@ -1091,7 +1091,10 @@ normally and records 0; `bench.py selftest` asserts that.
 solicit lost before it reaches the TX ring leaves exactly one request
 on the wire, the same as a clean boot. Detection is `guest_ftx_ns`
 below. Read a column of 1s as "no loss window outlived a retransmit",
-never as "no events".
+never as "no events". The ≥ 2 reading is **Linux-only**: Whimbrel
+arms record 2 on every clean boot by construction (gateway solicit
+plus gratuitous ARP, D-0046), so on those rows the column is
+identity, not signal.
 
 **Detection is per arm, after the fact**, because `guest_ftx_ns`
 contains the whole guest boot and so has no cross-arm threshold:
@@ -1151,7 +1154,7 @@ stays a bench-diagnostic quantity (`~/whimbrel-diag/`, uncommitted).
 | `d_ack_ns` | **D-0071.** pcap: slirp pure ACK of payload+FIN − HTTP frame. |
 | `d_fin_ns` | **D-0071.** pcap: client FIN − HTTP frame. Delivery bound. |
 | `guest_ftx_ns` | **D-0075.** pcap: guest's first wire TX − slirp's ARP request. Passive loss signature; same anchor as `w_ns`. |
-| `guest_arp_req_n` | **D-0075.** pcap: guest-sourced ARP requests. Bounds the loss window's length, and nothing else: 1 on a clean boot *and* on a loss event, so a column of 1s is **not** evidence that no events occurred. ≥ 2 means the window outlived one retransmit. |
+| `guest_arp_req_n` | **D-0075.** pcap: guest-sourced ARP requests. **Linux arms:** bounds the loss window's length, and nothing else — 1 on a clean boot *and* on a loss event, so a column of 1s is **not** evidence that no events occurred, and ≥ 2 means the window outlived one retransmit. **Whimbrel arms:** structurally 2 (gateway solicit + gratuitous ARP, D-0046); the ≥ 2 reading is inapplicable there, not unlikely. |
 | `attempts` | client connect attempts until first-connect |
 | `pcap_path` | repo-relative filter-dump path |
 
