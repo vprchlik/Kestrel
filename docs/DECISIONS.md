@@ -5098,6 +5098,19 @@ D-0011 onward are working decisions made under those constraints.
     (T4.8b, load 0.18, inflated), and the flips landing right after
     vs. away from bursts of host activity — which is the C-state
     signature, still a hypothesis.
+  - **Retrospective per-trial check (same day): neither campaign
+    flipped mid-run.** Safe-arm `page_verify` joined per trial
+    against `run_order`, both campaigns: T4.8 n=60 span 0.364 ms,
+    largest sorted gap 0.076 ms; T4.8b n=60 span 0.651 ms, largest
+    gap 0.103 ms — against a regime separation of ~4.3 ms, i.e. the
+    biggest within-campaign gap is 40–56× too small to be a flip.
+    First-half vs second-half medians differ by ≤ 0.034 ms and the
+    quartile medians over run_order are flat. "Each campaign sat
+    inside one regime" is now verified at trial grain, not inferred
+    from IQRs, and it bounds flip frequency: none in 2 × ~40 min of
+    campaign against two flips seen in ~10 min of idle desktop —
+    consistent with the load-correlation hypothesis (campaigns keep
+    the host busy).
   - **Consequence for the control.** A start-of-campaign canary is
     necessary but not sufficient; a mid-campaign flip is the
     residual risk. For campaign kinds that include the safe arm

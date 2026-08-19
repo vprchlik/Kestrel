@@ -302,7 +302,8 @@ item is mitigated-and-measured or stated.
     serial-byte path (DBCN ecall → 16550 MMIO → chardev write)
     stepped from ~5.8 to ~6.8 µs/byte (+17 %) — initially read as
     per-boot; the canary's first uses showed the state flips on a
-    minutes timescale, with campaigns internally uniform (D-0078
+    minutes timescale, with campaigns internally uniform —
+    verified at trial grain, not inferred from IQRs (D-0078
     act-on). The evidence
     grain is phases×bytes: every safe-profile phase grew in
     proportion to the bytes it prints (~1.0 µs/byte across a 30×
