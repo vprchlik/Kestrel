@@ -258,10 +258,22 @@ item is mitigated-and-measured or stated.
     by a measured heal. If an event does occur in a campaign it
     should cost ~+52 ms, and `guest_ftx_ns` / `guest_arp_req_n`
     record it per trial rather than losing it (D-0075).
-    (c) **Why the events stopped is not established.** Two
-    explanations survive every arm run: the call takes `rtnl_lock`
-    and serialises against the netdev machinery, or the announce
-    simply happens ≥ 2.7 ms later in absolute terms. No instrument
-    separates them, so neither is claimed. The margin — the
-    quantity D-0074 first offered as a predictor — is ruled out as
-    the coordinate the race lives in (D-0076).
+    (c) **The events stopped because of the delay, not the
+    function — so the cost in (a) is load-bearing.** A fourth arm
+    removed the netlink call entirely and replaced it with a spin
+    of the same 2.87 ms: the announce stayed at 168.6 ms and
+    k stayed 0 (D-0076 Arm S). Across five configurations the
+    announce instant tracks the event rate perfectly and the
+    presence of the call does not — it is absent both in the one
+    config that collides (announce 165.4 ms, 25/550) and in one
+    that does not. The `rtnl_lock` serialisation reading is
+    refuted, and the margin, which D-0074 first offered as a
+    predictor, is not the coordinate either. The consequence for a
+    reader: the 2.87 ms that inflates this baseline is also the
+    entire protection, so anything that makes `/init`'s
+    pre-announce path cheaper re-arms the race, and the rate must
+    be re-measured rather than inherited. One confound is open —
+    the colliding run was recorded nine hours before the others and
+    its announce distribution is tighter (1.3 ms p10–p90 against
+    5.0–5.2 ms), so a host difference is not excluded; the null arm
+    that would close it is specified in D-0076 and not yet run.

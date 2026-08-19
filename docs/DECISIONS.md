@@ -4331,8 +4331,9 @@ D-0011 onward are working decisions made under those constraints.
 
 ## D-0076: A diagnostic image that restores the collision, to test the heal path
 
-- Date: 2026-08-19 — Status: accepted (both arms run; k = 0 in both,
-  so the heal path is **still** unexercised — see Outcome).
+- Date: 2026-08-19 — Status: accepted (three arms run; k = 0 in all,
+  so the heal path is **still** unexercised, and Arm S refutes the
+  serialisation reading — see Outcome and Arm S outcome).
   Diagnostic only: **never a campaign arm, never a published row,
   never in `bench/linux/artifacts/` or MANIFEST.**
 - **Why.** D-0075's validation returned k = 0 in 5000 boots. The
@@ -4560,9 +4561,99 @@ D-0011 onward are working decisions made under those constraints.
   testing the wrong thing. An unexercised path recorded as
   unexercised is worth more than a green result about a mechanism we
   did not deploy.
+- **Arm S — the discriminating arm, pre-registered 2026-08-19 after
+  the outcome above and before it was run.** The two survivors are
+  confounded because no arm removed the call while holding the
+  announce late. Arm S does exactly that: **no netlink call at all**
+  (eth0 keeps the stock `RETRANS_TIME` 1 s / `MCAST_PROBES` 3), with
+  a `clock_gettime` spin of the same duration at the same call site,
+  so the announce stays at the validated instant. Single variable:
+  presence.
+  - **It tests the mechanism, not the deployed fix.** It reverts the
+    fix on purpose, so nothing it finds changes whether T4.8b runs —
+    only what D-0076 concludes about *why* the events stopped.
+  - **Protocol.** N = 600, `Image-trimmed` unchanged, diagnostic cpio
+    outside the repo, campaign argv and pins, D-0055 controls before
+    and after, `SPIN_NS` frozen into `prereg.txt` before boot 1.
+  - **Arm validity — checked first, because a mis-sized arm makes
+    either k meaningless.** Spin cost (`T_NEIGH − T_IFUP`) median
+    **2.87 ± 0.10 ms**, the cost it replaces; announce median
+    **168.2 ± 1.0 ms** (validated image 168.22, Arm C 168.10,
+    pre-fix 165.43). Calibrated on 8 smoke boots at
+    `SPIN_NS = 2 870 000`: spin 2.875–2.878 ms, `ifup`→announce
+    15.13–15.35 ms against the validated 15.1.
+  - **Outcomes, fixed in advance.**
+    - **k inside [2.27 %, 9.09 %] → PRESENCE.** The absolute
+      announce instant does not explain the suppression; the call
+      does, and the `rtnl_lock` serialisation reading survives as
+      the leading mechanism.
+    - **k = 0 → INSTANT.** The serialisation reading is **wrong**.
+      The deployed fix works by accident of its **cost**, not its
+      function — which matters because anything that later makes
+      that call cheaper (a faster host, a leaner `rtnl` path, a
+      kernel bump) would silently re-arm the race. That is the more
+      interesting result and the one with a standing consequence.
+    - **0 < k outside the band → AMBIGUOUS.** Partial restoration;
+      claim neither mechanism outright.
+  - **The cliff inversion is deliberate.** This arm runs the stock
+    1 s retransmit, so an event heals at ~1.03 s and crosses slirp's
+    drop. Cliff crossings are the **expected positive result here**,
+    not a falsifier — the opposite of their role in D-0075 and in
+    Arms C and A. Events are also the confirmation that it is the
+    same mechanism: each must pass the D-0074 signature on the
+    **pre-fix** band [0.95, 1.10] s.
+  - **Checks that stay falsifiers:** any boot with ≥ 2 guest ARP
+    requests; any event failing that signature.
+- **Arm S outcome (2026-08-19). Verdict: INSTANT. The serialisation
+  reading is refuted.** 600 boots, arm validity passed first — spin
+  cost 2.876 ms against the 2.87 ms it replaces, announce median
+  168.61 ms against the 168.2 ± 1.0 ms target. **k = 0**, with no
+  netlink call, no `rtnl_lock`, and stock `neigh` parameters.
+
+  | config | netlink | announce p10 / median / p90 | k |
+  |---|---|---|---|
+  | pre-fix, n=550 | **absent** | 165.02 / **165.43** / 166.32 | **25 (4.55 %)** |
+  | Arm S, n=600 | **absent** | 168.23 / **168.61** / 173.55 | 0 |
+  | Arm C, n=600 | present (pre-`ifup`) | 167.55 / 168.10 / 172.71 | 0 |
+  | validated, n=5000 | present (post-`ifup`) | 167.83 / 168.22 / 172.86 | 0 |
+  | Arm A, n=600 | present + pad | 170.54 / 170.87 / 175.49 | 0 |
+
+  Netlink presence varies across the table and does not track k;
+  it is absent in the one config that collides *and* in one that
+  does not. The announce instant tracks k perfectly. **The fix works
+  by accident of its cost, not by its function.**
+  - **The 2.87 ms is load-bearing, not merely a disclosed liability.**
+    Everywhere else in this log that cost is written up as a bias to
+    subtract. It is also the entire protection: make the pre-announce
+    path cheaper — a faster host, a leaner `rtnl` path, a kernel or
+    Buildroot bump, or "optimising away" the netlink round trip — and
+    the race re-arms silently. Any future rung that touches `/init`'s
+    pre-announce path must re-measure the rate, not inherit it.
+  - **A bound on the collision window falls out.** The race is armed
+    at an announce of ≤ 166.32 ms (pre-fix p90) and disarmed at
+    ≥ 167.55 ms (Arm C p10), so whatever the announce collides with
+    finishes in **(166.3, 167.6) ms** guest-mono — a ~1.3 ms window.
+    That is the first positive constraint on the drop site D-0074
+    deferred naming, and it came free.
+  - **What Arm S does not close: a time-of-day confound.** The
+    pre-fix run was measured at 04:08 and every other config between
+    11:17 and 13:20. Its announce distribution is also much tighter
+    (p10–p90 1.30 ms) than every later run's (5.0–5.2 ms), which is
+    evidence that *something* about the host differed beyond `/init`.
+    The controlled comparison is Arm S versus pre-fix — identical
+    sources apart from the 2.87 ms spin — but they are nine hours
+    apart, so "the instant" and "the host at 04:08" are not yet
+    separated. **Arm N (null)** closes it: the current source with
+    the netlink call removed and *no* spin, run now. Announce back at
+    ~165.4 ms with k ≈ 4.5 % confirms the instant and excludes the
+    host; announce at ~168 ms with k = 0 would mean neither `/init`
+    change explains anything and the suppression is environmental.
+    ~5 minutes; not run, because it is a new pre-registration.
 - Revisit trigger: any falsifier; T4.8b being run before this
   question is closed, which the entry exists to prevent; or a QEMU,
   kernel or Buildroot change, which re-rolls the boot timeline and
   therefore the collision — if events reappear in a later campaign,
   the passive signature logging (D-0075) counts them and this entry
-  is where to start.
+  is where to start. **Add to that any change that makes `/init`'s
+  pre-announce path faster**, which Arm S shows is the same thing as
+  re-arming the race.

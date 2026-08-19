@@ -779,14 +779,20 @@ maintained in [threats-to-validity.md](threats-to-validity.md).
     "sub-millisecond" estimate was wrong by 3x, which is why the cost
     is stamped rather than argued. The heal it installs is
     **unexercised**: the event did not recur once in 6200 boots
-    across three configurations, so the timer-wheel arithmetic behind
-    the 50 ms constant is read out of the 6.18.7 source and has never
-    been observed. Why the events stopped is likewise not established
-    — the call takes `rtnl_lock` and serialises against the netdev
-    machinery, or the announce simply lands >= 2.7 ms later; no
-    instrument separates them. Per-trial `guest_ftx_ns` /
-    `guest_arp_req_n` make any recurrence countable rather than
-    fatal.
+    across three configurations carrying the fix, so the timer-wheel
+    arithmetic behind the 50 ms constant is read out of the 6.18.7
+    source and has never been observed. And it stopped the events by
+    its **delay, not its function** — a fourth arm replaced the call
+    with a spin of the same 2.87 ms and k stayed 0, and across five
+    configurations the announce instant tracks the rate while the
+    call's presence does not (D-0076 Arm S). The cost above is
+    therefore also the protection: anything making the pre-announce
+    path cheaper re-arms the race, and the rate must be re-measured
+    rather than inherited. One confound is open — the colliding run
+    predates the others by nine hours and its announce spread is
+    tighter — and the null arm that would close it is specified, not
+    run. Per-trial `guest_ftx_ns` / `guest_arp_req_n` make any
+    recurrence countable rather than fatal.
 
 ---
 
