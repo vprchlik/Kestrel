@@ -5418,8 +5418,11 @@ D-0011 onward are working decisions made under those constraints.
     pair. Named, not chased.
   - **Open observation, D-0078-adjacent:** OpenSBI-lane fast E0→E4
     read 51.87 in t48b and 54.27 in t47, same host boot, both
-    campaigns in the inflated canary regime. Fast-boot prints
-    nothing in its window — but **OpenSBI's ~2.7 KB banner is
+    campaigns in the inflated canary regime — and t47's own batches
+    split 2.83 ms on that arm an hour apart (stability correction
+    below): the same observation one level stronger, within one
+    campaign, banner-carrying arm only, shim arm flat. Fast-boot
+    prints nothing in its window — but **OpenSBI's ~2.7 KB banner is
     in-window console output for E0→E4**, an exposure threats item
     21 does not list. Candidate explanation only (the safe arm's
     +0.9 ms does not scale with it cleanly); recorded for item 21's
@@ -5486,6 +5489,59 @@ D-0011 onward are working decisions made under those constraints.
   observation — a ~2.8 ms same-shape move between two batches an
   hour apart, banner-carrying arm only — where it is recorded and
   deliberately not resolved.
+- **Misread scoped (2026-08-19): the truncation touched t47 only.**
+  Full per-arm stability re-run from every pinned campaign with a
+  corrected complete reader: **t48b 5/5 arms PASS**, T4.8 5/5, T4.3
+  baseline 2/2, T4.6 after-ladder 2/2 — values and tolerances
+  checked, no summary trusted. The tool was fail-closed throughout
+  (nonzero exit, `TEST FAIL` with detail); the failure was a reader
+  filtering its output. The reader trap was real, though: a failing
+  arm got **no verdict token in the stability section itself** —
+  PASS lines went to the section, failures to stderr at the end, so
+  the section alone read complete while short. Fixed in `bench.py`
+  (commit `6f775a5`, whose message described this record a commit
+  early): every arm now gets an explicit PASS/FAIL line in the
+  section plus a `stability: N/M arms PASS` totals line.
+- **The 2×2 (2026-08-19): the lane carries the anomaly, not the
+  binary.** Pre-check: the `bios-none` kernel boots to `M3
+  UNIKERNEL OK` under OpenSBI (so OpenSBI sets `menvcfg.STCE` and
+  cell B is well-formed). Three cells, 20 boots each, interleaved
+  round-robin in one session:
+
+  | phase | K_SBI@OpenSBI | K_M@OpenSBI | K_M@shim | binary (B−A) | lane (C−B) |
+  |---|---:|---:|---:|---:|---:|
+  | page_verify | 718.7 | 730.5 | 674.6 | **+11.8 µs** | **−56.0 µs** |
+  | stvec | 255.2 | 31.9 | 31.9 | −223.3 (seam) | +0.1 |
+  | frame_init | 138.1 | 76.7 | 62.5 | −61.4 (seam) | −14.2 |
+  | task_init | 579.5 | 584.9 | 595.2 | +5.3 | +10.4 |
+  | virtq_init | 832.0 | 847.8 | 834.5 | +15.8 | −13.3 |
+
+  Same binary, different resident M-mode environment: −56 µs on a
+  phase that prints nothing and calls nothing. The layout/TB
+  hypothesis is **refuted** alongside the console one; the
+  seam-site attribution is independently confirmed (stvec's −223 is
+  pure binary, zero lane). The anomaly is an **ambient lane
+  systematic**: ≤ 56 µs per phase, concentrated on
+  memory-walk-heavy phases, near-zero on tight-loop phases.
+  Candidate mechanism, explicitly a hypothesis: **PMP geometry** —
+  OpenSBI programs ~8 PMP regions, the shim one NAPOT catch-all,
+  and TCG consults PMP on TLB fills, taxing page-table-walking
+  phases most. The confirming cell (a shim variant programming 8
+  entries) is named, not run. Whatever the mechanism, it is a
+  property of the resident M-mode configuration — part of what
+  swapping the firmware *is* — but it is ambient, not
+  call-site-localisable, so the seam-call-site criterion cannot
+  absorb it and the threshold must clear it as a floor.
+- **δ reconciled (2026-08-19).** The polled store is not near-free:
+  absolute rates from the safe pair's `page_verify` segment, this
+  regime — DBCN (16.419 − 0.731 ms)/4250 B = **3.69 µs/B**; polled
+  UART (10.947 − 0.679)/4250 = **2.42 µs/B**; δ = 1.27, matching
+  the four-segment slope. Two MMIO exits per byte (LSR poll + THR
+  store) under TCG is µs-scale each. D-0078's "~1.0 µs/B" is the
+  *regime step* on the DBCN path, a different quantity; the
+  canary's 16.07 ms `page_verify` is the absolute DBCN rate at the
+  same bytes. No second term; the ~13.1 KB × 1.3 ≈ −17 ms
+  contamination figure stands with both absolutes recorded.
 - Revisit trigger: any falsifier; QEMU moving the `virt` FDT or
   reset address (checkpoint 0 and the `check_dtb` assert both catch
   it loudly); or the seams demanding a change outside D-0061's
