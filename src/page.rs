@@ -49,7 +49,13 @@ const ROOT_LEVEL: usize = 2;
 /// (D-0025). The window is MMIO, not RAM: `frame::total_frames()` does
 /// not change. If `__heap_end` crosses `RAM_L1_START`, `ram_l1_start`
 /// panics so this constant is recomputed, not silently wrong.
+#[cfg(not(feature = "bios-none"))]
 pub const EXPECTED_TABLES: usize = 5;
+/// D-0079: +1 — sifive_test at 0x10_0000 needs an L0 under L1[0];
+/// the UART page shares the existing MMIO L0 (same 2 MiB window as
+/// virtio) and adds no table.
+#[cfg(feature = "bios-none")]
+pub const EXPECTED_TABLES: usize = 6;
 
 /// Mapper flag bits. Privileged spec 20211203 §4.3.1 Table 4.2.
 /// The walker below does **not** use these constants.
@@ -76,6 +82,11 @@ const NONLEAF: u64 = FLAG_V;
 const ABOVE_RAM: usize = 0x9000_0000;
 /// QEMU `virt` UART. Unmapped (D-0025). Extra probe, not a required marker.
 const UART_MMIO: usize = 0x1000_0000;
+/// sifive_test poweroff device (QEMU virt, `hw/misc/sifive_test.c`).
+/// D-0079 seam: the bios-none lane's shutdown backend; mapped R+W so
+/// `sbi::shutdown` can store FINISHER_PASS with paging on.
+#[cfg(feature = "bios-none")]
+pub const SIFIVE_TEST_MMIO: usize = 0x10_0000;
 
 extern "C" {
     static __kernel_start: u8;
@@ -378,9 +389,21 @@ fn build() -> usize {
     map_range(root, he, l1, LEAF_RW);
     map_range_2m(root, l1, RAM_END, LEAF_RW);
     // OpenSBI [RAM_START, ks) omitted. UART at 0x10000000 stays unmapped
-    // (D-0025). Virtio-mmio window: R+W, never X, U=0, before activate
-    // so D-0031's post-activation ban stands (D-0039).
+    // (D-0025) — except in the bios-none lane, whose console *is* the
+    // UART (D-0079). Virtio-mmio window: R+W, never X, U=0, before
+    // activate so D-0031's post-activation ban stands (D-0039).
     map_range(root, virtio::MMIO_BASE, virtio::MMIO_END, LEAF_RW);
+    // D-0079 seams: the two variant device pages, mapped before
+    // activate for the same D-0031 reason. The UART one is the page a
+    // post-activate panic would print through — which is why `verify`
+    // walks it while translation is still Bare and the console still
+    // works: a missing mapping here must be caught by a walker that
+    // can talk, not by the first faulting print.
+    #[cfg(feature = "bios-none")]
+    {
+        map_range(root, UART_MMIO, UART_MMIO + PAGE_SIZE, LEAF_RW);
+        map_range(root, SIFIVE_TEST_MMIO, SIFIVE_TEST_MMIO + PAGE_SIZE, LEAF_RW);
+    }
 
     root
 }
@@ -745,7 +768,13 @@ fn verify(root: usize) {
     probe(root, "guard", bss_end(), Expect::Unmapped);
     probe(root, "OpenSBI", RAM_START, Expect::Unmapped);
     probe(root, "above RAM", ABOVE_RAM, Expect::Unmapped);
+    #[cfg(not(feature = "bios-none"))]
     probe(root, "UART MMIO", UART_MMIO, Expect::Unmapped);
+    #[cfg(feature = "bios-none")]
+    {
+        probe(root, "UART MMIO", UART_MMIO, KERNEL_RW);
+        probe(root, "sifive_test", SIFIVE_TEST_MMIO, KERNEL_RW);
+    }
     // D-0039: window mapped R+W, U=0, non-X. First and last byte, then
     // assert_range walks every interior page the printed rows skip.
     probe_span(
@@ -844,6 +873,16 @@ fn verify(root: usize) {
     assert_range(root, heap_start(), ram_l1_start(), KERNEL_RW);
     assert_range(root, ram_l1_start(), RAM_END, KERNEL_RW_L1);
     assert_range(root, virtio::MMIO_BASE, virtio::MMIO_END, KERNEL_RW);
+    #[cfg(feature = "bios-none")]
+    {
+        assert_range(root, UART_MMIO, UART_MMIO + PAGE_SIZE, KERNEL_RW);
+        assert_range(
+            root,
+            SIFIVE_TEST_MMIO,
+            SIFIVE_TEST_MMIO + PAGE_SIZE,
+            KERNEL_RW,
+        );
+    }
 }
 
 /// Build the map, print the `satp` we would write, walk the probes, print

@@ -110,6 +110,11 @@ compile_error!("net-udp-selftest is exclusive of the HTTP images");
 extern "C" fn kmain(_hartid: usize, dtb_pa: usize) -> ! {
     crate::phase::stamp(crate::phase::STAMP_A);
     crate::phase::stamp(crate::phase::STAMP_B);
+    // D-0079: the bios-none lane has no SBI to probe; its console is
+    // the polled UART, proven by the very next println reaching the
+    // gate's grep. An SBI ecall here would land in the shim's M
+    // diagnostic — which is exactly what the skeleton milestone did.
+    #[cfg(not(feature = "bios-none"))]
     sbi::require_dbcn();
     println!("whimbrel: hello from hart {}, dtb at {:#x}", _hartid, dtb_pa);
     {
@@ -285,8 +290,9 @@ fn park() -> ! {
     }
 }
 
-// D-0079: the -bios none M-mode shim. Declared last so the cfg'd
-// module shifts no line numbers above it — panic-location strings are
-// file:line, and moving them would change the default kernel's hash.
-#[cfg(feature = "bios-none")]
+// D-0079: the M-mode shim donor. Declared last so the cfg'd module
+// shifts no line numbers above it — panic-location strings are
+// file:line, and moving them would change the default kernel's hash
+// (DEBUGGING.md has the full lesson).
+#[cfg(feature = "mshim")]
 mod mshim;

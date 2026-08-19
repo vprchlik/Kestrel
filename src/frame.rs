@@ -71,6 +71,19 @@ pub fn check_dtb(dtb_pa: usize) {
             magic, DTB_MAGIC, dtb_pa, totalsize, end
         );
     }
+    // D-0079 verify-item (a): D-0065's clobberable-DTB assumption as an
+    // assert, not a hope. Clobbering is legal only because the blob
+    // sits inside the bump range [heap_end, RAM_END); a loader that
+    // placed it below heap_end would have it corrupted by the kernel
+    // image or the heap. Verified 0x87e0_0000 in both lanes (QEMU
+    // places it; OpenSBI passes it through).
+    if dtb_pa < heap_end() {
+        panic!(
+            "DTB at {:#x} below heap_end {:#x}: outside the D-0065 clobber range",
+            dtb_pa,
+            heap_end()
+        );
+    }
 }
 
 /// Arm the bump over `[__heap_end, RAM_END)`. Heap bounds come from the

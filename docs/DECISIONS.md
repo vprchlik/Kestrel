@@ -5311,6 +5311,63 @@ D-0011 onward are working decisions made under those constraints.
      change. The `.cargo/config.toml` runner stays `-bios default`.
   5. Bring-up symptom→cause pairs go to `docs/DEBUGGING.md` as they
      occur (house rule); **M-mode shim** goes to the glossary.
+- **Seams landed (2026-08-19, same day). `just test-m` passes:
+  boot, net, HTTP, fast-release under the shim.** Per seam, what
+  proves it *ran* versus what proves it *worked* — they are not the
+  same thing, and each divergence has a named detector:
+  - **Console (DBCN → polled NS16550A).** Ran = bytes appear.
+    Worked = every marker greps *exactly* — the gates compare
+    content, not presence, so a dropped or corrupted byte breaks a
+    `TEST PASS` grep. The one failure that cannot print its own
+    panic (post-`satp` store to an unmapped UART page, since the
+    panic path is the console) is caught earlier by design: `verify`
+    walks the UART PTE **before** `activate`, while translation is
+    Bare and the console still works.
+  - **Timer (SBI TIME → `stimecmp`).** Ran = the `csrw` does not
+    trap (a missing `menvcfg.STCE` is an illegal instruction, loud
+    at the S vector — D-0018's observability argument restored by a
+    different channel). Worked = ticks are **taken**, which
+    wake-by-pending cannot prove: the D-0068 `wfi` yield returns on
+    STIP-pending whether or not delivery works, so fast-boot alone
+    would pass with broken `mideleg`. The default image's
+    `tick 1..3` boot wait is the taken-interrupt proof, and it is in
+    `test-m`'s first gate; it hangs the boot loudly if delivery
+    breaks.
+  - **Shutdown (SRST → sifive_test).** Ran = the store executes (an
+    unmapped device page faults loudly in the kernel handler).
+    Worked = **QEMU exits 0**, which `boot-test` requires for PASS —
+    a wrong value writes cleanly, returns, parks the guest, and
+    fails as a 124 HANG. The divergence is structural and the gate
+    covers it without new code.
+  - **Mappings (UART + sifive_test pages).** Ran = `tables_used()`
+    equals the variant's `EXPECTED_TABLES` (6: sifive_test needs an
+    L0 under L1[0]; the UART page shares the existing MMIO L0).
+    Worked = the pre-activate software walk prints both rows `ok`
+    and `assert_range` covers the interiors — again before `satp`,
+    for the console reason above.
+  - **The missed call site the taxonomy caught:** the first full
+    boot died at cause 9 in the shim's M diagnostic — `sys_write`
+    called `sbi::console_write_byte` directly, a second copy of the
+    console backend on the syscall path. Routed through the one
+    `console::put_byte`. The diagnostic named it in one line, which
+    is the bisection chain doing its job on the first real bug.
+  - First observation for the campaign's falsifier 2: lane fast-boot
+    E2→E3g **5.98 ms** vs the OpenSBI lane's 6.38 — the seams
+    removed ~0.4 ms of SBI ecall overhead (probes and per-tick
+    `set_timer`) from guest work. Within the 0.5 ms budget, but
+    measured cross-day; the binding comparison is the same-campaign
+    pair.
+  - The `check_dtb` assert landed with the seams as planned;
+    default-lane kernel hashes moved `801cae40…` → `1e654985…`
+    (release-default) and `1e43a310…` → `e5e30413…` (fast-boot),
+    from the assert plus panic-location line shifts (DEBUGGING.md
+    records the lesson). `just test` and `just test-fast-release`
+    pass on the new default binaries; campaigns pin per trial row.
+  - One feature split found necessary at first boot: `mshim` (the
+    donor whose `.mshim` becomes the blob) is **disjoint** from
+    `bios-none` (the lane kernel with the seams) — QEMU refuses to
+    boot the donor under its own blob (overlapping regions), which
+    now serves as the guard against mixing them.
 - Revisit trigger: any falsifier; QEMU moving the `virt` FDT or
   reset address (checkpoint 0 and the `check_dtb` assert both catch
   it loudly); or the seams demanding a change outside D-0061's

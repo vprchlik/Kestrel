@@ -10,15 +10,20 @@ edition = "2021"
 # A new kmain-only selftest adds `["no-sret"]` here; it does not edit
 # trap.rs.
 no-sret = []
-# D-0079 / D-0061: the -bios none lane. Links the M-mode shim as a
-# second LOAD segment at 0x8000_0000; the S-mode kernel is unchanged
-# until the allowlisted seams land. Never a campaign image while the
-# seams are absent.
+# D-0079 / D-0061: the no-firmware lane, in two halves that must never
+# meet in one ELF. `mshim` builds the DONOR image whose only purpose is
+# to be objcopied — its .mshim section becomes the -bios blob; booting
+# the donor itself under that blob makes QEMU refuse (overlapping
+# regions), which is the guard against mixing them up. `bios-none`
+# builds the LANE KERNEL: the D-0061 allowlisted seams (polled-UART
+# console, stimecmp timer, sifive_test shutdown, two device mappings)
+# and no shim section.
+mshim = []
 bios-none = []
 # D-0079 checkpoint 0: the shim's first instruction stores PASS to
 # sifive_test, so QEMU exits 0 with no serial path at all — the
-# smallest proof that -bios none executed our bytes at 0x8000_0000.
-mshim-exit0 = ["bios-none"]
+# smallest proof that the machine executed our bytes at 0x8000_0000.
+mshim-exit0 = ["mshim"]
 # Build with `--features panic-selftest` (or `just panic`) to panic in kmain
 # instead of shutting down. Keeps the panic handler reachable without edits.
 panic-selftest = ["no-sret"]

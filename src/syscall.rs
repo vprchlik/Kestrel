@@ -14,7 +14,6 @@
 use crate::csr;
 use crate::net;
 use crate::println;
-use crate::sbi;
 use crate::task;
 use crate::trap::TrapFrame;
 use crate::uaccess::{self, UserPtrError};
@@ -131,7 +130,11 @@ fn sys_write(frame: &mut TrapFrame) -> &mut TrapFrame {
         Ok(bytes) => {
             task.writes += 1;
             for &b in bytes {
-                sbi::console_write_byte(b);
+                // One console backend (D-0079): route through the same
+                // seam the kernel prints use — a direct DBCN call here
+                // was the second copy, found when the bios-none lane
+                // died at cause 9 on the app's first write syscall.
+                crate::console::put_byte(b);
             }
             advance_ecall(frame);
             frame.set_retval(OK, bytes.len());

@@ -551,3 +551,21 @@ Fix (D-0079): never boot the donor ELF. Extract the blob
 (`objcopy -O binary --only-section=.mshim`) and pass it as
 `-bios mshim.bin` with the **default** kernel ELF. The donor exists
 only to be objcopied.
+
+## A "no-op" refactor moved the kernel hash (D-0079)
+
+Symptom: adding a `#[cfg]`-gated module declaration (or any line) to a
+source file changes the release binary's sha256 even though the feature
+is off and no generated code should differ.
+
+Cause: `panic!`/`assert!` capture `core::panic::Location` — file and
+**line** — into `.rodata`. Any edit that shifts line numbers below it
+rewrites those strings. The binary is different because its panic
+messages are.
+
+Fix / practice: additions that must not move the default hash go at the
+end of the file (`mod mshim;` sits last in `main.rs` for exactly this
+reason). When comparing hashes across a refactor, a moved hash with
+identical `.text` is this, not a codegen change — `readelf -x .rodata`
+diff shows the line-number strings. Campaigns are unaffected: each
+records its kernel sha per trial row.

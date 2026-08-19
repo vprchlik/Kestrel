@@ -89,10 +89,13 @@ fi
 
 hpid=""
 http_images=0
-if [ -z "$FEATURE" ] || [ "$FEATURE" = "net-http-selftest" ] \
-    || [ "$FEATURE" = "tcp-drop-first-tx" ] || [ "$FEATURE" = "fast-boot" ]; then
-    http_images=1
-fi
+# D-0079: feature lists may be comma-joined (bios-none,fast-boot), so
+# match by member, not by equality. bios-none alone is the default
+# HTTP image on the no-firmware lane.
+case ",$FEATURE," in
+    ,,|*,net-http-selftest,*|*,tcp-drop-first-tx,*|*,fast-boot,*|*,bios-none,*)
+        http_images=1 ;;
+esac
 if [ "$http_images" -eq 1 ] && [ "${CLIENT_EARLY:-}" = 1 ]; then
     # D-0043: retry loop starts before QEMU exec so sret→E3g is not
     # "wait for HTTP READY then spawn curl".

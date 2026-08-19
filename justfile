@@ -722,6 +722,59 @@ test-fast-release:
     fi
     echo 'TEST PASS: release fast-boot M3 UNIKERNEL OK, curl 200, phases'
 
+# D-0061 / D-0079: the no-firmware lane's gate subset (boot, net, HTTP,
+# fast-release). Builds the donor, extracts the shim blob into QEMU's
+# -bios slot, then runs the release default image (boot markers, tick
+# wait = taken-interrupt proof, selftests, curl 200) and the measured
+# fast-boot profile (early client, PHASE presence, pcap asserts).
+# boot-test PASS requires QEMU exit 0, which is the sifive_test
+# shutdown proof: a wrong store value parks the guest into a 124 HANG.
+# The full 16-gate list stays on -bios default.
+test-m:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build --release --features mshim
+    blob=target/riscv64gc-unknown-none-elf/release/mshim.bin
+    bash scripts/mshim-blob.sh \
+        target/riscv64gc-unknown-none-elf/release/whimbrel "$blob"
+    QEMU_BIOS="$blob" PROFILE=release EXPECT="M3 UNIKERNEL OK" \
+        TIMEOUT_S=12 bash scripts/boot-test.sh bios-none
+    if [ ! -f http.status ] || [ "$(cat http.status)" != "0" ]; then
+        echo "TEST FAIL: lane curl status $(cat http.status 2>/dev/null || echo missing), want 0"
+        exit 1
+    fi
+    if ! python3 -c 'import sys; sys.exit(0 if open("http.body","rb").read()==b"whimbrel\n" else 1)'; then
+        echo 'TEST FAIL: lane HTTP body is not exactly whimbrel\n'
+        exit 1
+    fi
+    QEMU_BIOS="$blob" PROFILE=release CLIENT_EARLY=1 EXPECT="M3 UNIKERNEL OK" \
+        TIMEOUT_S=12 bash scripts/boot-test.sh bios-none,fast-boot
+    log=serial.log
+    for ph in {{phase_names}}; do
+        if ! grep -a -q "PHASE ${ph} " "$log"; then
+            echo "TEST FAIL: lane missing PHASE ${ph}"
+            exit 1
+        fi
+    done
+    if grep -a -q 'PHASE .* unset' "$log"; then
+        echo 'TEST FAIL: a lane PHASE stamp was unset'
+        exit 1
+    fi
+    python3 scripts/bench.py check-serial "$log"
+    if [ ! -f http.status ] || [ "$(cat http.status)" != "0" ]; then
+        echo "TEST FAIL: lane fast curl status $(cat http.status 2>/dev/null || echo missing), want 0"
+        exit 1
+    fi
+    if ! bash scripts/assert-pcap-gateway-arp.sh whimbrel.pcap; then
+        echo 'TEST FAIL: lane pcap gateway ARP assertion'
+        exit 1
+    fi
+    if ! bash scripts/assert-pcap-http.sh whimbrel.pcap; then
+        echo 'TEST FAIL: lane pcap HTTP assertion'
+        exit 1
+    fi
+    echo 'TEST PASS: test-m — boot, net, HTTP, fast-release under the M-mode shim'
+
 # T4.1 / D-0055: N=30 recorded + 3 warmup per config, two interleaved
 # batches (configs mixed, recorded trial order shuffled). Writes
 # results/runs.csv, results/phases.csv, results/summary.txt.
