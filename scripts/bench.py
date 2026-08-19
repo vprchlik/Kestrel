@@ -105,6 +105,8 @@ RUNS_FIELDS = [
     "virt",
     "steal_start_ticks",
     "loadavg_1m",
+    "canary_stvec_ns",
+    "canary_page_verify_ns",
     "qemu_cpu",
     "client_cpu",
     "client_granularity_ns",
@@ -1609,6 +1611,12 @@ def cmd_run(args: argparse.Namespace) -> int:
                 "virt": host["virt"],
                 "steal_start_ticks": host["steal_start_ticks"],
                 "loadavg_1m": host["loadavg_1m"],
+                # D-0079 gap fix: the canary lived only in summary.txt
+                # and the console (both uncommitted), so the exhibit's
+                # same-campaign canary gate had no committed artifact to
+                # read. Constant per row, the host-control pattern.
+                "canary_stvec_ns": canary["canary_stvec_ns"],
+                "canary_page_verify_ns": canary["canary_page_verify_ns"],
                 "qemu_cpu": qemu_cpu,
                 "client_cpu": client_cpu,
                 "client_granularity_ns": gran,
@@ -1963,6 +1971,8 @@ def _write_fixture_runs(path: Path, rows: list[dict]) -> None:
         "virt": "none",
         "steal_start_ticks": 0,
         "loadavg_1m": "0.00",
+        "canary_stvec_ns": 1_030_000,
+        "canary_page_verify_ns": 11_900_000,
         "qemu_cpu": 2,
         "client_cpu": 3,
         "client_granularity_ns": 1000000,

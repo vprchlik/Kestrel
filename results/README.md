@@ -1115,6 +1115,8 @@ Two columns, both from the existing per-trial pcap, both extracted by
 
 | column | definition | tshark |
 |---|---|---|
+| `synack_to_http_ns` | **D-0079 gap fix.** pcap: SYN/ACK → HTTP frame. Was memory-only (a header check consumed it while only gitignored pcaps could regenerate it — D-0067-shaped); a column since t47, backfilled there from the pcaps. |
+| `canary_stvec_ns` / `canary_page_verify_ns` | **D-0078/D-0079.** The campaign's canary boot, constant on every row (host-control pattern). The firmware exhibit's same-campaign gate reads these from the pin — summary.txt is uncommitted and cannot carry a gate. |
 | `guest_ftx_ns` | t(guest's first wire TX) − t(first slirp ARP request for 10.0.2.15) | `eth.src != 52:55:0a:00:02:02` |
 | `guest_arp_req_n` | count of guest-sourced ARP requests | `arp.opcode==1 && eth.src != 52:55:0a:00:02:02` |
 

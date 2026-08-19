@@ -5424,6 +5424,68 @@ D-0011 onward are working decisions made under those constraints.
     21 does not list. Candidate explanation only (the safe arm's
     +0.9 ms does not scale with it cleanly); recorded for item 21's
     next revision, not concluded.
+- **Console bytes are a fourth seam effect — mechanism confirmed in
+  general, refuted for the anomaly it was proposed to explain
+  (2026-08-19).** Tested per sign-off before pinning any threshold.
+  - **Direct count, fast profile (the falsifier-2 comparator):** the
+    entire in-window guest output is `HTTP READY` — 12 bytes on the
+    OpenSBI lane (DBCN CRLF-translates) vs 11 under the shim — and
+    it lands inside the `established→E3g` window, which the seam set
+    already excludes. `page_verify` prints **zero** bytes in fast
+    (`println!` compiles out; verified in the trial serials, not
+    inferred from source). The console-byte hypothesis therefore
+    **cannot** explain the −51.9 µs fast-pair `page_verify` move.
+  - **But the mechanism is real and measured, on the safe pair.**
+    Per-phase lane delta over known in-window byte counts:
+    `page_verify` −5.47 ms / 4,250 B = **−1.29 µs/B**; `virtq_init`
+    −2.93 / 2,049 = −1.43; `task_init` ≈ −1.34; the net segment
+    ≈ −1.27; `stvec` −3.58 µs/B is the outlier exactly because it
+    also carries the DBCN-probe seam. A consistent **δ ≈ −1.3 µs
+    per byte** (DBCN dearer than the polled UART) across ~9.2 KB of
+    independent segments. Generalisation: ~13.1 KB × 1.3 ≈ **−17 ms
+    of the safe-pair E2→E3g delta is console-lane artifact**, which
+    hardens the existing rule from "safe rows are lane-internal" to
+    *per-phase cross-lane comparison is contaminated for every
+    printing phase, at a measured rate*.
+  - **Exclusion criterion upgraded as proposed** — a phase is seam
+    iff it *has a seam call site OR emits in-window console bytes*,
+    both statable from source with no delta in hand. Applied by
+    grep for the fast comparator: `println_always` sites reachable
+    pre-response are the panic path (never on a clean run) and the
+    app's `HTTP READY` (inside `E3g`). **The fast exclusion set is
+    unchanged: {`stvec`, `frame_init`, `E3g`}** — now justified by
+    the stronger criterion.
+  - **The anomaly stands unexplained.** With console ruled out by
+    direct count, the layout/TB hypothesis for `page_verify` −51.9
+    µs is *unproven, not confirmed by elimination*. The direct test,
+    proposed and not run: a same-binary 2×2 — the `bios-none`
+    kernel should boot under OpenSBI too (polled UART and
+    sifive_test work there; `stimecmp` needs OpenSBI's
+    `menvcfg.STCE`, a five-minute check), giving (m-binary, OpenSBI)
+    vs (m-binary, shim) = pure lane effect, and (m-binary, OpenSBI)
+    vs (SBI-binary, OpenSBI) = pure binary effect, ~20 boots per
+    cell. Threshold **not pinned**; the choice — run the 2×2, or
+    adopt two-tier 150 µs with the anomaly disclosed as
+    unexplained — is left to sign-off.
+  - **Nothing published depends on a cross-lane per-phase comparison
+    of a printing phase**: no cross-lane number is published at all
+    (t47 is not a publication basis; every exhibit is
+    OpenSBI-only), and the recorded falsifier-2 analysis excluded
+    `E3g`, the one printing fast phase.
+- **Correction to the campaign-outcome block above (2026-08-19):
+  "stability PASS on all four arms" was a misreport** from a
+  truncated read of the verdict list. Re-running summarize over the
+  now-committed CSVs: three arms and the fast pair's E2→E3g PASS,
+  but **`release-fast-boot` FAILS batch-to-batch stability** —
+  E0→E4 52.596 vs 55.427 ms (Δ 2.83, tol 1.11), `w_ns` +2.79 ms —
+  while `m-release-fast-boot` is flat. The movement sits in the
+  OpenSBI E0-side window and not in guest work, so: the falsifier-2
+  comparator is unaffected; t47's pooled ΔE0→E4 and ΔS are
+  **regime-mixed across batches** (one more reason t47 is not a
+  publication basis); and this bears on the OpenSBI-banner open
+  observation — a ~2.8 ms same-shape move between two batches an
+  hour apart, banner-carrying arm only — where it is recorded and
+  deliberately not resolved.
 - Revisit trigger: any falsifier; QEMU moving the `virt` FDT or
   reset address (checkpoint 0 and the `check_dtb` assert both catch
   it loudly); or the seams demanding a change outside D-0061's
