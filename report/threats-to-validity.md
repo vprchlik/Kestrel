@@ -258,22 +258,26 @@ item is mitigated-and-measured or stated.
     by a measured heal. If an event does occur in a campaign it
     should cost ~+52 ms, and `guest_ftx_ns` / `guest_arp_req_n`
     record it per trial rather than losing it (D-0075).
-    (c) **The events stopped because of the delay, not the
-    function — so the cost in (a) is load-bearing.** A fourth arm
-    removed the netlink call entirely and replaced it with a spin
-    of the same 2.87 ms: the announce stayed at 168.6 ms and
-    k stayed 0 (D-0076 Arm S). Across five configurations the
-    announce instant tracks the event rate perfectly and the
-    presence of the call does not — it is absent both in the one
-    config that collides (announce 165.4 ms, 25/550) and in one
-    that does not. The `rtnl_lock` serialisation reading is
-    refuted, and the margin, which D-0074 first offered as a
-    predictor, is not the coordinate either. The consequence for a
-    reader: the 2.87 ms that inflates this baseline is also the
-    entire protection, so anything that makes `/init`'s
-    pre-announce path cheaper re-arms the race, and the rate must
-    be re-measured rather than inherited. One confound is open —
-    the colliding run was recorded nine hours before the others and
-    its announce distribution is tighter (1.3 ms p10–p90 against
-    5.0–5.2 ms), so a host difference is not excluded; the null arm
-    that would close it is specified in D-0076 and not yet run.
+    (c) **Why the events stopped is not established, and the
+    rate is a property of the host rather than of the image.** Four
+    diagnostic arms narrowed this and then overturned it (D-0076).
+    The `rtnl_lock` serialisation reading is refuted: removing the
+    netlink call while holding the announce late leaves k = 0. But
+    the null arm — pre-fix source rebuilt and run the same day —
+    returned the announce to 165.6 ms and produced **7 events in
+    600 boots (1.17 %)**, not the 4.55 % measured nine hours
+    earlier on that same source. Per-boot, the events are a
+    distinct **early announce mode at ~156.4 ms**, ~9 ms below the
+    clean median; it occurred on 4.73 % of boots that morning and
+    1.67 % of boots that afternoon. So the published 25/550 rate
+    measures how often the boot timeline lands in that mode on a
+    given day. Two things follow for a reader. **The 2.87 ms in
+    (a) may also be the protection** — within the early mode the
+    shift is associated with 0 collisions where the unshifted case
+    gives 70–96 % — so anything making `/init`'s pre-announce path
+    cheaper may re-arm the race and the rate must be re-measured,
+    not inherited. And **"no event in 6200 boots" is really "no
+    event in 11 informative boots"**: only early-mode boots can
+    collide, and there were 11 of them across the three
+    fix-bearing configurations. Every no-event count in this
+    section should be read with that denominator.

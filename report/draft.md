@@ -769,30 +769,30 @@ maintained in [threats-to-validity.md](threats-to-validity.md).
     announce observes neither (D-0074).
 
 20. **T4.8b's Linux `/init` is not T4.8's** (D-0075/D-0076). The
-    ~4.5% lost-solicit event is campaign-fatal, so `/init` now
-    shortens the `neigh` retransmit from 1 s to 50 ms via one
-    `RTM_SETNEIGHTBL` before the announce. That call is on the
-    measured path and inflates the Linux baseline by a measured
-    **2.87 ms** (`T_NEIGH` stamp; ~1.5% of the 188 ms cross-system
-    delta) — a bias toward Whimbrel, applied identically to stock and
-    trimmed so the trim comparison is unaffected. An earlier
-    "sub-millisecond" estimate was wrong by 3x, which is why the cost
-    is stamped rather than argued. The heal it installs is
-    **unexercised**: the event did not recur once in 6200 boots
-    across three configurations carrying the fix, so the timer-wheel
+    lost-solicit event is campaign-fatal, so `/init` now shortens the
+    `neigh` retransmit from 1 s to 50 ms via one `RTM_SETNEIGHTBL`
+    before the announce. That call is on the measured path and
+    inflates the Linux baseline by a measured **2.87 ms** (`T_NEIGH`
+    stamp; ~1.5% of the 188 ms cross-system delta) — a bias toward
+    Whimbrel, applied identically to stock and trimmed so the trim
+    comparison is unaffected. An earlier "sub-millisecond" estimate
+    was wrong by 3x, which is why the cost is stamped rather than
+    argued. The heal it installs is **unexercised**: the event has
+    not recurred in any fix-bearing configuration, so the timer-wheel
     arithmetic behind the 50 ms constant is read out of the 6.18.7
-    source and has never been observed. And it stopped the events by
-    its **delay, not its function** — a fourth arm replaced the call
-    with a spin of the same 2.87 ms and k stayed 0, and across five
-    configurations the announce instant tracks the rate while the
-    call's presence does not (D-0076 Arm S). The cost above is
-    therefore also the protection: anything making the pre-announce
-    path cheaper re-arms the race, and the rate must be re-measured
-    rather than inherited. One confound is open — the colliding run
-    predates the others by nine hours and its announce spread is
-    tighter — and the null arm that would close it is specified, not
-    run. Per-trial `guest_ftx_ns` / `guest_arp_req_n` make any
-    recurrence countable rather than fatal.
+    source and has never been observed. Why the events stopped is
+    **not** established, and four diagnostic arms overturned two
+    successive readings of it (D-0076). What per-boot analysis does
+    show: the events are a distinct early announce mode at ~156.4 ms,
+    which occurred on 4.73% of boots one morning and 1.67% of boots
+    that afternoon on the same source — so the published 4.55% rate
+    measures a host state, not the image. Two consequences: the 2.87
+    ms may also be the protection, so anything making the
+    pre-announce path cheaper may re-arm the race; and "no event in
+    6200 boots" is really **no event in 11 informative boots**, since
+    only early-mode boots can collide. Per-trial `guest_ftx_ns` /
+    `guest_arp_req_n` make any recurrence countable rather than
+    fatal.
 
 ---
 

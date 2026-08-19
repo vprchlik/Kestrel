@@ -4331,9 +4331,10 @@ D-0011 onward are working decisions made under those constraints.
 
 ## D-0076: A diagnostic image that restores the collision, to test the heal path
 
-- Date: 2026-08-19 — Status: accepted (three arms run; k = 0 in all,
-  so the heal path is **still** unexercised, and Arm S refutes the
-  serialisation reading — see Outcome and Arm S outcome).
+- Date: 2026-08-19 — Status: accepted, **with its mechanism
+  conclusion retracted by Arm N** (four arms run; the heal path is
+  still unexercised; see Arm N outcome, which supersedes the Arm S
+  reading and strikes the collision-window bound).
   Diagnostic only: **never a campaign arm, never a published row,
   never in `bench/linux/artifacts/` or MANIFEST.**
 - **Why.** D-0075's validation returned k = 0 in 5000 boots. The
@@ -4649,11 +4650,112 @@ D-0011 onward are working decisions made under those constraints.
     host; announce at ~168 ms with k = 0 would mean neither `/init`
     change explains anything and the suppression is environmental.
     ~5 minutes; not run, because it is a new pre-registration.
-- Revisit trigger: any falsifier; T4.8b being run before this
-  question is closed, which the entry exists to prevent; or a QEMU,
-  kernel or Buildroot change, which re-rolls the boot timeline and
-  therefore the collision — if events reappear in a later campaign,
-  the passive signature logging (D-0075) counts them and this entry
-  is where to start. **Add to that any change that makes `/init`'s
-  pre-announce path faster**, which Arm S shows is the same thing as
-  re-arming the race.
+- **Arm N — the null control, pre-registered 2026-08-19 after Arm S
+  and before it was run.** The pre-fix `/init` rebuilt and run *now*:
+  netlink call removed, **nothing** put in its place, stock `neigh`
+  parameters. It is the one comparison Arm S could not make, because
+  Arm S's counterpart — the colliding 25/550 run — was recorded nine
+  hours earlier.
+  - **Why it is worth five minutes.** The confound is the kind that
+    **retracts** rather than qualifies. Every config that fails to
+    collide was recorded between 11:17 and 13:20; the one that
+    collides was recorded at 04:08, and its announce distribution is
+    visibly tighter (p10–p90 **1.30 ms** against 5.0–5.2 ms
+    everywhere since). That is positive evidence something about the
+    host differed, not merely an absence of control.
+  - **Second time today an early-morning run has anchored a
+    conclusion.** The D-0074 pilot's 1-in-50 came from the same
+    session. If Arm N indicts the host, **both** rate estimates —
+    the pilot's 1/50 and the pre-registered 25/550 — re-read as
+    measurements of a host state rather than of the image, and
+    D-0074's rate arithmetic goes with them.
+  - **Protocol.** N = 600, `Image-trimmed` unchanged, diagnostic cpio
+    outside the repo, campaign argv and pins, D-0055 controls before
+    and after, hashes frozen before boot 1.
+  - **Arm validity.** `T_NEIGH − T_IFUP` ≤ 0.05 ms (nothing replaced
+    the call); no boot with ≥ 2 guest ARP requests; every event
+    conforms to the D-0074 signature on the **pre-fix** band
+    [0.95, 1.10] s. Cliff crossings are expected if k > 0.
+  - **Branches, both fixed in advance and leading opposite ways.**
+    - **Announce 165.43 ± 1.0 ms *and* k in [2.27 %, 9.09 %] →
+      INSTANT CONFIRMED.** The host is excluded, the 2.87 ms of
+      pre-announce work is causal, and D-0076's conclusion — with
+      its standing warning that the cost is the protection — stands.
+    - **Announce not back to 165.43 ± 1.0 ms → ENVIRONMENTAL.** The
+      boot timeline moved for reasons `/init` does not control.
+      **D-0076's conclusion retracts**: neither the call nor its
+      cost is shown to suppress anything, and the two rate estimates
+      above must be re-read.
+    - **Announce back but k outside the band → SPLIT.** The instant
+      is restored and the collision is not, so neither `/init`
+      timing nor the call explains the suppression and something
+      else changed since 04:08. **D-0076 retracts** on the same
+      terms.
+  - **What it does not decide.** Whether T4.8b runs. The campaign is
+    safe on 0/5000 in the deployed image either way; Arm N settles
+    only what the report may *say* about why.
+- **Arm N outcome (2026-08-19). Pre-registered verdict: SPLIT.
+  D-0076's mechanism conclusion retracts.** 600 boots, validity
+  passed (`T_NEIGH − T_IFUP` = 0.0031 ms, no ≥ 2-ARP boot, 0
+  nonconforming events). The announce returned to **165.64 ms**
+  (target 165.43 ± 1.0) — but **k = 7 (1.17 %)**, outside
+  [2.27 %, 9.09 %], with 7 cliff crossings. The instant came back and
+  the rate did not. Per the branch written in advance: neither
+  `/init` timing nor the netlink call is shown to explain the
+  suppression, and something else changed since 04:08.
+- **Post-hoc analysis of the collected data — labelled as such,
+  because it is not what any of this was pre-registered to test.**
+  Grouping every boot of every arm by its announce instant shows the
+  events are not the low tail of one distribution. They are a
+  **distinct early mode at ~156.4 ms**, about 9 ms below the clean
+  median:
+
+  | run | early-mode boots (announce < 163 ms) | of which events |
+  |---|---|---|
+  | pre-fix, 04:08, n=550 | 26 (4.73 %) | **25** |
+  | Arm N, now, n=600 | 10 (1.67 %) | **7** |
+  | validated, now, n=5000 | 7 (0.14 %), at 159.3–160 ms | 0 |
+  | Arm C, now, n=600 | 3 (0.50 %), at 159.2–160 ms | 0 |
+  | Arm S, now, n=600 | 1 (0.17 %), at 159.7 ms | 0 |
+
+  The D-0074 failing boot's announce was 156.57 ms — the same mode.
+  Three consequences, none of them flattering to what this entry
+  concluded an hour ago.
+  1. **The collision-window bound recorded above is struck.**
+     "(166.3, 167.6) ms, a ~1.3 ms window" was derived from
+     cross-run percentiles on the assumption that events sit in the
+     low tail of the announce distribution. They sit in a separate
+     mode. The bound was wrong, and it was wrong because it was
+     computed from summary statistics of pooled runs rather than
+     from the per-boot join that was available the whole time.
+  2. **The rate is a property of the host, not of the image.** The
+     early mode occurred on 4.73 % of boots at 04:08 and 1.67 % of
+     boots now, on the **same source**. Both rate estimates anchored
+     on that session — the 1/50 pilot and the pre-registered
+     25/550 — measure how often the boot timeline lands in that
+     mode on that day, not a property of `Image-trimmed`. D-0074's
+     rate arithmetic and its P(campaign completes) figures inherit
+     that caveat.
+  3. **"0 in 5000" was really 0 in 7.** Only early-mode boots can
+     collide; the other 4993 never had the opportunity. Across the
+     three fix-bearing configurations the informative sample is
+     **11 boots, not 6200**. Against a within-mode collision rate of
+     70 % (Arm N) to 96 % (pre-fix), 0/11 is still evidence that the
+     2.87 ms shift protects within the mode — but it is eleven
+     boots' worth, and every statement of the form "no event in N
+     thousand boots" in this log and in the report must be read with
+     that denominator.
+- **What survives.** The deployed image is not worse than the
+  pre-fix one on any measurement taken; the passive signature
+  logging counts any recurrence; and the shift plausibly protects
+  within the early mode. What does **not** survive is the claim that
+  the mechanism is understood, and the specific numbers struck
+  above.
+- Revisit trigger: any falsifier; a QEMU, kernel or Buildroot
+  change, which re-rolls the boot timeline and therefore the
+  collision — if events reappear in a later campaign, the passive
+  signature logging (D-0075) counts them and this entry is where to
+  start. Add to that any change that makes `/init`'s pre-announce
+  path faster. **The next real question is what puts a boot into the
+  ~156.4 ms early mode**, which is now the one thing worth
+  instrumenting and has never been looked at.
