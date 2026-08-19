@@ -205,10 +205,17 @@ pub fn shutdown() -> Sbiret {
                 SIFIVE_TEST_PASS,
             );
         }
-        return Sbiret {
-            error: SBI_ERR_NOT_SUPPORTED,
-            value: 0,
-        };
+        // Never return: QEMU processes the exit on its main loop, so
+        // the store completes and the vCPU keeps executing until the
+        // teardown lands. Returning here raced that teardown into the
+        // caller's "shutdown failed" panic on 1 of ~80 campaign trials
+        // (t47 first attempt) — the trial was perfect, the exit lost
+        // the race. Park instead: a wrong value or a dead device now
+        // parks into the gate's 124 HANG, which is the same loud
+        // verdict the SRST path gets from a hung ecall.
+        loop {
+            unsafe { core::arch::asm!("wfi", options(nomem, nostack)) };
+        }
     }
     #[cfg(not(feature = "bios-none"))]
     {
