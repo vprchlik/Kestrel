@@ -837,6 +837,7 @@ run on the bench host; the T4.8 exhibit stays the before.
 - [Edges exhibit](exhibits/edges.md)
 - [Dump placement exhibit](exhibits/dump-placement.md)
 - [Cross-system exhibit](exhibits/cross-system.md)
+- [Cross-system T4.8b exhibit](exhibits/cross-system-t48b.md)
 - [Linux boot decomposition](exhibits/linux-decomposition.md)
 - [D-0070 pcap pass exhibit](exhibits/d0070-pcap.md) (generated on
   the bench host; committed from there)
