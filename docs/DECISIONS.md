@@ -5586,16 +5586,16 @@ D-0011 onward are working decisions made under those constraints.
     sha256 lands in every shim row's `bios_sha256`. If the canary
     yields no PHASE dump the campaign aborts before trial 1.
   - **Claims (design (d)).**
-    (i) **ΔE2→E3g, pooled, stability-gated** — guest work, the
+    Claim A: **ΔE2→E3g, pooled, stability-gated** — guest work, the
     primary claim.
-    (ii) **ΔE0→E4, reported per batch**, with the OpenSBI-side
+    Claim B: **ΔE0→E4, reported per batch**, with the OpenSBI-side
     volatility disclosed as a property of the quantity being
     removed (the firmware window has moved ±3 ms on an hour
     timescale on this host; per-trial `w_ns` records it).
     **Registered now, before the run:** a batch-to-batch stability
     failure that is confined to the OpenSBI fast arm's E0-side
     metrics (`e0_to_e4_ns`, `w_ns`) does **not** abort the
-    campaign; it demotes claim (ii) from pooled to per-batch. Every
+    campaign; it demotes claim B from pooled to per-batch. Every
     other stability failure — any guest-work metric, any other
     arm — aborts as always. This demotion rule is registered before
     the run, not chosen after seeing one.
@@ -5609,9 +5609,10 @@ D-0011 onward are working decisions made under those constraints.
     **{`stvec`, `frame_init`, `E3g`}** (the only fast in-window
     print, `HTTP READY`, lands inside `E3g`). *The falsifier:* on
     the fast pair (`m-release-fast-boot` − `release-fast-boot`,
-    per-phase Δ of recorded medians), fire if
-    (i) any non-seam phase has |Δ| > **150 µs**, or
-    (ii) |Σ of signed Δ over all non-seam phases| > **150 µs**.
+    per-phase Δ of recorded medians), fire if either tier trips:
+    the **per-phase tier** — any non-seam phase has |Δ| >
+    **150 µs** — or the **sum tier** — |Σ of signed Δ over all
+    non-seam phases| > **150 µs**.
     *Floor derivation:* measured ambient lane systematic ≤ 56 µs
     per phase (2×2, same binary across lanes), non-seam binary term
     ≤ 16 µs, batch-split noise ≤ 8.1 µs, measured signed sum
@@ -5632,20 +5633,28 @@ D-0011 onward are working decisions made under those constraints.
     ΔS < −0.3 ms or |ΔS| > 3 ms. S is never pooled across lanes;
     the shim-safe arm's S is a known open anomaly with no consumer
     and does not gate anything.
-  - **Falsifiers 1, 3, 4, 5, 6 (unchanged).**
-    1. `m-release-fast-boot` E0→E4 median ≥ the same batch's
-       `release-fast-boot` median — no improvement; stop, publish
-       nothing.
-    3. **Any M-mode trap in any serial of any trial or gate — the
-       shim's `M!` diagnostic line — is the falsifier, not a bug to
-       fix.** Stop.
-    4. Any `just test-m` gate that passes on `-bios default` and
-       fails under the variant. Stop.
-    5. The published `-bios default` rows (the t48b exhibit pins)
-       move at all. The variant is additive; stop.
-    6. Saving < 2× the largest remaining S-mode rung
-       (2 × `virtq_init` 0.84 ms ≈ 1.7 ms) — D-0061 abandon
-       criterion (b); abandon and write up the partial result.
+  - **Falsifier 1 (amended — baseline moved, disclosed).**
+    `m-release-fast-boot` E0→E4 median ≥ the same batch's
+    `release-fast-boot` median — no improvement; stop, publish
+    nothing. *Amendment:* the original baseline was t48b's fixed
+    51.87 ms; it is now the same batch's OpenSBI fast median,
+    because the banner volatility makes a fixed cross-campaign
+    number the wrong comparator under design (d) and D-0078's
+    no-cross-campaign-pooling rule. The change is directionally
+    **looser** when the banner runs inflated (t47's OpenSBI fast
+    read 54.27 ms against t48b's 51.87) — immaterial at the
+    observed ~26 ms margin, but disclosed rather than absorbed.
+  - **Falsifiers 3, 4, 5, 6 (unchanged).**
+    Falsifier 3: **Any M-mode trap in any serial of any trial or
+    gate — the shim's `M!` diagnostic line — is the falsifier, not
+    a bug to fix.** Stop.
+    Falsifier 4: Any `just test-m` gate that passes on
+    `-bios default` and fails under the variant. Stop.
+    Falsifier 5: The published `-bios default` rows (the t48b
+    exhibit pins) move at all. The variant is additive; stop.
+    Falsifier 6: Saving < 2× the largest remaining S-mode rung
+    (2 × `virtq_init` 0.84 ms ≈ 1.7 ms) — D-0061 abandon criterion
+    (b); abandon and write up the partial result.
   - **Report back, in this shape:** the `summary.txt` header
     verbatim (canary line, lane-separated S lines, stability
     section with its per-arm PASS/FAIL lines and `N/M arms PASS`
