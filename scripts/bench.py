@@ -1899,18 +1899,32 @@ def cmd_summarize(args: argparse.Namespace) -> int:
             "## stability (two interleaved batches, metrics ≥ 1 ms; "
             "not within-batch arm comparison)"
         )
+        n_pass = 0
         for cfg, items in sorted(by_cfg.items()):
             items.sort()
             if len(items) < 2:
                 failed.append(f"{cfg}: need ≥2 batches, have {len(items)}")
+                lines.append(f"{cfg}: FAIL (need ≥2 batches)")
                 continue
             a, b = items[-2], items[-1]
             bad = compare_stability(a[1], b[1])
             if bad:
+                # D-0079 reader fix: a failing arm previously got no
+                # verdict token in this section (detail went to stderr
+                # at the end), so a reader of the section alone saw
+                # only PASS lines — a short list that reads complete.
+                # The section now carries every arm's verdict and a
+                # totals line, so truncation is visible.
+                lines.append(
+                    f"{cfg}: {a[0]} vs {b[0]} FAIL "
+                    f"({len(bad)} metrics; detail in TEST FAIL below)"
+                )
                 failed.append(f"{cfg} {a[0]} vs {b[0]}:")
                 failed.extend("  " + x for x in bad)
             else:
+                n_pass += 1
                 lines.append(f"{cfg}: {a[0]} vs {b[0]} PASS")
+        lines.append(f"stability: {n_pass}/{len(by_cfg)} arms PASS")
         lines.append("")
 
     text = "\n".join(lines) + "\n"
