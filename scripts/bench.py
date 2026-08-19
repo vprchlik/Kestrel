@@ -49,9 +49,17 @@ _SCRIPTS = Path(__file__).resolve().parent
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 from pcap_http import (  # noqa: E402
+    ARP_FILTER,
+    GUEST_ARP_REQ_FILTER,
+    GUEST_TX_FILTER,
     PcapExtractError,
+    SLIRP_MAC,
+    SYN_IN_FILTER,
+    _time_ns,
+    _time_s,
     assert_no_rst,
     assert_syn_grid,
+    tshark_table,
 )
 
 SAFE_CONFIG = "release-default"
@@ -114,6 +122,23 @@ RUNS_FIELDS = [
     "guest_arp_req_n",
     "attempts",
     "pcap_path",
+]
+# D-0077. Every gate on the trial path raises before the row is built,
+# so a failing trial used to vanish from the record entirely — which
+# defeats D-0075 item 4 exactly when it matters. These rows are
+# diagnostic: they never enter runs.csv and never reach aggregation.
+GATE_FAILURE_FIELDS = [
+    "batch_id",
+    "trial",
+    "warmup",
+    "system",
+    "config",
+    "run_order",
+    "guest_ftx_ns",
+    "guest_arp_req_n",
+    "syn_grid_dt_ns",
+    "pcap_path",
+    "gate",
 ]
 PHASES_FIELDS = [
     "batch_id",
@@ -811,6 +836,66 @@ def write_csv(path: Path, fields: list[str], rows: list[dict]) -> None:
             w.writerow({k: row.get(k, "") for k in fields})
 
 
+def append_csv(path: Path, fields: list[str], row: dict) -> None:
+    """Append one row, writing the header if the file is new."""
+    new_file = not path.is_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a", encoding="utf-8", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
+        if new_file:
+            w.writeheader()
+        w.writerow({k: row.get(k, "") for k in fields})
+
+
+def gate_failure_signature(pcap: Path) -> dict:
+    """Best effort, never raises. A recorder must not need a gate to pass."""
+    out: dict = {}
+    try:
+        tshark = require_tshark()
+        rows = tshark_table(pcap, tshark, GUEST_TX_FILTER)
+        arp = tshark_table(pcap, tshark, GUEST_ARP_REQ_FILTER)
+        slirp_arp = tshark_table(pcap, tshark, ARP_FILTER)
+        out["guest_arp_req_n"] = len(arp)
+        if rows and slirp_arp:
+            t_tx = _time_ns(rows[0])
+            out["guest_ftx_ns"] = t_tx - _time_ns(slirp_arp[0])
+            syn = tshark_table(pcap, tshark, SYN_IN_FILTER)
+            flushed = [r for r in syn if _time_ns(r) >= t_tx]
+            if flushed:
+                out["syn_grid_dt_ns"] = _time_ns(flushed[0]) - t_tx
+    except Exception:  # noqa: BLE001 — diagnostics must not mask the gate
+        pass
+    return out
+
+
+def gate_failures_path() -> Path:
+    return ROOT / "results" / "gate-failures.csv"
+
+
+def record_gate_failure(
+    *, batch_id: str, trial: int, is_warmup: int, system: str, config: str,
+    run_order: int, pcap: Path, gate: str, out_path: Path | None = None,
+) -> None:
+    row = {
+        "batch_id": batch_id,
+        "trial": trial,
+        "warmup": is_warmup,
+        "system": system,
+        "config": config,
+        "run_order": run_order,
+        "pcap_path": os.path.relpath(pcap, ROOT) if pcap.is_file() else "",
+        "gate": " ".join(gate.split())[:240],
+    }
+    row.update(gate_failure_signature(pcap))
+    dest = out_path or gate_failures_path()
+    append_csv(dest, GATE_FAILURE_FIELDS, row)
+    print(
+        f"bench: GATE FAILURE recorded to {os.path.relpath(dest, ROOT)} "
+        f"({system}/{config} trial={trial}): {row['gate'][:100]}",
+        flush=True,
+    )
+
+
 def read_csv(path: Path) -> list[dict]:
     if not path.is_file():
         raise BenchFail(f"TEST FAIL: {path} missing")
@@ -1322,19 +1407,30 @@ def cmd_run(args: argparse.Namespace) -> int:
             flush=True,
         )
         steal0 = read_steal_ticks()
-        result = run_trial(
-            arm=arm,
-            extra=extra,
-            pcap=pcap,
-            serial_path=serial_path,
-            client_out=client_out,
-            ready_path=ready_path,
-            qemu_cpu=qemu_cpu,
-            client_cpu=client_cpu,
-            port=port,
-            client_timeout_s=client_timeout_s,
-            qemu_wait_s=qemu_wait,
-        )
+        try:
+            result = run_trial(
+                arm=arm,
+                extra=extra,
+                pcap=pcap,
+                serial_path=serial_path,
+                client_out=client_out,
+                ready_path=ready_path,
+                qemu_cpu=qemu_cpu,
+                client_cpu=client_cpu,
+                port=port,
+                client_timeout_s=client_timeout_s,
+                qemu_wait_s=qemu_wait,
+            )
+        except BenchFail as e:
+            # D-0077: every gate in run_trial raises before the row is
+            # built. Record the trial that failed before letting the
+            # abort proceed — one call site, not 18 raise sites.
+            record_gate_failure(
+                batch_id=batch_id, trial=trial, is_warmup=is_warmup,
+                system=arm.system, config=config, run_order=run_order,
+                pcap=pcap, gate=str(e),
+            )
+            raise
         steal_delta = read_steal_ticks() - steal0
         if steal_delta < 0:
             raise BenchFail("TEST FAIL: /proc/stat steal went backwards")
@@ -1379,6 +1475,18 @@ def cmd_run(args: argparse.Namespace) -> int:
                 "attempts": result["attempts"],
                 "pcap_path": rel_pcap,
             }
+        )
+        # D-0077: the signature was recorded correctly all along and
+        # emitted nothing, so it read as broken. An instrument nobody
+        # can see is one nobody checks.
+        ftx = result["guest_ftx_ns"]
+        print(
+            f"bench:   guest_ftx={ftx / 1e6:.1f} ms "
+            f"arp_req={result['guest_arp_req_n']} "
+            f"e0_to_e4={result['e0_to_e4_ns'] / 1e6:.1f} ms"
+            if isinstance(ftx, int)
+            else f"bench:   guest_ftx=- arp_req={result['guest_arp_req_n']}",
+            flush=True,
         )
         for ph in result["phases"]:
             phase_rows.append(
@@ -2147,6 +2255,76 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
                 f"{got_no_garp['guest_ftx_ns']} want 30000000 (the SYN/ACK)"
             )
         fired.append("guest ARP-loss signature is passive (absent → 0, no fail)")
+
+        # D-0077: the anchor must ignore a guest frame that is neither
+        # ARP nor IPv4 — stock's IPv6 DAD solicit preceded the ARP on 1
+        # boot in 92 and was read as 6.45 ms of delivery delay.
+        guest_mac = bytes.fromhex("525400123456")
+        v6 = (bytes.fromhex("3333ff123456") + guest_mac
+              + bytes.fromhex("86dd") + bytes(46))
+        # An inbound SYN toward :80; the shared fixture has only the
+        # guest's SYN/ACK. eth(14) + ip(20) + 13 = the TCP flags byte.
+        syn_in = bytearray(frames[4][0])
+        syn_in[47] = 0x02
+        v6_pcap = td_path / "ipv6-first.pcap"
+        write_frames(v6_pcap, [
+            (frames[0][0], 0),          # slirp ARP
+            (v6, 12_000),               # guest ICMPv6 (the D-0077 shape)
+            (frames[1][0], 20_000),     # guest ARP request
+            (bytes(syn_in), 20_500),    # SYN flushed 500 µs later
+            (frames[2][0], 31_000),     # SYN/ACK
+        ])
+        # New anchor: the ARP, so the gate passes at 500 µs.
+        dt = assert_syn_grid(v6_pcap, tshark)
+        if abs(dt - 0.0005) > 1e-6:
+            raise BenchFail(
+                f"TEST FAIL: SYN-grid anchored on the IPv6 frame "
+                f"(dt={dt:.6f}s, want 0.000500 from the guest ARP)"
+            )
+        # Old anchor: the IPv6 frame, so the same trial would have
+        # failed at 8.5 ms. The fixture must reproduce that, or it is
+        # not testing D-0077.
+        old_rows = tshark_table(v6_pcap, tshark, f"eth.src != {SLIRP_MAC}")
+        old_dt = 0.0205 - _time_s(old_rows[0])
+        if not (old_rows and abs(old_dt - 0.0085) < 1e-6):
+            raise BenchFail(
+                "TEST FAIL: fixture does not reproduce the D-0077 shape "
+                f"(old-anchor dt={old_dt:.6f}s, want 0.008500)"
+            )
+        fired.append(
+            "SYN-grid anchor ignores a non-IPv4 guest frame: 0.5 ms new "
+            "vs 8.5 ms old on the same pcap (D-0077)"
+        )
+
+        # A gate that raises must still leave a record.
+        gf = td_path / "gate-failures.csv"
+        record_gate_failure(
+            batch_id="b", trial=29, is_warmup=0, system="linux",
+            config="stock", run_order=125, pcap=v6_pcap,
+            gate="TEST FAIL: SYN-grid: t(SYN)-t(guest first TX)=0.006454s",
+            out_path=gf,
+        )
+        gf_rows = read_csv(gf)
+        if len(gf_rows) != 1 or gf_rows[0]["trial"] != "29":
+            raise BenchFail(f"TEST FAIL: gate failure not recorded: {gf_rows}")
+        if gf_rows[0]["guest_arp_req_n"] != "1":
+            raise BenchFail(
+                "TEST FAIL: gate-failure row lost the passive signature: "
+                f"{gf_rows[0]}"
+            )
+        record_gate_failure(
+            batch_id="b", trial=30, is_warmup=0, system="linux",
+            config="stock", run_order=126, pcap=td_path / "no-such.pcap",
+            gate="TEST FAIL: pcap missing", out_path=gf,
+        )
+        if len(read_csv(gf)) != 2:
+            raise BenchFail(
+                "TEST FAIL: recorder dropped a row when the pcap was absent; "
+                "diagnostics must not need a gate to pass"
+            )
+        fired.append(
+            "gate-failing trial is recorded before the raise, pcap or not"
+        )
         order_cases = [
             (
                 "SYN/ACK before slirp ARP",

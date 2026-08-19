@@ -4809,3 +4809,146 @@ D-0011 onward are working decisions made under those constraints.
   boot, not pooled. Until then the honest statement is that the
   event is a property of the boot timeline, observed but not
   explained.
+
+## D-0077: Anchor the SYN-grid gate on IPv4, and record trials that trip a gate
+
+- Date: 2026-08-19 — Status: accepted (fix applied, verified against
+  every recorded trial; T4.8b restarts from scratch on it)
+- **Decision:**
+  1. The SYN-grid anchor becomes
+     `(arp || ip) && eth.src != 52:55:0a:00:02:02`, not
+     `eth.src != 52:55:0a:00:02:02`. The invariant D-0062 states is
+     the guest's first wire TX; the invariant that actually governs
+     is **the first frame that can teach slirp our IPv4 MAC** — the
+     ARP, or the announce datagram on a warm cache. An IPv6 frame
+     populates slirp's NDP table and cannot flush a queued IPv4
+     hostfwd SYN.
+  2. A trial that trips a gate is **recorded before the gate
+     re-raises**, to `results/gate-failures.csv`. It does not enter
+     `runs.csv` and never reaches aggregation.
+  3. Every trial prints its passive signature to the console.
+  4. The aborted batch `20260819T135230Z-1` is **discarded, not
+     resumed**; T4.8b restarts from scratch.
+- **Evidence — the per-boot frame join, which named it in one look.**
+  `20260819T135230Z-1 stock/29`:
+
+  | # | t (s) | src | proto | |
+  |---|---|---|---|---|
+  | 1 | 0.000000 | slirp | ARP | who-has 10.0.2.15 |
+  | 2 | 0.887353 | **guest** | **ICMPv6** | **NS for fe80::5054:ff:fe12:3456 (DAD)** |
+  | 3 | 0.893785 | guest | ARP | who-has 10.0.2.2 — the announce's solicit |
+  | 4 | 0.893792 | slirp | ARP | reply |
+  | 5 | 0.893807 | slirp | TCP | **SYN → 80, 22 µs after frame 3** |
+
+  The SYN flushed 22 µs after the **ARP**, exactly as on every other
+  trial. Had the ICMPv6 NS flushed it, the SYN would sit at 0.887.
+  The gate anchored on frame 2 and reported 6.454 ms of IPv4 stack
+  work as a delivery delay.
+- **The bound was never the problem.** Stock's SYN-grid interval,
+  measured per trial from the pcaps:
+
+  | arm | n | min | p50 | p90 | max |
+  |---|---|---|---|---|---|
+  | stock, T4.8 (`ffb7ac7`) | 66 | 22 µs | **26 µs** | 27 µs | 31 µs |
+  | stock, aborted T4.8b | 26 | 22 µs | 29 µs | 33 µs | 36 µs |
+  | trimmed | 132 | 19 µs | 24 µs | 27 µs | 34 µs |
+  | whimbrel (both) | ~800 | 13 µs | 17 µs | 22 µs | 25 µs |
+
+  Stock flushes as promptly as everything else. The hypothesis that
+  its ~897 ms first TX puts it deep enough into slirp's queue
+  lifetime to change flush behaviour is **refuted**: queue lifetime
+  does not affect flush latency. The 1 ms bound keeps ~28× headroom
+  over the worst trial ever recorded.
+- **Before/after over every recorded trial (n = 1133, all batches
+  on disk).**
+  - trials whose `dt` changes: **1** — `stock/29`, 6.454 ms → 22 µs
+  - would fail the 1 ms gate, old anchor: **2**
+  - would fail, new anchor: **1 — the D-0074 event
+    (`20260818T143032Z-1 trimmed/02`, 5.023 s) still fails.** The
+    detector stays armed; that was the acceptance condition.
+  - all passing trials, new anchor: 13–36 µs, median 19 µs
+- **Exposure asymmetry: the trim created this.** Only the stock arm
+  can hit it. D-0073 unset `CONFIG_IPV6` in the trimmed fragment,
+  and Whimbrel never had IPv6 at all, so stock is the **only** arm
+  that emits an ICMPv6 frame. Linux jitters the DAD solicit, so it
+  precedes the ARP rarely: 1 boot in 92 stock trials; in the other
+  91 the only in-window IPv6 frame is an MLD report 9–11 ms *after*
+  the ARP. That is why 66 T4.8 stock trials passed and why this
+  looked new.
+  - **The general lesson, worth more than the fix.** A gate shared
+    across arms silently assumes the arms are alike in whatever the
+    gate measures. Trimming one arm's kernel made them unalike in a
+    dimension the gate did not name, and the gate's failure mode was
+    to report the difference as a fault in the measured system.
+    **Any shared gate must be re-derived when one arm's
+    configuration diverges** — the trim list in D-0073 is the list
+    of dimensions along which the arms are now structurally
+    different, and it should be read as a list of places this can
+    recur.
+- **The missing-row defect, recorded as a class rather than a bug.**
+  `run_trial` has **13** `raise BenchFail` sites before its
+  `return {…}`, and `require_pcap_intervals` contributes 5 more
+  inside that span; the row is only appended after `run_trial`
+  returns. So **every** gate on the trial path drops the record of
+  the trial it fails:
+  - client never ready / QEMU timeout / client did not finish
+  - client JSON missing / not the 92-byte RESP
+  - no first-connect stamp, no first-byte stamp (E4)
+  - guest panic; Linux `INIT FAIL` / `READY` missing / `LINUX INIT
+    OK` missing
+  - HTTP `tcp.len` ≠ 92; negative `w_ns`/`d_ack_ns`/`d_fin_ns`;
+    Whimbrel `d_fin ≥ 10 ms` (D-0070 falsify line); `assert_no_rst`
+    (confound B); `assert_syn_grid` (confound A)
+
+  **A fail-closed gate that raises before the record is written
+  defeats every logging requirement downstream of it.** D-0075 item
+  4 promised event trials are kept and published, never dropped; it
+  held for 124 ordinary trials and failed for the one trial anyone
+  wanted. Recording before re-raising is the general repair, and it
+  is placed at the single call site rather than at 18 raise sites.
+  - Not in this class: `check_linux_artifacts` (a batch-start
+    precondition — there is no trial to record) and
+    `linux_kernel_hash_failures` (a post-hoc pass over rows already
+    written).
+- **The instrument that looked absent.** The passive signature was
+  wired correctly and did record per trial — `runs.csv` was rewritten
+  after every trial and survived the abort with 124 rows and
+  populated `guest_ftx_ns`. It emitted nothing to the console, so it
+  read as broken. An instrument nobody can see is one nobody checks;
+  the per-trial line is part of the fix, not decoration.
+- **Alternatives considered.**
+  - **Raise the 1 ms bound.** Rejected: the bound is correct and has
+    28× headroom; raising it to cover a 6.45 ms artifact would blind
+    the gate to real sub-cliff delivery stalls, which is the one
+    thing it exists for.
+  - **Exclude IPv6 by name** (`&& !ipv6`). Rejected as a denylist:
+    it fixes today's protocol and not tomorrow's. `(arp || ip)`
+    states the requirement positively.
+  - **Drop IPv6 from stock too.** Rejected outright: stock is the
+    unmodified board defconfig, and modifying it to suit our gate
+    would destroy the only arm whose configuration we do not choose.
+  - **Write gate-failing trials into `runs.csv` with a flag.**
+    Rejected: they are not measurements, and every consumer would
+    need to learn to filter them. A separate file cannot pollute
+    aggregation by omission.
+  - **Resume the aborted batch.** Rejected: D-0055 requires whole
+    interleaved shuffled batches; a resumed batch is a different
+    randomisation and its trials were recorded under the old anchor.
+- **Consequences.**
+  1. `results/gate-failures.csv` is new. It is diagnostic, never
+     aggregated, and its absence is not an error. It is **ignored**
+     in `results/.gitignore`: `git_identity()` reads
+     `git status --porcelain` once at batch start, which includes
+     untracked files, so a leftover from an aborted campaign would
+     otherwise stamp `dirty=1` on every row of the next one and make
+     it unaggregatable.
+  2. `pcap_http.py`'s anchor changes for all consumers
+     (`bench.py`, `d0070-pcap-pass.py`, `linux-boot-test.sh` via the
+     harness). Verified to change exactly one trial in 1133.
+  3. T4.8b's batch id changes; `20260819T135230Z-1` remains on disk
+     as the aborted attempt and is named in the report as such.
+  4. Console output gains one line per trial.
+- Revisit trigger: any further divergence between arms' kernel
+  configurations (each one is a candidate for the same class of
+  gate assumption); or a libslirp change to how the guest MAC is
+  learned, which is what the new anchor encodes.

@@ -35,7 +35,16 @@ SYN_IN_FILTER = (
 # slirp's default MAC (52:55 + 10.0.2.2). Guest first TX is the first
 # frame not sourced from this address — ARP or the UDP announce.
 SLIRP_MAC = "52:55:0a:00:02:02"
-GUEST_TX_FILTER = f"eth.src != {SLIRP_MAC}"
+# D-0077: `(arp || ip)`, not merely "not from slirp". The anchor has to
+# be the first frame that can teach slirp our **IPv4** MAC; an IPv6
+# frame populates slirp's NDP table and cannot flush a queued IPv4
+# hostfwd SYN. Stock is the only arm with CONFIG_IPV6 (D-0073 unset it
+# in trimmed, Whimbrel never had it), and on 1 boot in 92 its jittered
+# duplicate-address-detection solicit precedes the ARP — which the old
+# anchor reported as 6.45 ms of delivery delay. Positive requirement,
+# not a `!ipv6` denylist. Verified over 1133 recorded trials: exactly
+# one changes, and the D-0074 event still trips the gate.
+GUEST_TX_FILTER = f"(arp || ip) && eth.src != {SLIRP_MAC}"
 # D-0074 item 4 / D-0075: the passive loss signature. guest_ftx_ns is
 # the guest's first wire TX on the same anchor as W (slirp's ARP), so
 # it is a pcap-internal interval like the rest. guest_arp_req_n is the
