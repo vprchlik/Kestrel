@@ -138,3 +138,91 @@ item is mitigated-and-measured or stated.
     the 327.24 ms cell, not replacing it). Not a sixth comparison
     arm. On this Image `FTRACE` is a missed trim. D-0073 acts on
     it; T4.8b is the after.
+19. **`W` fuses guest boot with egress delay; only a guest-internal
+    stamp separates them (T4.8b diagnosis, 2026-08-18).** `w_ns` =
+    t(guest SYN/ACK) − t(slirp ARP) spans the guest's entire
+    boot-to-first-TX, so an inflated `W` is not attributable to
+    boot or to delivery without an instrument that sees the
+    boundary. On the T4.8 pin (`ffb7ac7`), the largest E0→E4 / `W`
+    excursions (+39, +52, +115, +125 ms) were **slow guest boots**
+    — `/init`'s announce stamp late by the same amount, pcap
+    first-TX minus announce normal — not delivery faults. T4.8's
+    egress-attributed tail is ≤ 7.7 ms (stock) and ≤ 4.3 ms
+    (trimmed arms), established read-only by splitting `W` at the
+    `/init` CLOCK_MONOTONIC stamps against pcap first-TX over the
+    recorded per-trial artifacts. Published medians and the
+    188.32 ms trimmed-vs-stock delta are unmoved (≤ 0.037 ms); the
+    stability criterion passes on all five arms. The one observed
+    ~1 s anomaly is a single T4.8b **warmup** trial
+    (`20260818T143032Z-1` trimmed/02: announce at guest-mono
+    156.7 ms, first wire TX at pcap 1.263 s, the queued hostfwd SYN
+    snapped to slirp's ~6 s RTO); the SYN-grid gate fired, the
+    batch aborted, no row published. It is **not** an egress fault.
+    It is a **guest-side lost ARP solicit** (D-0074): the guest's
+    first solicit never reached the TX ring, and the guest's own
+    `neigh` retransmit re-sent it 1.03 s later — past slirp's ~1 s
+    ARP-pending drop, which snapped the queued SYN to the ~6 s RTO.
+    Reproduced 1 in 50 on the bench host under D-0055 controls,
+    matching this trial's `/init` stamps to 0.22 ms.
+
+    **Correction to this item's earlier supporting evidence.** An
+    earlier revision of this item offered the absence of any
+    comparable stall across the recorded campaigns as evidence of
+    robustness. That claim is **withdrawn**, not weakened. It was
+    an absence of *observation* under a detector that fires only
+    when the delay crosses slirp's ~1 s drop and that runs only on
+    Linux trials (a), and it recorded nothing about the quantity
+    that governs the race: the margin between the guest's announce
+    and the last virtio ctrl-vq completion — ~12.4 ms on the
+    current `Image-trimmed`, 0.199 ms on the failing boot. That
+    margin was never measured on any earlier image and cannot be
+    recovered from the recorded artifacts. Those clean boots are
+    equally consistent with the older images having had a larger
+    margin, with sub-cliff instances passing unremarked, and with
+    luck; the evidence does not distinguish them. What is measured
+    is stated in D-0074, whose pre-registered 5000-boot experiment
+    exists to replace the withdrawn inference with a rate.
+
+    **Documented instance of the failure mode (the corollary below
+    is not hypothetical):** during this diagnosis, an analysis pass
+    first attributed the T4.8 excursions above to silent egress
+    stalls by reading Δ(E0→E4) ≈ Δ(`W`) with first-connect flat as
+    a delivery signature — one step after item 17's lesson was
+    recorded in this file. Because `W` fuses boot and delivery,
+    ordinary boot jitter produces that signature exactly as a held
+    frame does; the guest-stamp split reversed the attribution.
+    D-0071's error recurred immediately after being written down,
+    which is evidence the pattern is easy to fall into; the
+    mitigation is the instrument rule, not vigilance. Corollary,
+    beside D-0069's and item 17's: **a metric spanning two
+    subsystems must not be attributed to either without an
+    instrument that sees the boundary.**
+
+    Two harness facts are recorded rather than fixed:
+    (a) **Gate asymmetry — a gap, not just a fact.** The SYN-grid
+    gate tests the relative interval t(SYN) − t(guest first TX)
+    and is blind to the absolute time of first TX, so it detects
+    an egress stall only when the stall pushes first TX past
+    slirp's ~1 s ARP-pending drop — and `bench.py` calls it only
+    for `system=linux` (`run_trial`). Coverage is therefore
+    inversely matched to exposure: Whimbrel fast-boot's silent
+    window below the cliff is ~980 ms (first TX ~24 ms) and
+    ungated; Linux stock's is ~103 ms (first TX ~897 ms) and
+    gated.
+    (b) **Whimbrel's guest-side detector is luck, not design.**
+    D-0056.3 removed the `wfi` from the boot RX waits to
+    un-quantize ARP/ping latency from the 10 ms tick — a
+    correctness decision, not instrumentation. Its side effect is
+    that a held first-TX frame becomes visible in guest time at
+    100 ns grain: `first_rx − DRIVER_OK` stayed flat to 0.56 ms
+    worst-case across ~400 boots, the independent bound on
+    Whimbrel's egress tail. After D-0074 that interval bounds more
+    than egress: it spans request to reply through Whimbrel's own
+    stack, so a solicit lost inside the guest would delay
+    `first_rx` exactly as a held frame would. Linux's `/init`
+    announce is a fire-and-forget `sendto` that observes neither —
+    which is why naming that failure needed the pcap and the QEMU
+    trace. A later rung re-introducing that `wfi` would degrade
+    this visibility to ≥ 10 ms tick grain (D-0056.3's finding-13
+    corollary already constrains such a rung); the protection is
+    contingent, not guaranteed.

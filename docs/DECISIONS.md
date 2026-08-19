@@ -3630,5 +3630,334 @@ D-0011 onward are working decisions made under those constraints.
   enumerated live `select` edges against remaining `=y`
   instead.
 
+## D-0074: The T4.8b stall is a lost guest ARP solicit; measure the rate first
+- Date: 2026-08-19 — Status: accepted (mechanism reproduced on the
+  bench host under D-0055 controls; rate experiment pre-registered,
+  not yet run; the `/init` change is conditional on its verdict)
+- **Decision:**
+  1. **Name the mechanism.** The T4.8b `20260818T143032Z-1`
+     trimmed/02 stall is **not** an egress fault. The guest's first
+     ARP solicit never reached the TX ring; the guest's own `neigh`
+     retransmit re-sent it ~1.03 s later, past slirp's ~1 s
+     ARP-pending drop, which snapped the queued hostfwd SYN to
+     slirp's ~6 s RTO.
+  2. **Measure the rate before deciding runnability.** Run the
+     pre-registered 5000-boot experiment below on the bench host.
+     No T4.8b campaign starts before that verdict.
+  3. **If events appear (k ≥ 3): shorten the heal, do not hide it.**
+     Set the guest's `neigh` retransmit to ~50 ms in `/init` so the
+     loss heals two decades below slirp's cliff. The event still
+     happens at the same rate, still shows on the wire, and becomes
+     a countable ~+50 ms outlier instead of a destroyed trial.
+  4. **Log the signature permanently.** `bench.py` records the
+     per-trial loss signature on every Linux trial, passively. Event
+     trials are **kept and published**, never dropped — dropping
+     them would be selection on the outcome.
+  5. **Validate, then run T4.8b.** A second 5000-boot run on the new
+     cpio must show zero cliff crossings before the campaign.
+  6. **Do not patch slirp's ARP-pending drop.** It is the detector.
+     Removing it converts a loud abort into a silent ~1 s inflation
+     of `W`, which fuses boot and delivery (threats item 19).
+  7. **Do not retry until a batch passes.** The abort policy below
+     is fixed in advance.
+- **Evidence (bench host, mechanism-grade; not report numbers).**
+  D-0055 controls in force (`governor=performance`, `smt=off`,
+  `boost=0`, `virt=none`, steal 0), current `Image-trimmed`
+  (MANIFEST `1bf91509…`), campaign argv and early-started
+  `bench-client`. Per boot: wall-ns-stamped serial, QEMU-internal
+  `-msg timestamp=on` trace of `virtio_queue_notify` /
+  `virtqueue_pop` / `virtio_notify`, a 0.5 ms pcap-size poller
+  joining frame writes to wall time (the D-0071 method), PSI, steal.
+  100 boots in two runs; one event.
+
+  On the failing boot, relative to the QEMU spawn:
+
+  | t | event |
+  |---|---|
+  | +0.217 s | `DRIVER_OK` probe kicks (n=0,1,2) |
+  | +0.262–0.269 s | RX kick, three ctrl-vq (n=2) completions |
+  | +0.2695 s | `/init` announce `sendto` returns (guest-mono 156.57 ms) |
+  | +0.2710 s | `READY` |
+  | +0.2710–1.2980 s | **nothing** — no trace, serial or pcap write |
+  | +1.297985 s | `virtio_queue_notify` n=1 |
+  | +1.298000 s | TX pop (+15 µs); frame in the pcap +89 µs later |
+  | +1.298015 s | RX pop — slirp's ARP reply |
+  | +6.29 s | slirp's SYN retry; the request then completes normally |
+
+  Four facts put the hold on the **guest** side of the boundary:
+  1. **No TX kick exists in the hole.** On every clean boot the n=1
+     kick and pop appear ~10 ms *before* `READY` (the ARP leaves
+     inside `sendto`). Here the kick is not late — it does not exist
+     until +1.298. Kicks travel by ioeventfd (level-triggered); QEMU
+     cannot lose one for a second.
+  2. **Exactly one guest ARP request on the wire** — also one on
+     clean boots. `virtio_net_flush_tx` drains the ring: had solicit
+     #1 been sitting in the avail ring un-kicked, the wake would
+     have popped two frames and the capture would show two ARP
+     requests. It shows one. Solicit #1 never entered the ring.
+  3. **QEMU serviced the wake in 15 µs** (kick→pop), 104 µs
+     kick→pcap write. The main loop was healthy throughout.
+  4. **The resume instant is the guest's own retransmit deadline.**
+     `ftx − announce = 1028.6 ms`. Linux `neigh` default
+     `retrans_time` is 1000 ms; this Image is `CONFIG_HZ=250` with
+     `NO_HZ_IDLE`, so a 250-jiffy `timer_list` lands in wheel level
+     1 (8-jiffy = 32 ms granularity) and expires in [1000, 1032) ms.
+     1028.6 ms is in band. The guest sat in WFI with that timer the
+     only thing armed; its expiry woke QEMU.
+
+  Host-level confounds are excluded on the same boot: PSI io-some
+  1.4 ms over a 1298 ms window (0.11%), steal 0, `vmstat` showing
+  99–100% idle and zero block IO across the hole. PSI **cpu**-some
+  looks 3× a clean boot as a raw delta and is 1.28% as a rate,
+  *below* the clean-boot 1.4–2.3% — the raw delta is window-length
+  bias, the event boot's window being ~15× a clean one. The
+  suspected writeback trigger is also excluded: the 8 GiB `dd`
+  finished 97 s before the run's first boot and 108 s before the
+  event.
+- **The campaign trial is this event, not an analogue.** `/init`
+  stamps, campaign `20260818T143032Z-1` trimmed/02 vs the bench-host
+  reproduction: listen 144.868 / 144.649 ms, ifup 151.775 / 151.592,
+  announce 156.749 / 156.574, ready 158.205 / 158.032, accept
+  6215.432 / 6215.231 — every stamp within 0.22 ms. First guest TX
+  1.263389 s / 1.264267 s (pcap-relative). Exactly one guest ARP
+  request in both.
+- **A margin predictor falls out, and it is continuous.** Define
+  **margin** = announce wall instant − the last virtio ctrl-vq
+  completion before it. Over the 100 recorded boots: clean margins
+  12.28–12.69 ms in both runs; the failing boot **0.199 ms**. One
+  boot sits between — margin 3.917 ms, no loss, but its ARP reached
+  the wire +1.009 ms *after* `sendto` returned instead of the normal
+  −8.4 ms: delayed ~9.4 ms, healed without a retransmit. So this is
+  not a binary event but a race whose margin is measurable on
+  **every** boot. That is what makes a cheap rate experiment worth
+  running, and it gives a per-boot risk observable that does not
+  depend on an event firing.
+
+  The exact in-guest drop site (the `ifup`→first-xmit window:
+  carrier / linkwatch / qdisc class) is **not** identified, and
+  deliberately not chased — see Deferred.
+- **What the instrument overturned — third instance of the same
+  failure.** The live classifier labelled the event `ANOMALY A:
+  egress hold [kick picked up late → main loop]`. That was wrong,
+  and wrong in the shape this log keeps recording:
+  - **D-0071:** an unexplained constant kept a plausible-sounding
+    name; "host-side remainder" did the work "measured delivery"
+    could not.
+  - **Threats item 19's own diagnosis:** Δ(E0→E4) ≈ Δ(`W`) with
+    first-connect flat read as a delivery signature — one step after
+    item 17's lesson was recorded in that file.
+  - **This entry:** the sub-label read the **absence** of a TX kick
+    as a late kick pickup, and named QEMU's main loop.
+
+  The aggravation is the point. The kick stamp was added
+  *specifically* to enforce the boundary rule item 19 demands — and
+  its absence was then read as evidence for a hold on the side it
+  was built to inspect. The instrument was correct; the label
+  inverted its meaning. Three instances, each after the previous
+  lesson was written down, is evidence the pattern recurs **under
+  vigilance**. That is the argument for instrument rules over care:
+  care is what failed each time.
+
+  **Corollary, beside D-0069's, item 17's and item 19's: a
+  classifier's fallback branch must be "unattributed", never the
+  subsystem the instrument was built to inspect.** Absence of
+  evidence in an instrument's own domain is not evidence of a fault
+  in that domain. Implemented rather than merely written down: the
+  taxonomy now requires **positive** evidence for each side —
+  guest-side loss needs one wire ARP plus an empty hole plus sub-ms
+  QEMU-internal steps; an egress hold needs ≥ 2 wire ARPs or an
+  elevated QEMU-internal step — and anything else classifies as
+  `mixed`, which names no subsystem.
+- **Correction to threats item 19's supporting evidence.** Item 19's
+  sentence "No comparable stall appears in six campaigns (~400
+  boots, T4.3 freeze through T4.8)" is **withdrawn as evidence of
+  robustness.** It is an absence of *observation* under a detector
+  that fires only above slirp's ~1 s cliff and that runs only on
+  Linux trials (item 19a), and it records nothing about the quantity
+  that governs the race. That quantity is the margin above: ~12.4 ms
+  on the current `Image-trimmed`, 0.199 ms on the failing boot. It
+  was never measured on any earlier image and cannot be recovered
+  from the recorded artifacts — no guest-internal trace was
+  captured. The ~400 clean boots are equally consistent with those
+  images having had a larger margin, with sub-cliff instances
+  passing unremarked, and with luck; the evidence does not
+  distinguish them.
+- **Excluded from all rate arithmetic:** the earlier interrupted
+  4-in-50 run. Its artifacts were overwritten and cannot be
+  signature-checked, so those four events cannot be shown to be this
+  mechanism. A number that cannot be checked is not evidence; it is
+  left out rather than pooled.
+- **Pre-registration — fixed before the run, not tunable after.**
+  Frozen into `OUTDIR/prereg.txt` with script hashes before boot 1.
+  - **Protocol.** N = 5000 boots, current `Image-trimmed`, campaign
+    argv, early client, D-0055 controls verified through `bench.py`'s
+    own `require_host_controls()` at start **and again at the end**
+    (a desktop power-profiles daemon can flip the governor mid-run;
+    a run whose controls lapsed is discarded, not reinterpreted).
+    ext4 output. Clean boot dirs are dropped after their JSON row is
+    recorded; events and near-misses keep full artifacts.
+  - **Event (mechanism):** `ftx_wall − announce_wall > 100 ms`.
+    Clean is −8.7…+1.0 ms and the retransmit quantum is ~1030 ms, so
+    the threshold separates them by an order of magnitude either
+    way.
+  - **Cliff crossing (campaign-fatal today):** `e0→E4 > 3 s`.
+  - **Signature — every event must pass all six:** announce
+    ≤ 250 ms guest-mono; exactly one guest ARP request on the wire;
+    heal within [0.95, 1.10] s; zero trace events inside the hole;
+    kick→write ≤ 1 ms; margin < 8 ms.
+  - **Decision rule.** Runnable-as-is iff n ≥ 5000 **and**
+    P(198-boot campaign completes | one-sided 95% upper bound on p)
+    ≥ 75%. At n = 5000 that reduces exactly to **k ≤ 2**; the tool's
+    selftest asserts the equivalence so the criterion and its
+    shorthand cannot drift apart.
+
+    | k | 95% upper p | P(campaign completes) |
+    |---|---|---|
+    | 0 | 0.060% | 88.8% |
+    | 1 | 0.095% | 82.8% |
+    | 2 | 0.126% | 77.9% |
+    | 3 | 0.155% | 73.6% → refused |
+
+  - **One-directional early stop.** Stop once 25 events are seen.
+    25 ≥ 3, so it can only fire *after* runnable-as-is is already
+    refused; it bounds how long we spend measuring the rate and
+    cannot bias the verdict. Report the boots actually run.
+  - **Abort policy (decided in advance).** If the bound clears, a
+    **single** disclosed abort is acceptable: the attempt count is
+    published in the report and the aborted batch ID recorded. One
+    attempt is the cap. This is not retry-until-pass — the threshold
+    and the cap are both set before the run.
+  - **Falsifiers (load-bearing).**
+    1. Any event with margin ≥ 8 ms — the ctrl-vq/announce collision
+       mechanism is wrong and the margin predictor is not the
+       handle. Reopen before implementing the fix.
+    2. Any event healing outside [0.95, 1.10] s — not the `neigh`
+       retransmit quantum; mechanism wrong.
+    3. Any event with ≥ 2 guest ARP requests on the wire — the frame
+       *did* reach the ring and QEMU held it. This is an egress hold
+       after all, the fix is wrong, and the overturned reading above
+       was right.
+    4. Any event with a non-empty hole, or a QEMU-internal step
+       > 50 ms — a second mechanism is present.
+    5. k ≤ 2 at n = 5000, against 1 in 50 in the pilot — the pilot
+       and the experiment disagree, the trigger is context-dependent,
+       and the bound must not be read as robustness without naming
+       what changed. Do not proceed on the bound alone.
+  - **Optional, and kept separate from the rate estimate:** ~500
+    boots of `Image-stock` (~10 min) to record *its* margin
+    distribution. That is the only cheap evidence bearing on whether
+    the historical absence was a larger margin. Mechanism evidence
+    only — never a rate for the trimmed arm, never a campaign row.
+- **The fix, if k ≥ 3 — designed now, so it is not chosen after
+  seeing the rate.** In `/init`, between `ifup` and `announce`, set
+  the `neigh` parameters for `eth0` by `RTM_SETNEIGHTBL` over
+  `AF_NETLINK`: `NDTPA_RETRANS_TIME` = 50 ms (the attribute is
+  milliseconds — `nla_get_msecs`) and `NDTPA_MCAST_PROBES` = 20,
+  keeping ~1 s of total retry coverage with 20 chances instead of 3.
+  Add a `T_NEIGH` stamp so the added cost is measured, not assumed.
+  - `# CONFIG_PROC_FS is not set` on this Image, so the `/proc/sys`
+    route does not exist; enabling procfs would change the binary
+    and make it a different arm, which D-0072 refused.
+  - **The wire shape is unchanged in both cases** — one guest ARP
+    request on a clean boot, one on an event boot; only the event's
+    timing moves from +1030 ms to ~+50 ms. The pcap filters
+    (`scripts/pcap_http.py`), the SYN-grid gate and the D-0070
+    intervals all see the same frame grid.
+  - **Effect on published statistics:** an event trial gains ~+50 ms
+    in `W` and E0→E4. At p ≈ 1–2% that is 0–1 trials per 30-trial
+    arm; the median of 30 is unmoved and the IQR moves negligibly.
+  - **Post-fix acceptance (pre-registered):** zero cliff crossings
+    in 5000 boots; every event heals within [40, 120] ms; the
+    loss-event rate within 2× of the pre-fix rate. A larger move
+    means the intervention perturbed the race itself and the
+    pre/post rates are not comparable — disclose rather than claim
+    an improvement. Watch for `neigh` FAILED or no first TX: that
+    would mean 20 probes over 1 s is insufficient coverage, i.e. the
+    drop condition persists longer than the pilot showed.
+- **Alternatives considered:** patch or lengthen slirp's
+  ARP-pending drop (rejected: it is the only detector that fires
+  today; removing it trades a loud abort for a silent ~1 s inflation
+  of `W`, which fuses boot and delivery — the exact failure item 19
+  exists to prevent). Retry the campaign until a batch completes
+  (rejected: at P(complete) ≈ 2%, "eventually it passed" is
+  selection on the outcome, and the published medians would come
+  from the batch that happened not to trip; the bounded abort policy
+  above is the alternative). Static ARP entry (`SIOCSARP`,
+  `ATF_PERM`) plus repeated announce probes (rejected as the primary
+  fix: simpler and immune to the drop mechanism entirely, but it
+  removes the guest ARP exchange from the capture and adds
+  DISCARD/ICMP pairs, changing the frame grid the pcap filters and
+  the SYN-grid gate read, for no measurement gain over the
+  retransmit change — kept as the fallback if falsifier 1 or 2
+  fires). Harness-side event classification alone, recording instead
+  of aborting (rejected alone, adopted as a component: it keeps a
+  campaign completing, but an event trial is still destroyed,
+  leaving n = 29 for that arm and forcing either an undisclosed
+  n < 30 or appended trials, which is retry by another name). Name
+  the exact in-guest drop site with a tracing image (deferred
+  below). Do nothing and run T4.8b (rejected: at the pilot rate the
+  campaign completes ~2% of the time).
+- **Rationale:** the campaign-fatal quantity is not the stall's
+  existence but its *duration relative to slirp's cliff*. The cliff
+  is load-bearing instrumentation — below it the harness is blind
+  (item 19a), so a fix that moves the delay under the cliff while
+  leaving it on the wire converts an aborted batch into a recorded
+  outlier without buying that silence. Shortening the retransmit
+  does exactly that and changes no frame the analysis reads. Fixing
+  the guest's drop instead would be the deeper repair, but its site
+  is unidentified, and a repair aimed at an unnamed mechanism cannot
+  be shown to have worked; the retransmit bound is robust to *why*
+  the frame was lost. Measuring first is not diligence for its own
+  sake: at p ≈ 1–2% the campaign is unrunnable and at p ≈ 0.1% it is
+  fine, and those two worlds are indistinguishable from 100 boots.
+- **Consequences:**
+  1. Threats item 19 is amended and `report/draft.md`'s item 19 with
+     it: the anomaly is renamed from "egress anomaly" to a
+     guest-side lost ARP solicit, and the "~400 boots" sentence is
+     withdrawn as robustness evidence. No published median, delta or
+     exhibit changes — this entry touches no measured number.
+  2. Harness: `bench.py` gains passive per-trial signature logging
+     on Linux trials (announce→first-TX, wire ARP-request count,
+     cliff flag). The interface is the **Bench-host spec (D-0074)**
+     section of `results/README.md`. It is a recorded column, never
+     a gate that drops a trial.
+  3. Artifacts: the `/init` change moves the `init` and
+     `rootfs.cpio` hashes in MANIFEST. **Both Image hashes must stay
+     put** (`Image-stock fa0f4315…`, `Image-trimmed 1bf91509…`); a
+     moved kernel hash means the cpio change triggered a rebuild —
+     stop. D-0073's falsifiers 3–5 are unaffected.
+  4. T4.8b's Linux arms will run a different `/init` than T4.8's.
+     Disclose it: the addition is one netlink round trip before the
+     announce, bounded by the `T_NEIGH` stamp, sub-millisecond
+     against a 188 ms cross-system delta, and applied identically to
+     stock and trimmed, so the trimmed-vs-stock comparison is
+     unaffected.
+  5. Diagnostic tooling stays outside the repo and uncommitted
+     (`~/whimbrel-diag/`): the boot engine, the classifier/rate tool
+     and the pre-registered experiment wrapper. The wrapper refuses
+     to run until this entry exists in `docs/DECISIONS.md`, which
+     makes the house rule mechanical rather than remembered.
+  6. New glossary terms: **margin**, **loss event**, **cliff
+     crossing** (`docs/GLOSSARY.md`).
+- **Deferred this pass (named so they are not found one at a
+  time):** naming the exact in-guest drop site (a tracing image with
+  qdisc / `neigh` / virtio-net tracepoints, D-0072-style diagnostic
+  boots, never a campaign arm) — it does not change the fix, and the
+  margin predictor already gives a mechanism-level handle; revisit
+  if the signature proves unstable across the 5000 boots, i.e. if
+  any of falsifiers 1–4 fires. The same question for the Whimbrel
+  arms: Whimbrel ARPs its gateway with its own stack (no `neigh`, no
+  qdisc), so this exact mechanism does not transfer, but item 19(a)
+  records that its sub-cliff window (~980 ms) is **ungated** and its
+  margin has never been measured either — a Whimbrel margin pass is
+  cheap and is the honest follow-up to the correction above. Whether
+  `Image-stock`'s margin explains the historical absence (the
+  optional 500-boot stock pass).
+- Revisit trigger: any falsifier firing; a QEMU or host change on
+  the bench machine, since margin is a timing quantity and may move;
+  or any future `Image` respin, which re-rolls the phase race and
+  invalidates the measured rate — the margin distribution must be
+  re-measured, not assumed to carry over.
+
 
 

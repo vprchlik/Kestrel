@@ -726,6 +726,46 @@ maintained in [threats-to-validity.md](threats-to-validity.md).
     replace). Not a sixth comparison arm. On this Image `FTRACE`
     is a missed trim (D-0062: *a* minimal Linux, not *the*
     minimal Linux). D-0073 acts on it; T4.8b is the after.
+19. **`W` fuses guest boot with egress delay; only a guest-internal
+    stamp separates them** (T4.8b diagnosis, 2026-08-18). `w_ns`
+    spans the guest's entire boot-to-first-TX, so an inflated `W` is
+    not attributable to boot or delivery without an instrument that
+    sees the boundary. The largest T4.8 excursions (+39 to +125 ms in
+    E0→E4 and `W` together) were slow guest boots — `/init` announce
+    stamp late by the same amount, egress lag normal — not delivery
+    faults; the egress-attributed tail is ≤ 7.7 ms. Medians and the
+    trimmed-vs-stock delta are unmoved (≤ 0.037 ms). The one ~1 s
+    anomaly is a single T4.8b warmup trial; the SYN-grid gate fired
+    and nothing published. It is not an egress fault but a guest-side
+    lost ARP solicit (D-0074), reproduced 1 in 50 on the bench host:
+    the first solicit never reached the TX ring and the guest's own
+    `neigh` retransmit re-sent it 1.03 s later, past slirp's
+    ARP-pending drop. An earlier revision of this item offered the
+    absence of comparable stalls across the recorded campaigns as
+    evidence of robustness; that claim is withdrawn, not weakened —
+    it was an absence of observation under a detector blind below the
+    cliff, and the quantity that governs the race (the margin between
+    the announce and the last virtio ctrl-vq completion, ~12.4 ms
+    typical against 0.199 ms on the failing boot) was never measured
+    on the older images. During this diagnosis the fused metric
+    briefly produced the same misattribution item 17 records — one
+    step after that lesson was written down — reversed by the
+    guest-stamp split; the recurrence is why the corollary is an
+    instrument rule, not vigilance: a metric spanning two subsystems
+    must not be attributed to either without an instrument that sees
+    the boundary. Two harness facts are recorded, not fixed: the
+    SYN-grid gate tests a relative interval (blind to absolute
+    first-TX time, so it catches only stalls that cross slirp's ~1 s
+    ARP-pending drop) and runs only on Linux trials — coverage
+    inversely matched to exposure (Whimbrel fast-boot: ~980 ms silent
+    window, ungated; stock: ~103 ms, gated). And Whimbrel's
+    guest-side detector (`first_rx − DRIVER_OK`, flat to 0.56 ms over
+    ~400 boots) is a side effect of D-0056.3's correctness `wfi`
+    removal — luck, not design; a rung re-introducing that `wfi`
+    degrades it to ≥ 10 ms tick grain. That interval spans request to
+    reply through Whimbrel's own stack, so it bounds guest-side loss
+    as well as egress hold — where Linux's fire-and-forget `/init`
+    announce observes neither (D-0074).
 
 ---
 
