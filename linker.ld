@@ -221,6 +221,22 @@ SECTIONS
     . += 1M;
     __heap_end = .;
 
+    /* D-0079: M-mode shim for the -bios none lane. QEMU jumps to
+     * 0x8000_0000 (start of RAM) when there is no firmware; this
+     * section puts our bytes there as a second LOAD segment. Empty
+     * unless the `bios-none` feature compiles src/mshim.rs — default
+     * images stay byte-identical (verified at D-0079 commit); under
+     * -bios default this region belongs to OpenSBI and the feature
+     * gate keeps the section empty. Placed AFTER the kernel sections
+     * so ld emits it as its own LOAD segment: script order keeps it
+     * out of the ascending kernel run, where ld would merge it with
+     * .text across a 2 MiB gap and pad the file with zeros — load
+     * time the variant's S would then pay for (D-0079's ΔS
+     * falsifier would fire on our own artifact). */
+    .mshim 0x80000000 : {
+        KEEP(*(.mshim))
+    }
+
     /DISCARD/ : {
         *(.eh_frame .eh_frame_hdr)
     }

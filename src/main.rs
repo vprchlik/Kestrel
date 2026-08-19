@@ -284,3 +284,9 @@ fn park() -> ! {
         unsafe { asm!("wfi") };
     }
 }
+
+// D-0079: the -bios none M-mode shim. Declared last so the cfg'd
+// module shifts no line numbers above it — panic-location strings are
+// file:line, and moving them would change the default kernel's hash.
+#[cfg(feature = "bios-none")]
+mod mshim;

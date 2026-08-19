@@ -2438,6 +2438,10 @@ D-0011 onward are working decisions made under those constraints.
   variant; the firmware row of its table is ~0 by construction and the
   exhibit says so.
 
+- Amended by D-0079 (2026-08-19): the `mtvec` park-with-diagnostic
+  cannot fire on the two worst bring-up failures; the shim also
+  preloads `stvec`. Gap and reasoning recorded there.
+
 ## D-0062: Linux baseline — buildroot, /init-is-the-server, two rows
 - Date: 2026-08-16 — Status: accepted; amended 2026-08-18 (T4.8
   pins, approved sign-offs, and pre-registered gates — amendment at
@@ -5125,3 +5129,190 @@ D-0011 onward are working decisions made under those constraints.
   or QEMU change touching the chardev path; or adoption of the
   residency recording, which supersedes the manual A/B this entry
   rests on.
+
+## D-0079: T4.7 act-on — the `-bios none` shim, its diagnosis channels, and S
+
+- Date: 2026-08-19 — Status: accepted (executes D-0061; verify-items
+  done before any shim code; checkpoint 0 and the skeleton land with
+  this entry, the seams and the campaign lane land after it)
+- **Decision:** build D-0061's variant in this order, each step with a
+  pre-registered observable:
+  1. **Checkpoint 0** — a build (`mshim-exit0`) whose first
+     instruction stores PASS to sifive_test: QEMU exits 0 with no
+     serial, no UART assumptions, nothing. The smallest possible
+     proof that `-bios none` executed our bytes at `0x8000_0000`.
+  2. **Skeleton** (`bios-none`) — the full CSR program, checkpoint
+     letters, both trap diagnostics, `mret` to the unmodified
+     `_start`. **Pre-registered stop point:** the kernel's first SBI
+     call (`require_dbcn` probe) lands in the shim's `mtvec`
+     diagnostic as cause 9 — proving shim, PMP, counteren
+     (two `rdtime` stamps execute first), delegation of everything
+     *but* cause 9, and `mret`, all in one line of serial.
+  3. Seams per D-0061's allowlist (console, timer, shutdown, two
+     mappings), then `just test-m`, then the paired campaign.
+- **The shim's CSR program (before `mret`):** `pmpaddr0=-1`,
+  `pmpcfg0=NAPOT|RWX` (0x1F); `medeleg=0xf4b509`, `mideleg=0x1666` —
+  **copied verbatim from OpenSBI's banner**, because the kernel was
+  validated under exactly those values and a hand-derived mask is a
+  second implementation of a thing we can transcribe (the surplus
+  H-extension bits are inert); `mcounteren=-1` (the kernel's first
+  instruction is `rdtime`); `menvcfg.STCE=1` (the D-0018 seam);
+  `mcountinhibit=0`; `mie=0`; `mtvec` → M diagnostic; `stvec` → S
+  diagnostic (the amendment below); `mstatus.MPP=S`;
+  `mepc=_start`; `a0`/`a1` preserved end to end.
+- **Amendment to D-0061, found during execution planning — not scope
+  drift.** D-0061 specified park-with-diagnostic on `mtvec` so that
+  "any M-mode trap is a bug and says so". That handler **structurally
+  cannot fire on the two worst bring-up failures.** With full
+  delegation (which D-0061 also specifies), a missing PMP entry
+  faults the *first S-mode instruction fetch*, and a clear
+  `mcounteren.TM` makes the kernel's *first instruction* (`rdtime`)
+  illegal — both are delegated exception causes, so they route to
+  `stvec`, which at that instant is 0: the trap vectors to address
+  0, faults again, and loops. Silent, and `mtvec` never hears of it.
+  The amendment: **the shim preloads `stvec`** with a tiny S-mode
+  diagnostic stub inside the shim segment (executable under the PMP
+  catch-all, reachable under Bare translation) that prints
+  `scause`/`sepc`/`stval` and parks. It costs nothing at runtime and
+  the kernel overwrites it at `trap::install` exactly as it
+  overwrites OpenSBI's leftover today. Every failure in the
+  bring-up taxonomy now has a loud channel: image-not-loaded →
+  checkpoint 0's exit code; M traps → `mtvec` diagnostic; pre-kmain
+  S traps → `stvec` preload; post-paging faults → the kernel's own
+  fail-loud handler.
+- **Verify-item (a), done empirically before any code: the FDT does
+  not move.** QEMU `-bios none`, gdb stub, break at `0x8000_0000`:
+  `a0=0`, `a1=0x87e00000`, magic `0xd00dfeed` present — byte-for-byte
+  the address the OpenSBI lane reports as Next Arg1, i.e. QEMU
+  places the FDT and OpenSBI was passing it through. D-0065's
+  clobberable-DTB assumption holds identically in both lanes. Per
+  the sign-off it becomes a **boot assert, not a hope**:
+  `frame::check_dtb` panics unless `dtb_pa ≥ heap_end()` — the
+  containment that makes clobbering legal — in both lanes, landing
+  with the seam commit (consequence 3 explains the deferral).
+- **Verify-item (b), by analysis: the D-0068 yield survives Sstc,
+  strengthened.** `timer::yield_once` depends on two properties:
+  re-arming clears stale STIP, and `wfi` wakes on STIP-pending with
+  `sstatus.SIE=0`. Under SBI TIME the first is OpenSBI behaviour
+  (it clears `mip.STIP` when the new deadline is future); under
+  Sstc, `sip.STIP` is *architecturally defined* as the read-only
+  reflection of `stimecmp ≤ time`, so writing a future deadline
+  clears it by definition — the property upgrades from firmware
+  contract to ISA. The second is mechanism-blind. Finding 13's
+  `assert_ticks_armed` checks `sie.STIE` only and holds unchanged;
+  the safe profile's boot tick-wait takes interrupts through
+  `mideleg` bit 5, which the transcribed `0x1666` delegates.
+- **Binding gate, not a note: the with/without pair is one
+  campaign.** Per D-0078 the serial-byte regime moves on a minutes
+  timescale between campaigns and is uniform within them (verified
+  at trial grain). The firmware exhibit therefore **refuses** any
+  pair whose two lanes come from different campaigns: both lanes
+  interleaved in one invocation, one canary in the shared batch
+  header, or the exhibit does not generate. This is a validator
+  check in the future exhibit code, the same shape as the
+  batch-set checks in `validate_t48`.
+- **What happens to S — answered now, not discovered later.** S
+  (D-0071) is the pre-ARP QEMU-startup slice,
+  `(E4 − first_connect) − pcap(ARP→FIN)`, ~6.8–6.9 ms on this host
+  for Whimbrel, and **guest-image load lands in S** (D-0062). Under
+  `-bios none` QEMU no longer loads the 321 KB `fw_dynamic` blob, so
+  S shrinks by that load; the shim adds ~a hundred bytes to the ELF,
+  which does not register. Expected: **ΔS = S_default − S_variant in
+  (+0.1, +1.5) ms.** Because S sits on the E0 side of every edge,
+  the variant's E0→E4 improvement decomposes as **guest firmware
+  execution removed + ΔS (host-side firmware load removed) + seam
+  deltas** — both of the first two are honestly firmware cost, but
+  they are different kinds of cost, and the exhibit reports them as
+  separate terms: per-lane `s_ns` quoted from the shared batch
+  header, ΔE0→E4 alongside ΔS. The D-0062/D-0071 pooling rule
+  extends: **S is never pooled across lanes** — same host, same
+  ELF-size class, different startup work, two populations by
+  construction. Falsifiers on S: ΔS < −0.3 ms (the variant made
+  startup *slower*: unmodelled cost, stop) or |ΔS| > 3 ms
+  (startup changed beyond the firmware-load model; the E0-side of
+  the comparison is contaminated and no firmware saving is published
+  until it is explained). The first-connect control needs no new
+  gate: with both lanes interleaved in one batch, the existing
+  ≤ 1 ms span check is automatically cross-lane.
+- **Pre-registered projection (fast-boot E0→E4, variant lane).**
+  From t48b: E0→E4 51.87 ms, E2→E3g 6.38 ms, E3g→E4 ≈ 1.3–1.5 ms →
+  E0→E2 ≈ 44 ms = QEMU startup/load (~18–20 ms; the 18.5 ms
+  first-connect control is the listener-up analogue) + OpenSBI
+  (blob load + init + ~13 ms banner UART + jump) ≈ 24–26 ms.
+  **Orientation range 24–34 ms, expectation ~28 ms** (point
+  prediction refused, D-0069). **Falsifiers (stop, publish no
+  saving):**
+  1. Variant fast E0→E4 ≥ 51.87 ms — no improvement.
+  2. |Δ E2→E3g| > 0.5 ms against the same-campaign default lane —
+     the seams leaked beyond D-0061's allowlist (abandon criterion
+     (a) in measurable form).
+  3. Any M-mode trap after `mret`, in any gate or trial — the
+     `mtvec` diagnostic firing *is* the falsifier.
+  4. Any `test-m` gate that passes on `-bios default` and fails on
+     the variant.
+  5. The `-bios default` cross-system rows move at all.
+  6. D-0061's abandon criterion (b) with numbers: saving < 2× the
+     largest remaining S-mode rung (2 × `virtq_init` 0.84 ms ≈
+     1.7 ms). Projection clears it by ~14×; a measurement under it
+     abandons the variant and writes up the partial result.
+  Plus the two S falsifiers above.
+- **Measurement framing (restating D-0061, plus what postdates
+  it):** variant, never replacement — `-bios default` keeps every
+  gate and every primary number; the cross-system table's Whimbrel
+  rows stay OpenSBI; Linux structurally cannot take this rung and
+  the exhibit says that asymmetry is the finding. The variant's
+  console is polled S-mode UART, so its per-byte serial cost is a
+  different quantity **by construction**: safe-profile numbers
+  never compare across lanes, and the comparison profile is
+  fast-boot (zero in-window bytes). E2 ≈ E1 in the variant; its
+  firmware row is ~0 by construction and the exhibit says so.
+- **Execution amendment to D-0061's "second LOAD segment", found at
+  the skeleton commit: the shim ships through QEMU's `-bios` slot,
+  not as an ELF segment.** LLD (the target's linker) assigns
+  sections to PT_LOADs in address order and pads same-flag gaps in
+  the file: a `.mshim` at `0x8000_0000` beside `.text` at
+  `0x8020_0000` produced one 2.1 MB LOAD with ~2 MB of zero
+  padding — load bytes the variant's S would pay for, firing this
+  entry's own ΔS falsifier on a linker artifact. Script placement
+  does not change this (LLD sorts by address) and `PHDRS` would
+  rewrite the default image's program headers, breaking
+  byte-identity. Instead: the `bios-none` build is a **donor ELF**;
+  `objcopy -O binary --only-section=.mshim` extracts a 320-byte
+  blob, and the lane boots `-bios mshim.bin -kernel <default
+  kernel>`. This is stronger than the original design on every
+  axis: the shim occupies the machine's actual firmware interface
+  (`QEMU_BIOS` was already the one argv knob), there is no padding,
+  and **the S-mode kernel booted at skeleton stage is the
+  byte-identical campaign binary** — `801cae40…`, not a variant
+  build. `-bios none` never appears; the shim *is* the bios.
+- **Skeleton result (pre-registered stop point, hit exactly).**
+  Checkpoint 0: 20-byte blob, QEMU exits 0, zero serial. Skeleton:
+  `ZPDCTVM` then `M! …0009 …80208bba …0000` — cause 9 at the
+  kernel's `require_dbcn` probe, under the default kernel. One
+  serial line covering every block in the taxonomy.
+- **Consequences.**
+  1. Cargo features `bios-none` (donor ELF carrying `.mshim`) and
+     `mshim-exit0` (checkpoint 0). Neither is a campaign image;
+     the lane boots the **default** kernel plus the extracted blob.
+  2. `linker.ld` gains the `.mshim` output section (donor only;
+     empty otherwise) and the default images are verified
+     **byte-identical** (`801cae40…`/`1e43a310…` unchanged); the
+     `mod mshim;` declaration sits at the end of `main.rs` because
+     a cfg'd module higher up shifts every panic-location line
+     number below it and moves the hash.
+  3. `frame::check_dtb` gains the `dtb_pa ≥ heap_end()` assert in
+     both lanes **when the seams land** — deferred from this commit
+     precisely because the skeleton's value is booting the
+     byte-identical kernel; the assert goes in the seam commit
+     where the kernel changes anyway, and the new sha is recorded
+     there. Campaigns pin their kernel sha per trial row, so
+     nothing published is affected either way.
+  4. `scripts/qemu-args.sh` already honours `QEMU_BIOS`; no argv
+     change. The `.cargo/config.toml` runner stays `-bios default`.
+  5. Bring-up symptom→cause pairs go to `docs/DEBUGGING.md` as they
+     occur (house rule); **M-mode shim** goes to the glossary.
+- Revisit trigger: any falsifier; QEMU moving the `virt` FDT or
+  reset address (checkpoint 0 and the `check_dtb` assert both catch
+  it loudly); or the seams demanding a change outside D-0061's
+  allowlist, which is abandon criterion (a) and ends the variant
+  rather than widening it.

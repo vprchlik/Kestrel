@@ -533,3 +533,21 @@ Work the list in order; each step either finds it or shrinks the search space.
    image outside the tree and `check-utext.sh` looks at the in-tree
    default. Unset the variable, or run from a plain login shell
    (SETUP.md §7). Not a distro issue.
+
+## Variant ELF 2 MB larger than the kernel / variant S inflated (D-0079)
+
+Symptom: the `bios-none` donor ELF's first LOAD segment spans
+`0x8000_0000–0x8021_xxxx` with ~2 MB filesz — zero padding between the
+shim and `.text` — and any startup-slice (S) measurement of that image
+runs milliseconds long.
+
+Cause: LLD assigns sections to PT_LOADs in address order and pads
+same-flag gaps in the file; script placement does not change it, and
+`PHDRS` would rewrite the default image's headers. The 2 MB gap between
+the shim (`0x8000_0000`) and `BASE_ADDRESS` is filled with file bytes
+QEMU then loads.
+
+Fix (D-0079): never boot the donor ELF. Extract the blob
+(`objcopy -O binary --only-section=.mshim`) and pass it as
+`-bios mshim.bin` with the **default** kernel ELF. The donor exists
+only to be objcopied.

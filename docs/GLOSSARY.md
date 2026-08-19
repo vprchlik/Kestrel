@@ -123,6 +123,14 @@ state from status-register fields (`MPP`/`SPP`, `MPIE`/`SPIE`) and jump to the
 saved PC (`mepc`/`sepc`). They are also the *only* way privilege goes down —
 OpenSBI `mret`s into our kernel, and our kernel will `sret` into U-mode.
 
+**M-mode shim.** The 320-byte firmware replacement of the `-bios none`
+lane (D-0061/D-0079): a straight-line M-mode program in QEMU's `-bios`
+slot that sets the PMP catch-all, transcribes OpenSBI's delegation
+masks, enables counters and Sstc, installs both trap diagnostics, and
+`mret`s into the unmodified kernel. No resident services — after
+`mret`, any M-mode trap is a bug and prints itself. Checkpoint letters
+`ZPDCTVM` bisect a silent boot to one block.
+
 **MEDELEG.** The M-mode CSR that chooses which exceptions reach S-mode.
 OpenSBI on this platform sets `0xf0b509`: codes 0, 3, 8, 10, 12, 13, 15,
 20–23 are delegated; 1, 2, 4, 5, 6, 7, 9 are not. An illegal instruction

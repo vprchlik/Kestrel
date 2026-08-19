@@ -10,6 +10,15 @@ edition = "2021"
 # A new kmain-only selftest adds `["no-sret"]` here; it does not edit
 # trap.rs.
 no-sret = []
+# D-0079 / D-0061: the -bios none lane. Links the M-mode shim as a
+# second LOAD segment at 0x8000_0000; the S-mode kernel is unchanged
+# until the allowlisted seams land. Never a campaign image while the
+# seams are absent.
+bios-none = []
+# D-0079 checkpoint 0: the shim's first instruction stores PASS to
+# sifive_test, so QEMU exits 0 with no serial path at all — the
+# smallest proof that -bios none executed our bytes at 0x8000_0000.
+mshim-exit0 = ["bios-none"]
 # Build with `--features panic-selftest` (or `just panic`) to panic in kmain
 # instead of shutting down. Keeps the panic handler reachable without edits.
 panic-selftest = ["no-sret"]
