@@ -62,8 +62,9 @@ T48_N_PER_ARM = 60
 # T4.8b five-arm CSV commit (D-0073 after: FTRACE-swept Image-trimmed +
 # D-0075 /init). Measured kernel is git_sha 06687e2 (not this object).
 # The T4.8 pin above stays the before; cross-system-t48b.md carries the
-# before/after cells.
-T48B_REV = "a0c53e28efa96be509601c45141bb310e0fe61ca"
+# before/after cells. The rev is the annotated tag (object a0c53e2) so
+# the exhibit cites a name a reader can resolve, like baseline-t4.3.
+T48B_REV = "t48b"
 T48B_SHA_PREFIX = "06687e2"
 T48B_BATCHES = frozenset({"20260819T142033Z-1", "20260819T142033Z-2"})
 T48B_N_PER_ARM = 60
