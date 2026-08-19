@@ -94,6 +94,7 @@ RUNS_FIELDS = [
     "git_sha",
     "dirty",
     "kernel_sha256",
+    "bios_sha256",
     "qemu_version",
     "qemu_hash",
     "host_kernel",
@@ -173,6 +174,9 @@ class Arm:
     cargo_extra: tuple[str, ...] = ()
     linux_image: str | None = None
     linux_append: str | None = None
+    # D-0079: "mshim" = boot under the extracted M-mode shim blob in
+    # QEMU's -bios slot; None = -bios default (OpenSBI). Whimbrel only.
+    qemu_bios: str | None = None
 
 
 class BenchFail(Exception):
@@ -198,10 +202,15 @@ def require_tshark() -> str:
     return path
 
 
-def qemu_argv(pcap: str, port: int = 8080) -> tuple[str, list[str]]:
+def qemu_argv(
+    pcap: str, port: int = 8080, bios: str | None = None
+) -> tuple[str, list[str]]:
     script = ROOT / "scripts" / "qemu-args.sh"
+    env = os.environ.copy()
+    if bios is not None:
+        env["QEMU_BIOS"] = bios  # D-0079: the shim blob in the -bios slot
     line = subprocess.check_output(
-        ["bash", str(script), pcap, str(port)], text=True
+        ["bash", str(script), pcap, str(port)], text=True, env=env
     ).strip()
     args = line.split()
     qemu = os.environ.get("QEMU", "qemu-system-riscv64")
@@ -819,19 +828,41 @@ def s_header_lines(runs: list[dict]) -> list[str]:
     rec = [r for r in runs if int(r["warmup"]) == 0]
     if not rec:
         raise BenchFail("TEST FAIL: no recorded trials for s_ns header")
-    vals = [s_trial_ns(r) for r in rec]
+    all_vals = [(r, s_trial_ns(r)) for r in rec]
+    # D-0079: S is never pooled across firmware lanes — the shim lane
+    # has no fw_dynamic load, so its S is a different population by
+    # construction. The pooled line covers the default lane only; the
+    # shim lane gets its own.
+    vals = [s for r, s in all_vals if not r["config"].startswith("m-")]
+    m_vals = [s for r, s in all_vals if r["config"].startswith("m-")]
     by_cfg: dict[str, list[int]] = {}
-    for r, s in zip(rec, vals):
+    for r, s in all_vals:
         by_cfg.setdefault(r["config"], []).append(s)
     med = statistics.median(vals)
     lines = [
         f"s_ns={med:.0f} iqr={iqr([float(v) for v in vals]):.0f} n={len(vals)}",
     ]
+    if m_vals:
+        lines.append(
+            f"s_ns_mshim={statistics.median(m_vals):.0f} "
+            f"iqr={iqr([float(v) for v in m_vals]):.0f} n={len(m_vals)} "
+            "(D-0079: shim lane, never pooled with the line above)"
+        )
     fast_vals = by_cfg.get(FAST_CONFIG, [])
     safe_vals = by_cfg.get(SAFE_CONFIG, [])
     fast_s = f"{statistics.median(fast_vals):.0f}" if fast_vals else "absent"
     safe_s = f"{statistics.median(safe_vals):.0f}" if safe_vals else "absent"
     lines.append(f"s_ns_fast={fast_s} s_ns_safe={safe_s}")
+    m_fast = by_cfg.get("m-" + FAST_CONFIG, [])
+    m_safe = by_cfg.get("m-" + SAFE_CONFIG, [])
+    if m_fast and m_safe:
+        mf, ms = statistics.median(m_fast), statistics.median(m_safe)
+        lines.append(f"s_ns_m_fast={mf:.0f} s_ns_m_safe={ms:.0f}")
+        if abs(mf - ms) > CONTROL_TOL_NS:
+            raise BenchFail(
+                f"TEST FAIL: |s_ns_m_fast − s_ns_m_safe| = {abs(mf - ms):.0f} ns "
+                "(> 1 ms): shim-lane S is not profile-independent"
+            )
     if fast_vals and safe_vals:
         mf = statistics.median(fast_vals)
         ms = statistics.median(safe_vals)
@@ -1113,9 +1144,10 @@ def run_trial(
     port: int,
     client_timeout_s: float,
     qemu_wait_s: float,
+    bios_path: str | None = None,
 ) -> dict:
     tshark = require_tshark()
-    qemu, args = qemu_argv(str(pcap), port)
+    qemu, args = qemu_argv(str(pcap), port, bios=bios_path)
     for p in (pcap, serial_path, client_out, ready_path):
         if p.exists():
             p.unlink()
@@ -1247,6 +1279,28 @@ def configs_for(kind: str) -> list[Arm]:
                 cargo_extra=fp_yes,
             ),
             whimbrel_fast,
+        ]
+    if kind == "t47":
+        # D-0079 / D-0061: the with/without-firmware pair, interleaved in
+        # one campaign so the D-0078 serial-regime state and every host
+        # control are shared. m-* arms boot the bios-none lane kernel
+        # under the shim blob; safe rows are lane-internal only (the
+        # console backend differs by construction).
+        return [
+            whimbrel_fast,
+            whimbrel_safe,
+            Arm(
+                "m-release-fast-boot",
+                "whimbrel",
+                features=("bios-none", "fast-boot"),
+                qemu_bios="mshim",
+            ),
+            Arm(
+                "m-release-default",
+                "whimbrel",
+                features=("bios-none",),
+                qemu_bios="mshim",
+            ),
         ]
     if kind == "t48":
         return [
@@ -1412,6 +1466,22 @@ def cmd_run(args: argparse.Namespace) -> int:
             continue
         raise BenchFail(f"TEST FAIL: unknown system {arm.system}")
 
+    # D-0079: any shim arm needs the blob once per campaign. Built from
+    # the donor (mshim feature), extracted by the one blob script, and
+    # hashed into every shim row's bios_sha256 column.
+    bios_blob: Path | None = None
+    bios_blob_sha = ""
+    if any(a.qemu_bios == "mshim" for a in arms):
+        donor = cargo_build(["mshim"])
+        bios_blob = kdir / "mshim.bin"
+        subprocess.run(
+            ["bash", str(ROOT / "scripts" / "mshim-blob.sh"),
+             str(donor), str(bios_blob)],
+            cwd=ROOT, check=True,
+        )
+        bios_blob_sha = sha256_file(bios_blob)
+        print(f"bench: mshim blob sha256={bios_blob_sha}", flush=True)
+
     # D-0078: canary boot. Reuse the campaign's release-default kernel
     # when the arm exists (whimbrel / t48); build it otherwise (fp-ab).
     if SAFE_CONFIG in kernels:
@@ -1495,6 +1565,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                 port=port,
                 client_timeout_s=client_timeout_s,
                 qemu_wait_s=qemu_wait,
+                bios_path=str(bios_blob) if arm.qemu_bios == "mshim" else None,
             )
         except BenchFail as e:
             # D-0077: every gate in run_trial raises before the row is
@@ -1520,6 +1591,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                 "git_sha": git_sha,
                 "dirty": dirty,
                 "kernel_sha256": k_hash,
+                "bios_sha256": bios_blob_sha if arm.qemu_bios == "mshim" else "",
                 "qemu_version": host["qemu_version"],
                 "qemu_hash": host["qemu_hash"],
                 "host_kernel": host["host_kernel"],
@@ -1873,6 +1945,7 @@ def _write_fixture_runs(path: Path, rows: list[dict]) -> None:
         "git_sha": "abc",
         "dirty": 0,
         "kernel_sha256": "k",
+        "bios_sha256": "",
         "qemu_version": "QEMU emulator version 8.2.2",
         "qemu_hash": "h",
         "host_kernel": "6.12",
@@ -2704,6 +2777,18 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
         raise BenchFail(f"t48 arms unexpected: {t48_names}")
     fired.append("t48 five-arm configs_for")
 
+    t47 = configs_for("t47")
+    if [a.config for a in t47] != [
+        "release-fast-boot", "release-default",
+        "m-release-fast-boot", "m-release-default",
+    ]:
+        raise BenchFail(f"TEST FAIL: t47 arms {[a.config for a in t47]}")
+    if [a.qemu_bios for a in t47] != [None, None, "mshim", "mshim"]:
+        raise BenchFail("TEST FAIL: t47 bios markers wrong")
+    if any(a.system != "whimbrel" for a in t47):
+        raise BenchFail("TEST FAIL: t47 must be whimbrel-only")
+    fired.append("t47 four-arm configs_for (D-0079 pair, whimbrel-only)")
+
     _qemu, qargs = qemu_argv("/tmp/whimbrel.pcap", 8080)
     qjoined = " ".join(qargs)
     if "csum=off" not in qjoined or "guest_tso4=off" not in qjoined:
@@ -2894,6 +2979,24 @@ def main() -> int:
         help="recorded RNG seed for trial shuffle (or BENCH_SHUFFLE_SEED)",
     )
     t48.set_defaults(kind="t48", func=cmd_run)
+
+    t47 = sub.add_parser(
+        "t47", help="D-0079 with/without-firmware pair, one campaign"
+    )
+    t47.add_argument("--n", type=int, default=int(os.environ.get("BENCH_N", "30")))
+    t47.add_argument(
+        "--warmup", type=int, default=int(os.environ.get("BENCH_WARMUP", "3"))
+    )
+    t47.add_argument(
+        "--batches", type=int, default=int(os.environ.get("BENCH_BATCHES", "2"))
+    )
+    t47.add_argument("--out-dir", default=os.environ.get("BENCH_OUT", "results"))
+    t47.add_argument(
+        "--port", type=int, default=int(os.environ.get("BENCH_PORT", "8080"))
+    )
+    t47.add_argument("--allow-dirty", action="store_true")
+    t47.add_argument("--shuffle-seed", type=int, default=None)
+    t47.set_defaults(kind="t47", func=cmd_run)
 
     fp = sub.add_parser("fp-ab", help="finding 14: frame-pointer A/B")
     fp.add_argument("--n", type=int, default=int(os.environ.get("BENCH_N", "30")))

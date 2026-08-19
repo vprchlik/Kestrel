@@ -781,6 +781,12 @@ test-m:
 bench-whimbrel:
     bash scripts/bench.sh whimbrel
 
+# D-0079 / T4.7: the with/without-firmware pair, four whimbrel arms
+# interleaved in one campaign (shared canary, shared controls) so the
+# exhibit's same-campaign gate can hold. Dedicated bench host only.
+bench-t47:
+    bash scripts/bench.sh t47
+
 # T4.8 five-arm campaign. Requires bench/linux/artifacts + MANIFEST.
 # This pod does not run it (D-0055). D-0073 / T4.8b uses the same
 # recipe after linux-build produces a new Image-trimmed.
