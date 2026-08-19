@@ -5445,11 +5445,15 @@ D-0011 onward are working decisions made under those constraints.
     ≈ −1.27; `stvec` −3.58 µs/B is the outlier exactly because it
     also carries the DBCN-probe seam. A consistent **δ ≈ −1.3 µs
     per byte** (DBCN dearer than the polled UART) across ~9.2 KB of
-    independent segments. Generalisation: ~13.1 KB × 1.3 ≈ **−17 ms
-    of the safe-pair E2→E3g delta is console-lane artifact**, which
+    independent segments. Generalisation: ~13.1 KB × δ 1.27 µs/B
+    (DBCN 3.69 − polled UART 2.42, both measured absolutes) ≈
+    **−17 ms of the safe-pair E2→E3g delta is console-lane
+    artifact**, which
     hardens the existing rule from "safe rows are lane-internal" to
     *per-phase cross-lane comparison is contaminated for every
-    printing phase, at a measured rate*.
+    printing phase, at a measured rate* (δ = 1.27 µs/B, the
+    difference of two absolutes: DBCN 3.69, polled UART 2.42 —
+    reconciled below).
   - **Exclusion criterion upgraded as proposed** — a phase is seam
     iff it *has a seam call site OR emits in-window console bytes*,
     both statable from source with no delta in hand. Applied by
@@ -5517,31 +5521,143 @@ D-0011 onward are working decisions made under those constraints.
   | virtq_init | 832.0 | 847.8 | 834.5 | +15.8 | −13.3 |
 
   Same binary, different resident M-mode environment: −56 µs on a
-  phase that prints nothing and calls nothing. The layout/TB
-  hypothesis is **refuted** alongside the console one; the
-  seam-site attribution is independently confirmed (stvec's −223 is
-  pure binary, zero lane). The anomaly is an **ambient lane
-  systematic**: ≤ 56 µs per phase, concentrated on
-  memory-walk-heavy phases, near-zero on tight-loop phases.
-  Candidate mechanism, explicitly a hypothesis: **PMP geometry** —
-  OpenSBI programs ~8 PMP regions, the shim one NAPOT catch-all,
-  and TCG consults PMP on TLB fills, taxing page-table-walking
-  phases most. The confirming cell (a shim variant programming 8
-  entries) is named, not run. Whatever the mechanism, it is a
-  property of the resident M-mode configuration — part of what
-  swapping the firmware *is* — but it is ambient, not
-  call-site-localisable, so the seam-call-site criterion cannot
-  absorb it and the threshold must clear it as a floor.
+  phase that prints nothing and calls nothing. The seam-site
+  attribution is independently confirmed (stvec's −223 is pure
+  binary, zero lane). The finding, in status order:
+  - **Measured:** an ambient lane systematic, ≤ 56 µs per phase,
+    concentrated on memory-walk-heavy phases and ~0 on tight loops.
+  - **Candidate mechanism, hypothesis only:** PMP region count
+    under TCG TLB fill — OpenSBI programs ~8 PMP regions, the shim
+    one NAPOT catch-all, and TCG consults PMP on every TLB fill,
+    which would tax page-table-walking phases most. **Confirming
+    cell named and not run:** a shim variant programming eight
+    regions, ~20 boots against the one-entry shim.
+  - **The graveyard, kept visible:** this is the *third* mechanism
+    proposed for `page_verify` — console bytes (refuted by direct
+    count: zero in-window bytes in fast), layout/TB (refuted by
+    this 2×2: binary term +11.8 µs), now PMP geometry. The third
+    carries the same status the first two had until its cell runs;
+    it does not inherit confidence from being last. What it has
+    that they lacked: it survived the tests that killed them, and
+    its predicted concentration on memory-walk phases matches the
+    measured profile.
+  - **This sits under a publication-path number.** The 150 µs
+    falsifier-2 floor is set by this systematic while it remains
+    unexplained. If the variant ever needs a tighter leak bound,
+    **running the eight-region cell is the unblocking move**: a
+    confirmed mechanism turns the floor from "unexplained ambient"
+    into a modelled term that could be subtracted or shimmed away.
+  Whatever the mechanism, it is a property of the resident M-mode
+  configuration — part of what swapping the firmware *is* — but it
+  is ambient, not call-site-localisable, so the seam-call-site
+  criterion cannot absorb it and the threshold must clear it as a
+  floor.
 - **δ reconciled (2026-08-19).** The polled store is not near-free:
   absolute rates from the safe pair's `page_verify` segment, this
   regime — DBCN (16.419 − 0.731 ms)/4250 B = **3.69 µs/B**; polled
   UART (10.947 − 0.679)/4250 = **2.42 µs/B**; δ = 1.27, matching
-  the four-segment slope. Two MMIO exits per byte (LSR poll + THR
-  store) under TCG is µs-scale each. D-0078's "~1.0 µs/B" is the
-  *regime step* on the DBCN path, a different quantity; the
+  the four-segment slope. **δ is the difference of two measured
+  absolutes, not a slope** — the slope alone invited the "near-free
+  polled store" assumption, wrong by the whole 2.42 µs/B. Two MMIO
+  exits per byte (LSR poll + THR store) under TCG is µs-scale each.
+  D-0078's "~1.0 µs/B" is the *regime step* on the DBCN path, a
+  different quantity — the two numbers are not in contradiction; the
   canary's 16.07 ms `page_verify` is the absolute DBCN rate at the
   same bytes. No second term; the ~13.1 KB × 1.3 ≈ −17 ms
   contamination figure stands with both absolutes recorded.
+- **PRE-REGISTRATION — T4.7 confirmation campaign (adopted
+  2026-08-19, signed off; governs the next `just bench-t47` run).**
+  Written for a bench-host operator with no context beyond the repo.
+  This block supersedes the earlier per-phase falsifier 2 for the
+  confirmation run only; t47 (batches `20260819T164056Z-1/-2`)
+  stays as recorded — the run whose original falsifier fired and
+  from which nothing is published.
+  - **Launch.** From a clean tree with HEAD == origin (the harness
+    enforces both), on the dedicated bench host:
+    `setsid nohup just bench-t47 </dev/null > ~/t47-confirm.log 2>&1 &`
+    One invocation = one batch set. Four whimbrel arms, interleaved
+    in one shuffle: `release-fast-boot`, `release-default` (OpenSBI
+    lane) and `m-release-fast-boot`, `m-release-default` (shim
+    lane, booted via the extracted blob in QEMU's `-bios` slot).
+    3 warmup + 30 recorded per arm per batch, two shuffled batches.
+    The harness runs one canary boot before trial 1 and records its
+    two deltas on **every** `runs.csv` row
+    (`canary_stvec_ns`, `canary_page_verify_ns`); the shim blob's
+    sha256 lands in every shim row's `bios_sha256`. If the canary
+    yields no PHASE dump the campaign aborts before trial 1.
+  - **Claims (design (d)).**
+    (i) **ΔE2→E3g, pooled, stability-gated** — guest work, the
+    primary claim.
+    (ii) **ΔE0→E4, reported per batch**, with the OpenSBI-side
+    volatility disclosed as a property of the quantity being
+    removed (the firmware window has moved ±3 ms on an hour
+    timescale on this host; per-trial `w_ns` records it).
+    **Registered now, before the run:** a batch-to-batch stability
+    failure that is confined to the OpenSBI fast arm's E0-side
+    metrics (`e0_to_e4_ns`, `w_ns`) does **not** abort the
+    campaign; it demotes claim (ii) from pooled to per-batch. Every
+    other stability failure — any guest-work metric, any other
+    arm — aborts as always. This demotion rule is registered before
+    the run, not chosen after seeing one.
+  - **Falsifier 2 (rescoped, two-tier, 150 µs).** Exclusion
+    criterion first, set second. *Criterion:* a phase is a **seam
+    phase** iff, by source inspection with no delta in hand, its
+    interval (a) contains a call site of a replaced-SBI seam
+    (DBCN/BASE probe, TIME probe, `set_timer`→`stimecmp` arm) or
+    (b) emits in-window console bytes in the compared profile.
+    *Set, derived by grep for the fast comparator:*
+    **{`stvec`, `frame_init`, `E3g`}** (the only fast in-window
+    print, `HTTP READY`, lands inside `E3g`). *The falsifier:* on
+    the fast pair (`m-release-fast-boot` − `release-fast-boot`,
+    per-phase Δ of recorded medians), fire if
+    (i) any non-seam phase has |Δ| > **150 µs**, or
+    (ii) |Σ of signed Δ over all non-seam phases| > **150 µs**.
+    *Floor derivation:* measured ambient lane systematic ≤ 56 µs
+    per phase (2×2, same binary across lanes), non-seam binary term
+    ≤ 16 µs, batch-split noise ≤ 8.1 µs, measured signed sum
+    +11 µs; 150 is ~3× the worst measured ambient. *Stated
+    limitation:* a single-phase leak between ~56 and 150 µs is
+    below this instrument's floor; the floor is set by a measured
+    but mechanism-unconfirmed ambient (see the PMP hypothesis
+    above), and the aggregate E2→E3g delta is reported as its own
+    term regardless, so a sub-floor leak biases a disclosed number,
+    not a hidden one.
+  - **Expected ΔE2→E3g (fast pair, shim − OpenSBI): a range, not a
+    point — [−1.1, −0.4] ms** (brackets t47's same-day −0.717 and
+    the cross-day −0.40; D-0069). Outside the range: investigate
+    before publishing; it is an expectation, not a falsifier.
+  - **ΔS window unchanged.** ΔS = S(OpenSBI fast) − S(shim fast),
+    from the batch header's lane-separated S lines; expected in
+    **(+0.1, +1.5) ms** (the removed `fw_dynamic` load). Falsifier:
+    ΔS < −0.3 ms or |ΔS| > 3 ms. S is never pooled across lanes;
+    the shim-safe arm's S is a known open anomaly with no consumer
+    and does not gate anything.
+  - **Falsifiers 1, 3, 4, 5, 6 (unchanged).**
+    1. `m-release-fast-boot` E0→E4 median ≥ the same batch's
+       `release-fast-boot` median — no improvement; stop, publish
+       nothing.
+    3. **Any M-mode trap in any serial of any trial or gate — the
+       shim's `M!` diagnostic line — is the falsifier, not a bug to
+       fix.** Stop.
+    4. Any `just test-m` gate that passes on `-bios default` and
+       fails under the variant. Stop.
+    5. The published `-bios default` rows (the t48b exhibit pins)
+       move at all. The variant is additive; stop.
+    6. Saving < 2× the largest remaining S-mode rung
+       (2 × `virtq_init` 0.84 ms ≈ 1.7 ms) — D-0061 abandon
+       criterion (b); abandon and write up the partial result.
+  - **Report back, in this shape:** the `summary.txt` header
+    verbatim (canary line, lane-separated S lines, stability
+    section with its per-arm PASS/FAIL lines and `N/M arms PASS`
+    total); per-arm, per-batch E0→E4 and E2→E3g medians with IQRs;
+    per-batch ΔE0→E4 for the fast pair and pooled ΔE2→E3g; the
+    non-seam per-phase Δ table against the 150 µs bounds, both
+    tiers; ΔS with the window verdict; each falsifier's verdict on
+    its own line; `results/gate-failures.csv` contents or its
+    absence; and the CSVs committed. **No exhibit and no report
+    edits until the numbers have been reviewed** — the exhibit's
+    same-campaign gate (both lanes from one batch set, canary
+    columns present in the pinned CSV) binds when it is built.
 - Revisit trigger: any falsifier; QEMU moving the `virt` FDT or
   reset address (checkpoint 0 and the `check_dtb` assert both catch
   it loudly); or the seams demanding a change outside D-0061's
