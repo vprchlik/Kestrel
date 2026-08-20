@@ -569,3 +569,31 @@ reason). When comparing hashes across a refactor, a moved hash with
 identical `.text` is this, not a codegen change — `readelf -x .rodata`
 diff shows the line-number strings. Campaigns are unaffected: each
 records its kernel sha per trial row.
+
+## A diagnostic against QEMU boots ran 50× faster than designed (D-0080)
+
+Symptom: a script that wraps QEMU in `timeout N` (or budgets wall time
+assuming boots last seconds) completes almost instantly; sampling loops
+built around those boots fire at millisecond cadence instead of their
+designed spacing. D-0080's drift probe registered ~35–40 min at ~1.5 s
+resolution and ran in **30 seconds** at 30.7 ms cadence — every gate it
+had still passed, and the session was too short by 60× to see the
+minutes-scale effect it was built to measure.
+
+Cause: the default image **self-terminates**. After the app serves its
+response and exits, the scheduler finds no ready task
+(`task.rs`: "no ready task; shutting down") and calls `sbi::shutdown()`
+— SBI SRST, honored by OpenSBI on `-bios default` and by the D-0079
+shim's sifive_test seam on `-bios none` — so QEMU exits ~270 ms after
+spawn. A `timeout 15` wrapper never binds; it is not pacing, it is a
+dead man's brake that never engages. Only `http-persist` builds
+(`just run-http`) keep serving.
+
+Fix / practice: never derive pacing, duration, or cadence from QEMU
+process lifetime. Enforce cadence explicitly (sleep to the next tick)
+and gate the *achieved* duration and cadence fail-closed at the end of
+the run; have the analyzer compute window spans from recorded
+timestamps rather than assuming them. Related trap from the same
+incident: the runner logged `date -u` while file mtimes showed local
+time, and the 30-second run was read as four hours — label every
+logged clock UTC explicitly.

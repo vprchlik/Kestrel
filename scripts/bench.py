@@ -1234,6 +1234,7 @@ def run_trial(
     serial_text = serial_path.read_bytes().decode("utf-8", errors="replace")
     if "PANIC" in serial_text or "Kernel panic" in serial_text:
         raise BenchFail("TEST FAIL: guest panic")
+    falsifier3_scan(serial_text)
     if arm.system == "linux":
         if "INIT FAIL:" in serial_text:
             raise BenchFail("TEST FAIL: Linux /init INIT FAIL")
@@ -1265,6 +1266,40 @@ def run_trial(
         "phases": phases,
         "qemu_status": qemu_p.returncode,
     }
+
+
+# D-0055 registered campaign shape. The D-0080 audit found these were
+# argparse defaults silently overridable via BENCH_N / BENCH_WARMUP —
+# a nonconforming campaign with normal-looking CSVs. Campaign kinds
+# now gate on them; fp-ab is a diagnostic kind and is exempt.
+REGISTERED_N = 30
+REGISTERED_WARMUP = 3
+CAMPAIGN_KINDS = ("whimbrel", "t48", "t47")
+
+
+def require_registered_counts(kind: str, n: int, warmup: int) -> None:
+    if kind in CAMPAIGN_KINDS and (n, warmup) != (REGISTERED_N, REGISTERED_WARMUP):
+        raise BenchFail(
+            f"TEST FAIL: kind={kind} launched with n={n} warmup={warmup}; "
+            f"the D-0055 registration is n={REGISTERED_N} "
+            f"warmup={REGISTERED_WARMUP}. A stray BENCH_N/BENCH_WARMUP env "
+            f"var is the usual cause; there is no override."
+        )
+
+
+def falsifier3_scan(serial_text: str) -> None:
+    # D-0079 falsifier 3, computed (the D-0080 audit found it was
+    # prose-only): the shim's M-mode trap diagnostic emits the literal
+    # bytes "M!" then hex CSRs. Any occurrence in any serial is the
+    # falsifier itself, not a bug to fix — stop. Empirically zero hits
+    # across every retained serial including Linux arms, so the scan is
+    # unconditional: a hit anywhere deserves the loud stop.
+    if "M!" in serial_text:
+        i = serial_text.index("M!")
+        raise BenchFail(
+            "TEST FAIL: M-mode trap diagnostic 'M!' in serial "
+            f"(falsifier 3): {serial_text[i:i + 48]!r}"
+        )
 
 
 def configs_for(kind: str) -> list[Arm]:
@@ -1421,6 +1456,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     qemu_cpu, client_cpu = pin_cpus()
     n = args.n
     warmup = args.warmup
+    require_registered_counts(args.kind, n, warmup)
     batches = args.batches
     port = args.port
     require_port_free(port)
@@ -1685,6 +1721,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             out_dir=str(out_dir),
             stability=batches >= 2,
             expect_n=n,
+            expect_warmup=warmup,
+            f3_scanned=len(run_rows),
             allow_dirty=args.allow_dirty,
             runs=run_rows,
             phases=phase_rows,
@@ -1821,6 +1859,7 @@ def cmd_summarize(args: argparse.Namespace) -> int:
     schema = runs_schema(runs[0].keys()) if runs else runs_schema(RUNS_FIELDS)
     assert_aggregatable(runs, allow_dirty=getattr(args, "allow_dirty", False))
     expect_n = getattr(args, "expect_n", None)
+    expect_warmup = getattr(args, "expect_warmup", None)
     lines = [
         "# bench summary (D-0055): n / median / IQR / min / max; warmup excluded",
         f"qemu_version={runs[0]['qemu_version']}",
@@ -1853,6 +1892,16 @@ def cmd_summarize(args: argparse.Namespace) -> int:
     )
     if "shuffle_seed" in runs[0]:
         lines.insert(-1, f"shuffle_seed={runs[0]['shuffle_seed']}")
+    f3_scanned = getattr(args, "f3_scanned", None)
+    if f3_scanned is not None:
+        # Zero by construction when this summary exists: a hit raises at
+        # parse time (fail-closed) and records a gate-failure row. The
+        # line documents that the scan ran and its coverage.
+        lines.insert(
+            -1,
+            f"falsifier3_mtrap: 0 hits in {f3_scanned} trial serials + "
+            "canary (computed per boot, fail-closed at first hit)",
+        )
     oh_vals = [
         float(p["delta_ns"])
         for p in phases
@@ -1879,6 +1928,11 @@ def cmd_summarize(args: argparse.Namespace) -> int:
         if expect_n is not None and len(rec) != expect_n:
             raise BenchFail(
                 f"TEST FAIL: {key} has {len(rec)} recorded trials, want {expect_n}"
+            )
+        if expect_warmup is not None and len(rs) - len(rec) != expect_warmup:
+            raise BenchFail(
+                f"TEST FAIL: {key} has {len(rs) - len(rec)} warmup rows, "
+                f"want {expect_warmup}"
             )
         mets = metric_table(rs, phase_groups.get(key, []), schema)
         metric_by_group[key] = mets
@@ -2106,6 +2160,26 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
         if "unset" not in str(e):
             raise
         fired.append(f"unset PHASE: {e}")
+
+    # D-0055 methodology amendment: gates carry their failure mode.
+    try:
+        falsifier3_scan("Z P D C T V M\nM! 0000000000000002 ffffffff80200000\n")
+        raise BenchFail("M! diagnostic did not fire")
+    except BenchFail as e:
+        if "falsifier 3" not in str(e):
+            raise
+        fired.append(f"falsifier 3 M!: {e}")
+    falsifier3_scan("PHASE E3g ok\nHTTP OK\n")  # clean serial passes
+
+    try:
+        require_registered_counts("t47", 5, 3)
+        raise BenchFail("nonconforming n did not fire")
+    except BenchFail as e:
+        if "BENCH_N" not in str(e):
+            raise
+        fired.append(f"nonconforming counts: {e}")
+    require_registered_counts("t47", 30, 3)  # registered shape passes
+    require_registered_counts("fp-ab", 5, 1)  # diagnostic kind exempt
 
     tmp = ROOT / "results" / "selftest"
     tmp.mkdir(parents=True, exist_ok=True)
@@ -2903,13 +2977,25 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
         text=True,
     )
     boot_out = (boot.stdout or "") + (boot.stderr or "")
-    if boot.returncode == 0:
-        raise BenchFail("linux-boot-test passed without artifacts")
-    if "linux artifact missing" not in boot_out:
-        raise BenchFail(
-            f"linux-boot-test missing-artifact shape unexpected: {boot_out}"
-        )
-    fired.append("linux-boot-test fail-closed without artifacts")
+    if (ROOT / "bench" / "linux" / "MANIFEST").exists():
+        # Bench host with artifacts: the boot test really runs and must
+        # pass. The original single-branch check assumed artifacts
+        # absent ("runs anywhere") and failed here from the day
+        # linux-build landed them — the same environment-dependent
+        # gate-assumption class as D-0080's cadence finding.
+        if boot.returncode != 0:
+            raise BenchFail(
+                f"linux-boot-test failed with artifacts present: {boot_out}"
+            )
+        fired.append("linux-boot-test green with artifacts present")
+    else:
+        if boot.returncode == 0:
+            raise BenchFail("linux-boot-test passed without artifacts")
+        if "linux artifact missing" not in boot_out:
+            raise BenchFail(
+                f"linux-boot-test missing-artifact shape unexpected: {boot_out}"
+            )
+        fired.append("linux-boot-test fail-closed without artifacts")
 
     # D-0075: the loss classifier must find a planted event, ignore
     # ordinary jitter, and refuse a pre-D-0075 CSV rather than report

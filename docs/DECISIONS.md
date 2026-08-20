@@ -1963,6 +1963,22 @@ D-0011 onward are working decisions made under those constraints.
   **Every subsequent before/after claim cites this baseline.** The
   KVM-pod T4.1/T4.2 numbers remain ladder-ordering and diagnosis only.
 
+- **Methodology amendment (2026-08-20, from D-0080's first execution —
+  an instrument that sampled 1000× off its registered cadence while
+  every gate it had passed):** every registered quantitative design
+  parameter — cadence, duration, trial counts, window span,
+  thresholds, exclusion sets — must be either **enforced fail-closed
+  by the instrument at run time** or **computed from the recorded
+  data and gated at analysis time**. Never asserted as prose, never
+  printed as static text a reader could mistake for a measurement. A
+  registration whose parameter exists only in prose must say so, in
+  the registration ("stated, unenforced"). Self-tests are fail-open
+  unless they contain an input representing the failure mode and
+  assert the gate refuses it — the same shape as audit finding 31: a
+  broken build must FAIL every gate. Incident record and the first
+  audit of the live registrations against this rule: D-0080, first
+  execution (2026-08-20).
+
 ## D-0056: Pre-baseline corrections (T4.0b)
 - Date: 2026-08-16 — Status: accepted
 - **Decision:** four audit findings are fixed before the first baseline
@@ -5898,6 +5914,48 @@ D-0011 onward are working decisions made under those constraints.
   measured, repeatedly, not to have — rather than about the
   individual gates. Disposition of this campaign's abort is the
   user's; nothing here proposes weakening anything.
+- **Second attempt authorized (2026-08-20; registered before
+  launch).** The confirmation campaign re-runs under the
+  pre-registration block above, **unchanged**, with three
+  pre-commitments and a minimal enforcement delta:
+  - **Pre-commitment 1 — unchanged registration.** The adopted
+    block governs verbatim; the t47b abort history is disclosed in
+    the campaign record.
+  - **Pre-commitment 2 — rerun cap.** This is the second attempt
+    (t47b was the first). If it aborts again on a pre-guest
+    control, there is no third roll: the D-0080 probe converts from
+    improvement work back to blocker, and the abort pair becomes
+    the drift evidence. Registered now so that reruns cannot become
+    a filter selecting host weather.
+  - **Pre-commitment 3 — disclosure.** The campaign record states
+    that D-0055's stability null is under methodology review
+    (D-0080, open) and that the run proceeded because a pass under
+    the current, stricter criterion survives every contemplated
+    resolution of that review.
+  - **Enforcement delta (the only harness change before launch;
+    D-0080's looks-fine-isn't defect class is the reason):**
+    (1) falsifier 3 is computed — `falsifier3_scan` checks every
+    trial and canary serial for the shim's `M!` diagnostic at parse
+    time, fails closed at first hit with a gate-failure row, and
+    the summary header reports `falsifier3_mtrap: 0 hits in N
+    trial serials + canary`; (2) the 3+30 counts are gates —
+    `require_registered_counts` refuses to launch a campaign kind
+    with n ≠ 30 or warmup ≠ 3 (both were silently overridable via
+    `BENCH_N`/`BENCH_WARMUP`; no override exists), plus a post-hoc
+    per-group warmup row-count assert beside the existing
+    recorded-count assert. Both gates carry failing-input selftests
+    per the D-0055 methodology amendment. Certifying the delta also
+    surfaced and fixed `bench-selftest`'s own environment
+    assumption (see the D-0080 audit disposition).
+  - **Stays prose for this run, listed so the verdicts are known to
+    be hand-built:** falsifier 1 (same-batch median comparison),
+    falsifier 2 (both 150 µs tiers and the non-seam Δ table; the
+    seam set {`stvec`, `frame_init`, `E3g`} is not in code), the
+    demotion-rule tagging, the ΔS window and its falsifier,
+    falsifier 6's arithmetic. Computing them is follow-up work, not
+    launch work.
+  - Operational, not registration: schedule in quiet host weather,
+    not immediately after large builds.
 - Revisit trigger: any falsifier; QEMU moving the `virt` FDT or
   reset address (checkpoint 0 and the `check_dtb` assert both catch
   it loudly); or the seams demanding a change outside D-0061's
@@ -6182,6 +6240,252 @@ D-0011 onward are working decisions made under those constraints.
   change, no cpuidle clamp, and no adoption of the D-0078 amendment
   are implied by this entry; each follows only from its decision
   rule plus sign-off.
+- **First execution, 2026-08-20: INVALID RUN — instrument failure,
+  not a host finding. No rule fired or failed legitimately; the
+  registration is untested and every analyzer verdict from this run
+  is void.**
+  - **Provenance (clean):** prereg frozen at `ddf5dd0`, instrument
+    sha256s match the pins above, host controls verified in force
+    before and after, 509 spawns + 10 witness boots, 0 NA rows,
+    witness kernel family `1e654985…`. The run's *execution* was
+    exactly as scripted. The script was not the registered design.
+  - **The failure:** the registration specified ~500 probes at
+    ~1.5 s resolution over ~35–40 min. The instrument had no pacing
+    at all and the guest **self-exits after serving** (D-0079's own
+    SRST seam — the thing that makes campaign trials fast), so
+    witness boots and load bursts take ~270 ms, not their 15 s
+    timeouts. Measured from the CSVs: A→A probe cadence 30.7 ms
+    median; loadwork slots ~300 ms; whole session **~30 s wall
+    clock** (the operator's "07:01:50 to 11:02:20" is a timezone
+    misread — the runner logs `date -u`; 11:02:20Z = 07:02:20
+    local). The simulated "campaign-shaped" 60-probe windows span
+    **3.4–4.7 s** against the campaign's ~200 s — the analyzer's
+    printed "≈ 4.2 min" was the registered assumption emitted as
+    static text, never computed from timestamps. A probe sampling
+    4-second windows is blind by construction to the minutes-scale
+    drift that produced t47b; it measured sub-second spawn jitter
+    at 1000× the intended frequency.
+  - **Why no gate caught it:** the runner fail-closed on entry
+    presence, clean tree, selftest, host controls, ext4 — every
+    precondition *except its own sampling design*. The registered
+    cadence and duration existed only as prose. Two further
+    analyzer defects, disclosed: the rule-3 verdict line dropped
+    the registered "with settling shape" clause (it over-fired
+    relative to the rule as written), and the window-duration claim
+    was asserted, not measured.
+  - **The selftest was a fail-open gate, and is named as one.** It
+    validated the analyzer's arithmetic on synthetic *values* while
+    the runner sampled 1000× off its registered cadence — and
+    passed, because no input it contains represents the failure
+    mode. That is the same shape as the early M4 boot harness
+    printing PASS on a stale kernel (audit finding 31): a gate
+    satisfiable by the thing it checks. Requirement, standing: the
+    selftest must be able to fail on a cadence violation. The input
+    that makes it fail: a synthetic probe series with
+    realistic values but **timestamps compressed ~100×** (window
+    wall-spans ≪ campaign duration) — the analyzer must refuse it
+    as void; a correctly paced synthetic series must pass. A
+    selftest without both inputs does not gate this instrument.
+  - **Consequences for the specific numbers:**
+    - Sequential p95 294.4 µs is 4-second-window jitter; its
+      near-coincidence with t47b's 304 µs is numerology. The
+      comparison the rules run on is void, in both directions.
+    - Rule 3's +344.7 µs A−B offset is contention measured
+      30–300 ms after load bursts at a duty cycle unlike any
+      campaign. Its *sign* (loaded probes slower — contention, not
+      warming) contradicts the "load warms the path" mechanism
+      rule 3 encoded, and the block table shows **no settling
+      shape** (front-6/back-4 step −241 µs across 30 s of wall
+      time; cycle 1 is not even the maximum). **No warm-up window
+      is drafted: it would discard trials against a transient that
+      does not exist, at a timescale that was not measured.**
+    - Rule 4's r = −0.79 correlated first-connect against cpu6
+      deep-idle time over **3.2 s intervals** during constant QEMU
+      spawning, while the host relaxed from the pre-run kernel
+      builds (deep-idle fraction 31 % → 47 % across the session as
+      first-connect fell). That is micro-contention, trivially
+      expected at this grain — not the D-0078 host-state question.
+      Not citable, in either direction.
+    - The parity cut (294.4 → 105.6) demonstrated that parity
+      cancels sub-second jitter, which was never in doubt. The
+      probe contributes **nothing** to the parity question; the
+      committed-campaign parity priors (Arm 0 table) stand alone
+      as one analysis-time observation.
+  - **What survives, as hypotheses for the redesigned run only:**
+    load slows and destabilizes spawns (A−B +345 µs; Arm B span
+    611 µs ≈ 2× Arm A's 347 µs — the campaign-like condition is
+    the noisier one); the session's own startup work is a plausible
+    within-session trend driver; witness regime this session was
+    deflated (page_verify 11.76–12.14 ms), recorded for the regime
+    timeline. Predictions, not findings.
+  - **Parity disposition (asked and answered):** adopting the
+    parity split on rule 3's evidence plus cross-run convergence is
+    **not available**. Rule 2 declined it by its registered
+    conjunction, this run's parity evidence is void with the rest
+    of the run, and taking the outcome anyway would be the fourth
+    mis-specified null — this time mis-specified by us, after
+    seeing the data. The redesigned run is where rule 2 can
+    legitimately fire; the rules as amended remain in force,
+    untested, with one text correction owed: the automated rule-3
+    line must carry its settling clause.
+  - **Residency column (asked and answered):** the case for landing
+    per-trial cpuidle residency as a **recorded, never-clamped**
+    D-0055 column with the next campaign is sound and does **not**
+    rest on this run's r = −0.79, which must not be cited. It rests
+    on: D-0078's standing want for discriminating evidence, rule
+    4's registered action path, near-zero cost, and the column
+    being the only route to the powered n ≥ 60 test. Draft
+    registration (lands only with sign-off, as a harness change,
+    with the next campaign): sample cpu6 cpuidle `state*/
+    {usage,time}` immediately before each trial; per-trial deltas
+    as runs.csv columns; driver test **|r| ≥ 0.6, n ≥ 60 per arm,
+    two-sided**, pre-registered before that campaign runs; the
+    sign is recorded in advance as **unpredicted** (this run's
+    negative sign is an observation at an invalid grain).
+  - **Verdict-line audit (every rule's implementation checked
+    against its registered wording):** rules 1a, 1b match exactly;
+    rule 2 matches all four conjuncts including the amended 150 µs
+    absolute bound (boundary convention differs immaterially:
+    registered "offset > 200 µs" disqualifies, the code uses ≥ —
+    measure zero, noted); rule 4 matches the amended
+    hypothesis-generating wording and prints its n; rule 5's line
+    is prose-accurate. Two defects: **rule 3** (known — settling
+    clause dropped, over-fires on offset alone) and **rule 1c,
+    found by this audit — it inherits rule 3's defect** through its
+    `not rule-3` term. On a *valid* run with offset ≥ 200 µs and no
+    settling shape, registered rule 3 would not fire but the
+    automated line would, and rule 1c — the no-change outcome —
+    would be wrongly suppressed: the defect pair converts
+    "criterion correct as written" into "warm-up proposal." Exactly
+    this run's shape, so the defect was live, not theoretical. Both
+    corrected in the redesign below.
+  - **Registration-parameter audit (the D-0055 methodology rule's
+    first application; listed, deliberately not fixed).** Live
+    registrations, each stated quantitative parameter classified
+    ENFORCED (fail-closed in code) / DEFAULT (right value by
+    default, silently overridable, nothing ties the invocation to
+    the registration) / PROSE (hand-computed or unchecked):
+    - **D-0055 standing protocol:** stability tolerance ENFORCED
+      (`stability_tol_ns`); host controls ENFORCED; two-batch
+      interleaved shuffle and median/IQR ENFORCED structurally;
+      **3 + 30 trial counts DEFAULT** — `--n` defaults from the
+      `BENCH_N` environment variable, so a stray env var produces a
+      nonconforming campaign with normal-looking CSVs (trial
+      numbers would betray it on inspection; no gate checks it).
+    - **D-0078 standing step:** canary pre-batch boot and
+      abort-on-no-PHASE ENFORCED; canary columns ENFORCED;
+      regime/witness classification analysis-time by design
+      (amendment drafted, not adopted — as registered).
+    - **D-0079 confirmation block:** canary abort ENFORCED;
+      same-day interleaving ENFORCED structurally (one invocation =
+      one shuffle = both batches); per-arm stability verdicts
+      ENFORCED. **Falsifier 1 PROSE** (same-batch median
+      comparison, hand-computed from the summary). **Falsifier 2
+      PROSE, both tiers** — the 150 µs per-phase and sum tests and
+      the non-seam Δ table are hand-built each time (t47b's table
+      was ad-hoc analysis); the seam set {`stvec`, `frame_init`,
+      `E3g`} exists nowhere in code. **Falsifier 3 UNENFORCED** —
+      no scan for the shim's `M!` diagnostic anywhere in
+      `bench.py`, although `serial_text` is already in memory per
+      trial at parse time; a mid-campaign M-mode trap is caught
+      only if a human reads 240 serials. **Demotion rule: inputs
+      computed, application PROSE** — nothing tags a stability
+      failure as demotion-eligible (metric ∈ {`e0_to_e4_ns`,
+      `w_ns`} ∧ arm = OpenSBI fast); acceptable as a sign-off
+      decision, but the summary could tag it. **ΔS window and its
+      falsifier PROSE** (lane S lines printed; comparison by
+      hand). **Falsifier 6 arithmetic PROSE.** Falsifier 5
+      ENFORCED where it binds (exhibit pin checks); falsifier 4's
+      gate exists, the run-both-comparisons step is operator
+      prose. The expected ΔE2→E3g range is a declared expectation,
+      hand-checked — conformant as registered, listed for
+      completeness.
+    - **D-0080 itself:** cadence and duration were PROSE (this
+      incident); window span was static text; the redesign converts
+      all three to enforced or computed-and-gated; the settling
+      clause is explicitly non-automated and says so.
+    - Same-day disposition: falsifier 3 and the 3+30 counts were
+      converted to computed gates before the second confirmation
+      attempt (D-0079, second-attempt addendum); the rest remain
+      prose and the campaign record says so. Certifying that delta
+      surfaced one more instance of the class: `bench-selftest`
+      itself assumed Linux artifacts absent ("runs anywhere") and
+      has been failing on the bench host since `linux-build` landed
+      them — an environment-dependent gate assumption, fixed to
+      assert the correct fail-closed shape per environment (green
+      boot-test with artifacts present, missing-artifact failure
+      without).
+  - **Falsifier 3's reported verdicts were assertions, not checks —
+    said plainly.** Falsifier 3 was restated in every launch prompt
+    as the most serious falsifier, and both t47 and t47b were
+    reported back as "no M-mode trap in any serial." No scan
+    existed and nobody read 265 serials per campaign: those
+    verdicts were derived from the absence of failure symptoms (an
+    `M!` trap parks the shim, so its trial would very likely have
+    failed loudly) — a plausibility argument, not a check. **As
+    reported, both campaigns' falsifier-3 verdicts were unverified,
+    not passed.** Retroactive scan (2026-08-20): `grep 'M!'` over
+    every retained serial — t47: **265 files, 0 hits**; t47b:
+    **265 files, 0 hits** (132 serials × 2 batches + canary each,
+    all four arms present, counts verified). Both campaigns'
+    falsifier-3 verdicts are now **verified PASS on trial and
+    canary serials**. Scope stated: the registered falsifier says
+    "any trial or gate"; gate-run serials from that day were
+    transient and not retained, so the retroactive verdict covers
+    what disk holds — every trial and canary serial.
+  - **Instrument redesign (drafted, not implemented; adopting it
+    changes the scripts, so the sha256 pins above go stale and are
+    re-pinned in the amendment that adopts this):**
+    1. **Cadence, amended 1.5 → 3.0 s nominal and enforced.**
+       Disclosure: at the originally registered 1.5 s the session
+       spans only ~4 campaign-lengths; at 3.0 s with unchanged
+       counts (10 cycles × 50 probes) it spans ≥ 8. The runner
+       sleeps to the next 3.0 s tick; at end of run it **fails
+       closed** if the median inter-probe gap falls outside
+       [1.5, 4.5] s (the 2× rule) or the achieved session is
+       under **25 min**. Both bounds are written into
+       `prereg.txt` and checked from the recorded timestamps, not
+       from intent.
+    2. **Windows become duration-true, not count-true.** A
+       simulated campaign window is **200 s of wall clock** (t47/
+       t47b length), drawn by start time; sequential split at the
+       window's time midpoint, parity by alternation in time
+       order; each half subsampled to 30 points to match the
+       campaign's batch-median noise. The analyzer **computes**
+       achieved window spans from timestamps, prints them, and
+       **voids the run** if the median span is under 195 s or any
+       window holds fewer than 40 probes.
+    3. **Rule 3 prints a conditional, never FIRES on offset
+       alone:** "offset condition met; the registered settling
+       clause is not automated — the rule-3 verdict requires the
+       block-table inspection recorded at sign-off." **Rule 1c
+       correspondingly prints pending** until that settling
+       verdict exists, closing the inherited defect found by the
+       audit above.
+    4. **The selftest carries the failure mode** (the fail-open
+       item above): compressed-timestamp input must be refused as
+       void, correctly paced input must pass; the runner keeps
+       refusing to start if the selftest fails.
+    5. **Every runner clock prints `date -u` with an explicit
+       UTC label**, including the cycle lines and `prereg.txt`.
+    **Cost in wall time: ~30 min end to end** — 10 cycles at
+    ~2.6 min each (50 paced probes × 3.0 s + witness ~0.3 s +
+    5 load bursts ~2 s + sensors) ≈ 26–28 min, plus ~1–2 min of
+    kernel builds. Against 30 s for the invalid run, and within
+    the 35–40 min originally registered.
+  - **Meta-item, new subtype:** the family was "instrument present,
+    analysis aggregated past the grain"; this adds "**registration
+    stated a design parameter the instrument never implemented,
+    and no gate checked it**" — with the corrective rule: every
+    registered quantitative design parameter (cadence, duration,
+    window span, n) is either enforced at run time or computed
+    from the data and gated at analysis time. Never asserted as
+    prose, never printed as static text. **Generalized past this
+    entry (2026-08-20): the corrective is now a D-0055 methodology
+    amendment** — it is a rule about how registrations are
+    written, not a drift-probe lesson — with this record as the
+    incident pointer and the registration-parameter audit above as
+    its first application.
 - Revisit trigger: a third consecutive mis-specified-null diagnosis
   anywhere in the gate suite (rule 5's clause); or any future
   campaign aborting on a pre-guest control before this probe has
