@@ -4814,6 +4814,21 @@ D-0011 onward are working decisions made under those constraints.
     percentiles when the per-boot join was in `boots.jsonl` the
     whole time — and that join, applied afterwards, overturned the
     conclusion in one query.
+  - (Added 2026-08-20, sixth — a subtype: D-0080's probe ran 1000×
+    off its registered cadence while every gate passed; the design
+    parameter, not the data, was asserted instead of checked.
+    Recorded in full in D-0080's first-execution record.)
+  - (Added 2026-08-20, seventh: the t47b "regime flip" diagnosis.
+    The per-boot warmup rows sat in every pinned `phases.csv`, and
+    the diagnosis concluded a mid-warmup flip from the canary plus
+    one batch's warmups read in the wrong order. The
+    warmup-position join across batches and campaigns, run one day
+    later, put the deflated boot at the same structural position —
+    each batch's first safe warmup — in all four campaigns, and
+    refuted the flip in one table. The instrument was present the
+    whole time; the analysis pooled past warmup position. See the
+    D-0078 amendment refutation block and the t47c review in
+    D-0079.)
   In none of these was the instrument missing. In all of them the
   analysis aggregated past the grain at which the effect lived.
   The rule this yields is stronger than the boundary corollary and
@@ -5156,6 +5171,54 @@ D-0011 onward are working decisions made under those constraints.
     trials are uniform); it is a **genuine regime flip inside the
     warmup window**, the mid-campaign-flip residual risk this entry
     named, observed one page earlier than feared.
+  - **Trigger evidence REFUTED (2026-08-20, t47c review — the text
+    above stands as written and is struck by this block, per the
+    disclosure rule).** The flip reading kept the wrong boot order:
+    **11.85 ms was batch-2's first warmup**, mid-campaign. Batch
+    1's warmups — the boots seconds after the 12.070 canary — read
+    **16.28 / 16.32 / 16.21, inflated**. The canary was **not**
+    correct at its instant, and there was no regime flip inside the
+    warmup window. We adopted a mechanism that the data on disk
+    already contradicted: the per-boot warmup rows sat in every
+    pinned `phases.csv` the whole time, and nobody joined warmup
+    *position* before concluding — the grain pattern, instance 7 in
+    its list. The join, run across every pinned campaign
+    (safe-arm `page_verify`, ms; dips bold):
+
+    | campaign | canary | batch-1 warmups | batch-2 warmups | recorded |
+    |---|---|---|---|---|
+    | t48b | (pre-canary) | 16.32 16.22 16.46 | **11.78** 16.06 16.24 | inflated 16.16/16.13 |
+    | t47  | console-only | **12.11** 16.43 16.11 | **11.91** 16.52 16.64 | inflated 16.42/16.41 |
+    | t47b | 12.070 | 16.28 16.32 16.21 | **11.85** 16.16 16.10 | inflated 16.14/16.13 |
+    | t47c | 12.007 | **11.84** 15.95 16.02 | **12.06** 16.42 16.09 | inflated 16.25/16.13 |
+
+    **What the join establishes — recorded as structure, no
+    mechanism proposed:** (a) every batch-2 first safe warmup in
+    all four campaigns, every canary ever taken, and every lone
+    e0drift witness boot falls in **[11.76, 12.14] ms** — one
+    tight cluster; batch-1 first warmups dip in two of four;
+    (b) the dipped boots sat behind 0.7–0.8 s gaps, identical to
+    their inflated neighbors — **wall-clock spacing is refuted as
+    the driver**; (c) the m-lane dips at the same position (t47c
+    batch-2 first warmup 7.18 ms against a steady 10.85) — the
+    effect **survives removing both OpenSBI and DBCN**, so it
+    lives on the host's polled-UART path, not the SBI console.
+    The canary therefore measures a reproducible *structural*
+    state — whatever a batch-boundary first boot shares with a
+    lone boot — and not the campaign's serial regime. Its
+    demotion in this amendment is strengthened accordingly.
+    Mechanism unknown, deliberately not guessed; the table is the
+    evidence.
+  - **Carve-out re-draft (drafted 2026-08-20, not adopted):** the
+    amendment's uniformity clause (classification item 3 and the
+    regime-mixed salvage rule, item 5) tests **recorded trials
+    only**. Warmup rows at batch-boundary positions — each batch's
+    first warmup of an arm — are excluded from the uniformity test
+    and recorded as the structural dip. A campaign whose only
+    sub-divide readings sit at those positions is **not**
+    regime-mixed. Without this carve-out, a normal batch-boundary
+    dip reads as regime-mixed and aborts a sound campaign for
+    nothing.
   - **Reconciliation, every campaign with committed CSVs:** the
     table is a **generated exhibit, never typed** —
     [`report/exhibits/regime-witness.md`](../report/exhibits/regime-witness.md),
@@ -5874,7 +5937,15 @@ D-0011 onward are working decisions made under those constraints.
   agreeing with the canary — and the second 16.28; the canary was
   correct at its instant, the flip landed inside the warmup window,
   and the failure is in reading one instant as a certificate (the
-  D-0078 amendment drafted from this).
+  D-0078 amendment drafted from this). **REFUTED 2026-08-20 (t47c
+  review): the refinement above kept the wrong boot order.**
+  11.85 ms was **batch-2's** first warmup, mid-campaign; batch 1's
+  warmups — seconds after the canary — read 16.28/16.32/16.21,
+  inflated. There was no flip inside the warmup window and the
+  canary was not correct at its instant; the deflated reading sits
+  at the same structural position (each batch's first safe warmup)
+  in all four pinned campaigns. Evidence table and the re-draft:
+  the D-0078 amendment refutation block; grain-rule instance 7.
 - **Banner open observation, third point — and the witness corrects
   its premise.** By the in-campaign witness all three campaigns are
   the **same DBCN regime (inflated)**: t48b fast E0→E4 51.87, t47
@@ -5956,6 +6027,89 @@ D-0011 onward are working decisions made under those constraints.
     launch work.
   - Operational, not registration: schedule in quiet host weather,
     not immediately after large builds.
+- **Confirmation campaign, second attempt (2026-08-20, batches
+  `20260820T130700Z-1/-2`, git_sha=346f4c1 dirty=0, CSVs committed
+  at c2759e2): PASSED — every falsifier verified. T4.7 publishes.**
+  - Gate state: stability 4/4 arms PASS; steal 0 on all 240
+    recorded trials; counts gated; `falsifier3_mtrap: 0 hits in 264
+    trial serials + canary` (computed, fail-closed). **Regime:
+    inflated, established by the witness** — all 60 recorded
+    safe-arm trials in 15.613–16.535 ms (median 16.180, IQR 0.142),
+    uniform across batches (16.249/16.131); the canary read 12.007
+    and **disagrees**, the second of two comparable cases — see the
+    D-0078 amendment refutation block for what the canary actually
+    measures.
+  - **Falsifier verdicts** (1, 2, ΔS and 6 hand-built, prose-only
+    as registered):
+    - Falsifier 1 PASS per batch: m-fast 28.579 < fast 52.270
+      (batch 1); 28.501 < 52.190 (batch 2).
+    - Falsifier 2 PASS both tiers (seam set {`stvec`, `frame_init`,
+      `E3g`} by the registered criterion): worst non-seam |Δ| =
+      57.0 µs (`page_verify` — reproduces t47's −56 µs ambient lane
+      systematic; PMP-geometry hypothesis unchanged, its cell still
+      unrun); Σ signed non-seam = +31.3 µs. Bounds 150/150.
+    - ΔS = −0.002 ms: both falsifiers PASS (not < −0.3, not > 3);
+      expectation window MISS, third consecutive — refuted as a
+      model below.
+    - Falsifier 6 PASS: saving 23.69 ms against the 1.7 ms bar
+      (14×).
+    - Falsifier 3 PASS, **computed this run** (harness gate as of
+      346f4c1); the prior campaigns' retroactive verification is in
+      the D-0080 record.
+    - Falsifier 4 PASS: `just test-m` re-run at 346f4c1 after the
+      campaign, all gates green — a same-day verdict, not a carried
+      one.
+    - Falsifier 5 PASS by construction: the t48b exhibit pins are
+      immutable git objects; nothing republished.
+  - **Claims (design (d)). Claim A**, pooled ΔE2→E3g, stability-
+    gated: **−0.714 ms** (fast 6.402, IQR 0.060; m-fast 5.688, IQR
+    0.102; per batch −0.718/−0.703; inside the registered
+    [−1.1, −0.4]; t47 read −0.717 — reproduction to 3 µs across a
+    day). **Claim B**, ΔE0→E4 per batch: **−23.691 (batch 1),
+    −23.689 (batch 2) ms** — the two batches agree to 2 µs.
+    Cross-campaign: m-fast 28.50–28.58 sits inside the prior
+    six-batch span [28.39, 28.84]; the OpenSBI side (52.19–52.27)
+    sits with t48b (51.87) and t47b (52.13–52.20), t47's 55.43
+    remaining the banner outlier; nothing moved beyond the
+    campaigns' own spread except what the banner window owns.
+  - **S figures, quoted verbatim from the gitignored `summary.txt`
+    (S has no CSV column; this is its durable record):**
+    `s_ns=7036221 iqr=1275485 n=120`; `s_ns_mshim=5526314
+    iqr=2127618 n=120`; `s_ns_fast=6930821 s_ns_safe=7047765`;
+    `s_ns_m_fast=6932504 s_ns_m_safe=5274049` — the shim-safe S
+    anomaly persists (−1.77 ms, profile-dependent, no consumer).
+  - **ΔS expectation refuted as a model (D-0069 pattern: the model
+    is wrong, not the runs).** Three campaigns, one direction,
+    converging on zero: **+0.161, +0.049, −0.002 ms**. S is the
+    post-connect residual — (E0→E4 − E0→first_connect) − (W + SYN
+    + D_fin) — and a 0.1–1.5 ms per-boot `fw_dynamic` *load* inside
+    that residual is excluded at three campaigns' resolution. The
+    load either costs ~nothing per boot (the image is page-cached
+    across boots and QEMU maps it once at machine init) or lands
+    before the hostfwd listener is up — inside
+    `e0_to_first_connect`, which S subtracts. `fw_dynamic`'s
+    *runtime* (banner, init) was never in S; it is the firmware
+    window Claim B removes. **Corrected expectation, from all three
+    measurements rather than a load model: ΔS ≈ 0, |ΔS| ≤ 0.2 ms.**
+    The falsifier bounds (ΔS < −0.3 ms, |ΔS| > 3 ms) stand
+    unchanged as coarse sanity.
+  - **Published claim — the report's sentence, conditions with the
+    ratio:** "Under QEMU TCG on the pinned bench host (D-0055
+    controls: two interleaved 30-trial batches, stability-gated
+    4/4, steal 0), replacing OpenSBI with the 320-byte M-mode shim
+    in the `-bios` slot cuts the fast-boot image's
+    spawn-to-first-HTTP-byte median from 52.2 ms to 28.5 ms per
+    batch (−23.7 ms, 1.8×), of which only −0.71 ms is guest-side
+    work (pooled ΔE2→E3g); the remainder is the removed firmware
+    window, whose size varies by ±3 ms across campaigns and is
+    therefore reported per batch, never pooled."
+  - **Deferred, listed so they are not lost — none block
+    publication:** the exhibit build with its same-campaign gate;
+    the parity split and D-0078 amendment adoptions (including the
+    2026-08-20 refutation and carve-out re-draft); the redesigned
+    drift probe; the `gate-failures.csv` rotation fix; computing
+    falsifiers 1, 2, ΔS and 6; the audit's other prose-only
+    registrations.
 - Revisit trigger: any falsifier; QEMU moving the `virt` FDT or
   reset address (checkpoint 0 and the `check_dtb` assert both catch
   it loudly); or the seams demanding a change outside D-0061's
