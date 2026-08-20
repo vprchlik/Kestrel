@@ -5906,9 +5906,12 @@ D-0011 onward are working decisions made under those constraints.
 
 ## D-0080: E0-side drift — characterize it, then decide what D-0055's stability criterion does
 
-- Date: 2026-08-19 — Status: pre-registered, **not run**. Grok executes
-  from this entry; nothing below has produced data except the Arm-0
-  pass over already-committed CSVs, which is quoted with its numbers.
+- Date: 2026-08-19 — Status: pre-registered, **not run**. Amended
+  2026-08-20 on review, still before any run: rules 1, 2 and 4 (each
+  amendment disclosed in place, original kept), plus two disclosed
+  analyzer fixes. Grok executes from this entry; nothing below has
+  produced data except the Arm-0 pass over already-committed CSVs,
+  which is quoted with its numbers.
 - **The trap, named first.** The stability gate fired (t47b) and this
   entry examines the criterion it fired against. That is the shape of
   loosening-because-fired, and it would be the third mis-specified-null
@@ -5917,7 +5920,12 @@ D-0011 onward are working decisions made under those constraints.
   the outcome "the criterion is correct as written and t47b was
   ordinary bad luck" is a live outcome with its response written down:
   **no change, entry closed, abort stands**. If the data lands there,
-  that is the result.
+  that is the result. (2026-08-20: rule 1's first registration of that
+  outcome was *itself* a mis-specified null — it ignored that the
+  committed campaign record already exceeds the floor the probe would
+  be tested against — caught in review before any data ran, the first
+  pre-run catch in this sequence. The no-change outcome stays live;
+  its detection moved. See rule 1 as amended.)
 - **What is being characterized.** `e0_to_first_connect_ns` — host-side
   QEMU startup to hostfwd listener-up, complete before the guest runs
   (D-0070). t47b: all four arms moved the same direction
@@ -6023,35 +6031,108 @@ D-0011 onward are working decisions made under those constraints.
   under measured drift: p95 in 150–600 µs (i.e. of order the 2 %
   tolerance — capable of producing t47b); parity-split simulated
   p95: under 150 µs.
-- **DECISION RULES — fixed now, before the run.** Analysis computes,
-  from the probe series, the simulated distribution of
+- **DECISION RULES — fixed 2026-08-19 before the run; rules 1, 2 and
+  4 amended 2026-08-20 on review, still before any run.** Analysis
+  computes, from the probe series, the simulated distribution of
   batch-median differences for `e0_to_first_connect_ns` under (a)
-  sequential and (b) parity assignment, at campaign length (~3.4 min,
-  n=30/arm/batch), plus the A−B offset and the driver correlations.
-  1. **If sequential-split p95 < 200 µs** (the tolerance floor; the
-     drift cannot plausibly produce t47b-scale failures): **the
-     criterion is correct as written; t47b was ordinary bad luck; NO
-     CHANGE to D-0055; this entry closes.** The abort stands either
-     way.
+  sequential and (b) parity assignment at campaign shape (windows of
+  60 consecutive probes, n=30 per simulated batch), plus the A−B
+  offset, per-arm block-median spans, and the driver correlations.
+  Two analyzer disclosures (fixed 2026-08-20, before any run): the
+  simulation runs on the **arm-centered pooled series** (each probe
+  minus its arm's session median) — uncentered, a static A−B load
+  offset masquerades as sequential drift in every window spanning a
+  block boundary (selftest now proves the centering removes exactly
+  that); and a 60-probe window spans ~4.2 min against the campaign's
+  ~3.3, mildly inflating simulated drift exposure — a bias *toward*
+  rule 2's precondition, which is why rule 2 now carries an absolute
+  parity bound that inflation of the sequential side cannot satisfy.
+  1. **As first registered:** sequential-split p95 < 200 µs → the
+     criterion is correct as written, t47b was ordinary bad luck, no
+     change. **Amended 2026-08-20, before any run: that reading was
+     itself a mis-specified null.** The committed campaign record
+     already exceeds the floor — t47b's pooled sequential half-split
+     is 304 µs and the firing arm's batch-median delta 479 µs — so a
+     probe that cannot produce deltas of that scale contradicts the
+     record; it does not exonerate the criterion. Three branches,
+     each its own outcome (the abort stands under all of them):
+     - **1a — the probe is not a valid proxy:** sequential p95 <
+       200 µs AND Arm A block-median span < 200 µs AND Arm B span <
+       300 µs — no arm shows campaign-scale movement while the
+       committed record does. Probe-design failure, not a verdict:
+       **nothing is adopted on the probe's authority — not the old
+       "criterion correct" reading and not rule 2's parity split** —
+       and the next step is reconciling the two instruments, not
+       concluding from either. If reconciliation needs a redesign,
+       the missing-element candidates are named now: the four-arm
+       QEMU/kernel mix, the end-of-arm tshark passes over
+       accumulated pcaps, the two-batch rhythm, a different day's
+       host weather — and the redesign is pre-registered as an
+       amendment here before it runs.
+     - **1b — load coupling confirmed (the A-vs-B difference that
+       reconciles them):** Arm B block-median span ≥ 300 µs
+       (campaign-scale: ≈ t47b's 304 µs pooled half-split, the
+       smallest committed exceedance) while Arm A span < 200 µs
+       (under the floor). The bare probe was missing the campaign's
+       own load: the quantity drifts because of what a campaign does
+       to the host, not ambient weather. The loaded condition is the
+       proxy of record — campaigns always run loaded — and rules
+       2–3 are read on Arm B's evidence.
+     - **1c — where the no-change outcome now lives:** sequential
+       p95 ≥ 200 µs (the probe *reproduces* campaign-scale drift)
+       AND neither rule 2 nor rule 3 finds structure a design change
+       would remove. **The criterion is correct as written: the gate
+       is refusing to certify batch equivalence on a host that is
+       genuinely not equivalent across batches. t47b-scale aborts
+       are the gate working. NO CHANGE to D-0055; the response is
+       operational (re-run in quieter host weather), not criterial;
+       this entry closes.**
   2. **If sequential-split p95 ≥ 200 µs AND parity-split p95 < half
-     the sequential p95 AND A ≈ B** (no systematic load offset >
-     200 µs): the gate's null is structurally violated by sequential
-     batches for pre-guest controls → **adopt the analysis-time
-     parity split for pre-guest control metrics only**, by the
-     property rule above, with the one-time pinned-campaign re-check.
-     Measured-quantity metrics keep sequential batches. Tolerances
-     move for **no** metric.
+     the sequential p95 AND parity-split p95 < 150 µs absolute
+     (amended 2026-08-20: the projection's own parity bound made
+     load-bearing, so the disclosed window-span inflation of the
+     sequential side cannot fire this rule through the ratio alone)
+     AND A ≈ B** (no systematic load offset > 200 µs): the gate's
+     null is structurally violated by sequential batches for
+     pre-guest controls → **adopt the analysis-time parity split for
+     pre-guest control metrics only**, by the property rule above,
+     with the one-time pinned-campaign re-check. Measured-quantity
+     metrics keep sequential batches. Tolerances move for **no**
+     metric. Under 1b this rule reads Arm B's evidence.
   3. **If A−B shows a systematic offset > 200 µs with settling
      shape** (load warms the path): the fix is a **campaign-level
      warm-up window** (pre-registered proposal: discard-by-design a
      fixed initial window, sized from the measured settling time),
      not interleaving; the parity split is not adopted on this
      outcome alone.
-  4. **If driver correlations land |r| ≥ 0.7 for both first-connect
-     and the regime witness against deep-C residency:** record it as
-     the discriminating evidence D-0078 wanted; **elevate cpuidle
-     residency deltas to a recorded D-0055 host column** (recorded,
-     never clamped). Independent of outcomes 1–3.
+  4. **As first registered:** |r| ≥ 0.7 for both first-connect and
+     the regime witness against deep-C residency → elevate cpuidle
+     residency to a recorded D-0055 host column. **Amended
+     2026-08-20 — power stated, rule downgraded to
+     hypothesis-generating.** The correlations are Pearson over
+     block-boundary pairs: 10 cycles → **n = 9** residency deltas.
+     At n = 9, |r| ≥ 0.7 occurs under the null at **≈ 3.6 % per
+     test** (analytic p = 0.036; Monte Carlo agrees; the analyzer
+     selftest checks this rate). Requiring both tests jointly does
+     **not** multiply that to 0.13 %: both share the same residency
+     series and the two outcome variables are themselves plausibly
+     correlated, so the joint chance rate is only bounded inside
+     (0.13 %, 3.6 %). The 95 % CI on an observed r = 0.7 at n = 9
+     is **≈ [0.07, 0.93]** — this design cannot distinguish a
+     dominant driver from a weak correlate. Power against a true
+     ρ = 0.7 is **≈ 0.55**, so a miss excludes nothing either.
+     Therefore: **this rule is hypothesis-generating in both
+     directions; it can neither establish nor exclude the driver.**
+     Firing licenses no driver claim anywhere; its action is
+     unchanged — propose cpuidle residency deltas as a recorded
+     (never clamped) D-0055 host column — because the column is
+     itself the adequately powered follow-up: one campaign yields
+     ≥ 60 per-trial pairs per arm, where |r| ≥ 0.6 has a null
+     chance ≈ 4×10⁻⁷ and a 95 % CI of ≈ [0.41, 0.74]. **The driver
+     claim may be stated only from that follow-up, at |r| ≥ 0.6
+     with n ≥ 60, pre-registered when the column lands.** Not
+     firing leaves cpuidle exactly where D-0078 left it: leading
+     untested candidate. Independent of outcomes 1–3.
   5. **Anything mixed or ambiguous: no change**, publish the
      characterization, and the meta-item's third-instance clause is
      in play — the next step is a review of how gate nulls are
@@ -6059,20 +6140,44 @@ D-0011 onward are working decisions made under those constraints.
   Each adopted response is a harness change that lands only after
   sign-off on the probe's numbers; nothing changes on this entry
   alone.
-- **Execution (zero-context operator).** From the repo root on the
-  bench host, clean tree, HEAD == origin:
+- **Execution — zero-context operator runbook (self-contained; the
+  rest of this entry is background, not prerequisite reading).**
+  Preconditions, checked in order; if any fails, **stop and report —
+  fix nothing, recreate nothing**:
+  1. You are on the Whimbrel bench host. The repo is
+     `/home/victor/src/Whimbrel`, branch `m4-evaluation`, clean tree
+     (`git status --porcelain` prints nothing), and after
+     `git fetch`, `git rev-parse HEAD` equals
+     `git rev-parse origin/m4-evaluation`.
+  2. The probe instrument is two files kept outside the repo (agent
+     scratch rule): `~/whimbrel-diag/e0drift.sh` and
+     `~/whimbrel-diag/e0drift.py`. `sha256sum` of each must equal
+     the value pinned here — a mismatch means the instrument is not
+     the reviewed one:
+     - `e0drift.sh` = `2ee3b35256c0e90514925efc34e338b49d37dd15d4ee5e1ee3452d38231248cf`
+     - `e0drift.py` = `99422e086d797bc76aa154f6df6d0c71cd970cc3419078979f4c469d0aa8e733`
+  3. `python3 ~/whimbrel-diag/e0drift.py selftest` prints a line
+     beginning `selftest: PASS`.
+  4. Nothing else runs on the host for the next ~40 minutes — no
+     builds, campaigns, browsers, or other sessions.
+  Launch, from any directory (the env knobs `CYCLES`/`PROBES`/
+  `E0_PORT` exist for debugging only and must NOT be set for the
+  registered run):
   `setsid nohup bash ~/whimbrel-diag/e0drift.sh </dev/null > ~/e0drift.log 2>&1 &`
-  The script refuses to run unless `## D-0080` exists in this file,
-  D-0055 host controls hold (checked before and after), and the
-  outdir is ext4; it freezes `prereg.txt` (git sha, script sha256s)
-  before the first spawn and writes `probe.csv` + `blocks.csv` under
-  `/var/tmp/e0drift/`. Analysis:
+  The script independently re-checks this entry's presence, refuses
+  a dirty tree, re-runs the analyzer selftest, verifies the D-0055
+  host controls before the first spawn **and again after the last**
+  (a lapse discards the run), requires an ext4 outdir, and freezes
+  `/var/tmp/e0drift/prereg.txt` (git head, script and kernel
+  sha256s) before producing any data. Completion: `~/e0drift.log`
+  ends with a line beginning `e0drift: done.` after ~35–40 min
+  (`probe.csv` ≈ 500 probe rows + 10 witness rows). Then run:
   `python3 ~/whimbrel-diag/e0drift.py report /var/tmp/e0drift`
-  prints the block table, the A−B comparison, the two simulated
-  split distributions against the decision rules, the driver
-  correlations, and one verdict line per rule — in that order.
-  `python3 ~/whimbrel-diag/e0drift.py selftest` must pass first
-  (synthetic data; no QEMU).
+  and return, verbatim and in full: the report output,
+  `~/e0drift.log`, `prereg.txt`, `probe.csv`, `blocks.csv`.
+  **Act on nothing.** The verdict lines are inputs to sign-off
+  under this entry's decision rules, not instructions. Commit
+  nothing — every output lives outside the repo.
 - **Standing constraints restated:** no campaign re-run, no harness
   change, no cpuidle clamp, and no adoption of the D-0078 amendment
   are implied by this entry; each follows only from its decision
