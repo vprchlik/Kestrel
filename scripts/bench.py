@@ -158,10 +158,33 @@ PHASES_FIELDS = [
     "source",
 ]
 
-LINUX_APPEND_QUIET = "console=ttyS0 quiet loglevel=0 rdinit=/init"
-LINUX_APPEND_INSTRUMENTED = (
-    "console=ttyS0 loglevel=7 printk.time=1 initcall_debug rdinit=/init"
+LINUX_APPEND_QUIET = (
+    "console=ttyS0 quiet loglevel=0 rdinit=/init unaligned_scalar_speed=fast"
 )
+LINUX_APPEND_INSTRUMENTED = (
+    "console=ttyS0 loglevel=7 printk.time=1 initcall_debug rdinit=/init "
+    "unaligned_scalar_speed=fast"
+)
+# D-0081 falsifier 1 (serial). The probe's printk; a hit means the
+# cmdline parameter did not take. Also the labeled initcall table and
+# initcall_debug "after N usecs" form, but only at nonzero duration —
+# a zero-duration listing is the initcall returning after a skip.
+D0081_PROBE_RATIO = "Ratio of byte access time"
+D0081_INITCALL_USECS_RE = re.compile(
+    r"initcall check_unaligned_access_all_cpus\S* returned \S+ after (\d+) usecs"
+)
+D0081_INITCALL_TABLE_RE = re.compile(
+    r"\|\s*\d+\s*\|\s*(\d+)\s*\|\s*`?check_unaligned_access_all_cpus`?"
+)
+# D-0081 falsifier 2 (summarize). t48b E0→E4 medians from
+# `git show t48b:results/runs.csv`, recorded n=60, warmup excluded.
+# Window is the entry's [−27, −16] ms vs those pins.
+T48B_LINUX_E0_E4_NS = {
+    "trimmed": 284_684_221.5,
+    "stock": 948_101_400.0,
+}
+D0081_DELTA_LO_NS = -27_000_000
+D0081_DELTA_HI_NS = -16_000_000
 WHIMBREL_QEMU_FLOOR_S = 12.0
 LINUX_QEMU_FLOOR_S = 60.0
 ARTIFACT_RE = re.compile(r"^artifact (\S+) ([0-9a-f]{64})$")
@@ -1323,6 +1346,7 @@ def run_trial(
     if "PANIC" in serial_text or "Kernel panic" in serial_text:
         raise BenchFail("TEST FAIL: guest panic")
     falsifier3_scan(serial_text)
+    d0081_probe_scan(serial_text)
     if arm.system == "linux":
         if "INIT FAIL:" in serial_text:
             raise BenchFail("TEST FAIL: Linux /init INIT FAIL")
@@ -1397,6 +1421,62 @@ def falsifier3_scan(serial_text: str) -> None:
             "TEST FAIL: M-mode trap diagnostic 'M!' in serial "
             f"(falsifier 3): {serial_text[i:i + 48]!r}"
         )
+
+
+def d0081_probe_scan(serial_text: str) -> None:
+    """D-0081 falsifier 1. Fail-closed. A hit is the probe still present."""
+    if D0081_PROBE_RATIO in serial_text:
+        i = serial_text.index(D0081_PROBE_RATIO)
+        raise BenchFail(
+            "TEST FAIL: unaligned-access probe still present in serial "
+            f"(D-0081 falsifier 1): {serial_text[i:i + 64]!r}"
+        )
+    for m in D0081_INITCALL_USECS_RE.finditer(serial_text):
+        usecs = int(m.group(1))
+        if usecs != 0:
+            raise BenchFail(
+                "TEST FAIL: check_unaligned_access_all_cpus ran for "
+                f"{usecs} usecs (D-0081 falsifier 1): {m.group(0)!r}"
+            )
+    for m in D0081_INITCALL_TABLE_RE.finditer(serial_text):
+        dur = int(m.group(1))
+        if dur != 0:
+            raise BenchFail(
+                "TEST FAIL: check_unaligned_access_all_cpus listed at "
+                f"duration {dur} (D-0081 falsifier 1): {m.group(0)!r}"
+            )
+
+
+def d0081_delta_failures(
+    metric_by_group: dict[tuple[str, str, str], dict[str, list[float]]],
+) -> list[str]:
+    """D-0081 falsifier 2. Linux quiet-row E0→E4 vs t48b pins.
+
+    No linux trimmed/stock rows → not a T4.8c summary, skip. Either
+    row outside [−27, −16] ms vs its t48b median fails closed.
+    """
+    by_cfg: dict[str, list[float]] = {}
+    for (_batch, sys, cfg), mets in metric_by_group.items():
+        if sys != "linux" or cfg not in T48B_LINUX_E0_E4_NS:
+            continue
+        vals = mets.get("e0_to_e4_ns") or []
+        if vals:
+            by_cfg.setdefault(cfg, []).extend(vals)
+    if not by_cfg:
+        return []
+    failed: list[str] = []
+    for cfg, pin in T48B_LINUX_E0_E4_NS.items():
+        if cfg not in by_cfg:
+            continue
+        med = statistics.median(by_cfg[cfg])
+        delta = med - pin
+        if delta < D0081_DELTA_LO_NS or delta > D0081_DELTA_HI_NS:
+            failed.append(
+                f"D-0081 falsifier 2: linux {cfg} E0→E4 median {med:.0f} ns "
+                f"vs t48b {pin:.0f} ns (Δ={delta / 1e6:.2f} ms); "
+                "want Δ in [-27, -16] ms"
+            )
+    return failed
 
 
 def configs_for(kind: str) -> list[Arm]:
@@ -2047,6 +2127,7 @@ def cmd_summarize(args: argparse.Namespace) -> int:
 
     failed: list[str] = []
     failed.extend(trimmed_vs_stock_failures(metric_by_group))
+    failed.extend(d0081_delta_failures(metric_by_group))
     failed.extend(linux_kernel_hash_failures(runs))
     if getattr(args, "stability", False):
         by_cfg: dict[str, list[tuple[str, dict[str, list[float]]]]] = {}
@@ -2104,6 +2185,7 @@ def cmd_check_serial(args: argparse.Namespace) -> int:
     if not path.is_file():
         raise BenchFail(f"TEST FAIL: serial log missing: {path}")
     text = path.read_bytes().decode("utf-8", errors="replace")
+    d0081_probe_scan(text)
     rows = parse_phases(text)
     overhead = stamp_overhead_ns(rows)
     e3g = next(r for r in rows if r["phase"] == "E3g")
@@ -2274,6 +2356,48 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
         fired.append(f"falsifier 3 M!: {e}")
     falsifier3_scan("PHASE E3g ok\nHTTP OK\n")  # clean serial passes
 
+    # D-0081 falsifier 1: planted probe printk, planted nonzero
+    # initcall listing / usecs line; clean serial and zero-duration
+    # listing pass.
+    try:
+        d0081_probe_scan(
+            "[    0.062690] cpu0: Ratio of byte access time to "
+            "unaligned word access is 7.36, unaligned accesses are fast\n"
+        )
+        raise BenchFail("D-0081 ratio line did not fire")
+    except BenchFail as e:
+        if "falsifier 1" not in str(e) or D0081_PROBE_RATIO not in str(e):
+            raise
+        fired.append(f"D-0081 falsifier 1 ratio: {e}")
+    try:
+        d0081_probe_scan(
+            "| 4 | 24000 | `check_unaligned_access_all_cpus` | 0 | 0.063108 |\n"
+        )
+        raise BenchFail("D-0081 initcall table did not fire")
+    except BenchFail as e:
+        if "falsifier 1" not in str(e) or "duration 24000" not in str(e):
+            raise
+        fired.append(f"D-0081 falsifier 1 initcall table: {e}")
+    try:
+        d0081_probe_scan(
+            "initcall check_unaligned_access_all_cpus+0x0/0xabc "
+            "returned 0 after 24000 usecs\n"
+        )
+        raise BenchFail("D-0081 initcall usecs did not fire")
+    except BenchFail as e:
+        if "falsifier 1" not in str(e) or "24000 usecs" not in str(e):
+            raise
+        fired.append(f"D-0081 falsifier 1 initcall usecs: {e}")
+    d0081_probe_scan("READY\nLINUX INIT OK\n")
+    d0081_probe_scan(
+        "| 4 | 0 | `check_unaligned_access_all_cpus` | 0 | 0.063108 |\n"
+        "initcall check_unaligned_access_all_cpus+0x0/0xabc "
+        "returned 0 after 0 usecs\n"
+    )
+    d0081_probe_scan(
+        "| 393 | 0 | `lock_and_set_unaligned_access_static_branch` | 0 | 0.064718 |\n"
+    )
+
     try:
         require_registered_counts("t47", 5, 3, 2)
         raise BenchFail("nonconforming n did not fire")
@@ -2293,6 +2417,19 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
 
     tmp = ROOT / "results" / "selftest"
     tmp.mkdir(parents=True, exist_ok=True)
+    probe_log = tmp / "d0081-probe.serial"
+    probe_log.write_text(
+        "[    0.062690] cpu0: Ratio of byte access time to "
+        "unaligned word access is 7.36, unaligned accesses are fast\n",
+        encoding="utf-8",
+    )
+    try:
+        cmd_check_serial(argparse.Namespace(serial=str(probe_log)))
+        raise BenchFail("check-serial D-0081 plant did not fire")
+    except BenchFail as e:
+        if "falsifier 1" not in str(e):
+            raise
+        fired.append(f"check-serial D-0081 plant: {e}")
     empty = tmp / "zero-runs.csv"
     write_csv(empty, RUNS_FIELDS, [])
     try:
@@ -3149,6 +3286,51 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
     if trim_ok:
         raise BenchFail(f"trimmed-vs-stock fired on a healthy pair: {trim_ok}")
 
+    pin_t = T48B_LINUX_E0_E4_NS["trimmed"]
+    pin_s = T48B_LINUX_E0_E4_NS["stock"]
+    d0081_too_small = d0081_delta_failures(
+        {
+            ("b1", "linux", "trimmed"): {"e0_to_e4_ns": [pin_t]},
+            ("b1", "linux", "stock"): {"e0_to_e4_ns": [pin_s - 20_000_000]},
+        }
+    )
+    if not any("falsifier 2" in x and "trimmed" in x for x in d0081_too_small):
+        raise BenchFail(
+            f"D-0081 Δ=0 did not fire on trimmed: {d0081_too_small}"
+        )
+    if any("stock" in x for x in d0081_too_small):
+        raise BenchFail(
+            f"D-0081 in-range stock fired with out-of-range trimmed: "
+            f"{d0081_too_small}"
+        )
+    fired.append(f"D-0081 falsifier 2 too-small: {d0081_too_small[0]}")
+    d0081_too_large = d0081_delta_failures(
+        {
+            ("b1", "linux", "trimmed"): {"e0_to_e4_ns": [pin_t - 40_000_000]},
+            ("b1", "linux", "stock"): {"e0_to_e4_ns": [pin_s - 20_000_000]},
+        }
+    )
+    if not any("falsifier 2" in x and "trimmed" in x for x in d0081_too_large):
+        raise BenchFail(
+            f"D-0081 Δ=-40 ms did not fire on trimmed: {d0081_too_large}"
+        )
+    fired.append(f"D-0081 falsifier 2 too-large: {d0081_too_large[0]}")
+    d0081_ok = d0081_delta_failures(
+        {
+            ("b1", "linux", "trimmed"): {"e0_to_e4_ns": [pin_t - 20_000_000]},
+            ("b1", "linux", "stock"): {"e0_to_e4_ns": [pin_s - 20_000_000]},
+        }
+    )
+    if d0081_ok:
+        raise BenchFail(f"D-0081 in-range pair fired: {d0081_ok}")
+    if d0081_delta_failures({}):
+        raise BenchFail("D-0081 delta gate fired with no linux rows")
+    if d0081_delta_failures(
+        {("b1", "whimbrel", "release-fast-boot"): {"e0_to_e4_ns": [51_000_000.0]}}
+    ):
+        raise BenchFail("D-0081 delta gate fired on a Whimbrel-only summary")
+    fired.append("D-0081 falsifier 2 in-range pair and non-linux skip pass")
+
     hdr = linux_header_lines(
         client_timeout_s=60.0,
         linux_meta={
@@ -3371,7 +3553,10 @@ def main() -> int:
     sig.add_argument("runs")
     sig.set_defaults(func=cmd_arp_signature)
 
-    chk = sub.add_parser("check-serial", help="assert PHASE deltas sum to E2→E3g")
+    chk = sub.add_parser(
+        "check-serial",
+        help="D-0081 probe scan; Whimbrel PHASE deltas sum to E2→E3g",
+    )
     chk.add_argument("serial")
     chk.set_defaults(func=cmd_check_serial)
 
