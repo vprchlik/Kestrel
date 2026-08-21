@@ -19,7 +19,7 @@ against a minimal Linux VM.
     whole project — they are the intellectual core.
 - **Units of work, not calendar time.** Nothing here is scheduled. A milestone
   is done when its acceptance test passes and the end-of-milestone ritual
-  (glossary/decisions update + 5-question quiz, see `.cursor/rules/project.mdc`)
+  (glossary/decisions update + 5-question quiz)
   is complete.
 - Every milestone is now detailed to individual-task resolution below. M3 and
   M4 were intentionally kept at task-list resolution until their milestone
@@ -1427,7 +1427,7 @@ number.
   section is fully checked — an open-ended timeline must not become an
   unfinished one.
 - **Git:** all M4 work on branch `m4-evaluation`; push to that branch only;
-  never to `main`. PR text in chat.
+  never to `main`.
 
 ## Prerequisite concepts
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Provision the Whimbrel toolchain. Mirrors docs/SETUP.md §1–§2 — keep in lockstep.
-# Used by .cursor/environment.json to set up cloud-agent VMs; safe to re-run.
-# Does not (and must not) try to turn a VM into the D-0055 bench host.
+# Safe to re-run. Does not (and must not) try to turn a VM into the D-0055
+# bench host.
 set -euo pipefail
 
 SUDO=""

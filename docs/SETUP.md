@@ -2,10 +2,9 @@
 
 Target host: Linux (Debian/Ubuntu commands shown; anything that can run QEMU
 and rustup works — macOS notes at the bottom). Everything in §1–§2 is also
-automated in `scripts/install.sh`, which `.cursor/environment.json` uses to
-provision cloud agents — if you change one, change both. The dedicated
-measurement host in §7 is **not** what install.sh provisions; report-grade
-numbers never come from a cloud agent (D-0055).
+automated in `scripts/install.sh` — if you change one, change both. The
+dedicated measurement host in §7 is **not** what install.sh provisions;
+report-grade numbers never come from a build VM (D-0055).
 
 ## 1. Host packages
 
@@ -141,13 +140,13 @@ extension's license permits use outside Microsoft products; for Hex Editor
 or add a `gdb := env_var_or_default(...)` override); rustup steps identical.
 CI/benchmarks (M4) should still run on Linux for comparability.
 
-## 6. Cloud agents
+## 6. Build VM
 
-`.cursor/environment.json` runs `scripts/install.sh` to provision the same
-toolchain in a fresh VM, so background agents can build and boot-test. Keep
-that script in lockstep with §1–§2 of this document. Cloud agents are
-**not** the bench host (D-0055): they may be KVM guests with no cpufreq.
-Gates run there; report numbers do not.
+`scripts/install.sh` provisions a build VM with the same toolchain as
+§1–§2, so that machine can compile and boot-test. Keep the script in
+lockstep with those sections. A build VM is **not** the bench host
+(D-0055): it may be a KVM guest with no cpufreq. Gates run there;
+report-grade numbers never come from one.
 
 ## 7. Dedicated measurement host (D-0055)
 
