@@ -1572,8 +1572,8 @@ phase lists and `phase.rs` N/NAMES move in the same commit.
 ### T4.3 — Baseline freeze + report skeleton (draft-early) — M
 Full N-trial protocol on the dedicated host (SETUP.md), safe and fast
 configs; CSVs (or their regeneration recipe + summary) committed;
-baseline SHA recorded in D-0055. Waits on that host — this pod cannot
-produce the freeze. `report/` skeleton written: all section headers, the
+baseline SHA recorded in D-0055. The dedicated host produces the freeze;
+the cloud build VM cannot. `report/` skeleton written: all section headers, the
 phase-decomposition exhibit generated from real CSV, the safe−fast
 per-phase delta as the first price-of-paranoia line, threats-to-validity
 seeded, and a **"numbers that must be regenerated" appendix stub seeded

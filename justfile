@@ -788,7 +788,7 @@ bench-t47:
     bash scripts/bench.sh t47
 
 # T4.8 five-arm campaign. Requires bench/linux/artifacts + MANIFEST.
-# This pod does not run it (D-0055). D-0073 / T4.8b uses the same
+# The cloud build VM does not run it (D-0055). D-0073 / T4.8b uses the same
 # recipe after linux-build produces a new Image-trimmed.
 bench-t48:
     bash scripts/bench.sh t48
@@ -830,7 +830,7 @@ regime-witness-selftest:
 # D-0072: label the 327 ms printk hole. Same Image-trimmed, cmdline
 # = instrumented MANIFEST append + ignore_loglevel, System.map
 # offline. One boot, not a campaign arm, never runs.csv. Bench host.
-# This pod fail-closes without artifacts. Selftest does not boot.
+# The cloud build VM fail-closes without the bench-host artifacts. Selftest does not boot.
 linux-initcall-label:
     python3 scripts/label-linux-initcalls.py selftest
     bash scripts/linux-initcall-label.sh

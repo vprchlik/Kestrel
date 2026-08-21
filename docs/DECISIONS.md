@@ -3329,7 +3329,7 @@ D-0011 onward are working decisions made under those constraints.
      table may carry an E3w-derived column. Historical git objects
      keep the old schema; do not rewrite them. The T4.8 trial-time
      work lands the writer in `scripts/bench.py`; the dedicated
-     host executes it (this pod does not run `just bench`).
+     host executes it (the cloud build VM does not run `just bench`).
 - Revisit trigger: a bench-host instrumented mechanism check (the
   pcap-write poll, ~10 boots) if anyone wants S measured rather than
   derived there; or any QEMU/host change on the bench machine, which
@@ -3385,7 +3385,8 @@ D-0011 onward are working decisions made under those constraints.
   (D-0072). Exhibit `report/exhibits/linux-decomposition.md` from
   the T4.8 serial pin (`d705ecb`) plus the diagnostic label pin
   (`93ab617`). `just linux-initcall-label` is the diagnostic
-  writer; this pod fail-closes without artifacts. The labeled
+  writer; the cloud build VM fail-closes without the bench-host
+  artifacts. The labeled
   table annotates gap 1; it does not grow a sixth E0→E4 row.
 - **Amendment (2026-08-18 — labels committed):** hole rank 1 is
   `trace_eval_sync` (222.6 ms UART-inflated, 68% of the T4.8
@@ -3417,7 +3418,8 @@ D-0011 onward are working decisions made under those constraints.
   Leaving a named, non-EXPERT-gated symbol that accounts for the
   largest identified cost undercuts that claim. "We ran out of
   patience" is not an answer.
-- **Fragment sweep (this pod has no trimmed `.config`; candidates
+- **Fragment sweep (the cloud build VM has no copy of the trimmed
+  `.config`; candidates
   reconstructed from the T4.8 printk, the D-0072 label file, the
   riscv `defconfig`, and Linux 6.18.7 Kconfig).** Unset if (a) y
   on the T4.8 Image, (b) the prompt is not EXPERT-gated *or*
@@ -3592,7 +3594,7 @@ D-0011 onward are working decisions made under those constraints.
   fragment; 3b still requires they are not y.
 
   Same shape, walked from the T4.8 Image initcalls + riscv
-  `defconfig` + Linux 6.18 Kconfig (this pod has no
+  `defconfig` + Linux 6.18 Kconfig (the cloud build VM has no
   post-rebuild `trimmed.config`). Fragment unsets the
   other-parent survivor; 3b lists both sides:
 

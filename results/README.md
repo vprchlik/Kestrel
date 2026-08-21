@@ -131,14 +131,14 @@ objects (`baseline-t4.3` vs `HEAD`) and does not grow argparse.
 Do not implement the flags against missing directories; a
 half-wired `--after-batches` that falls back to HEAD is fail-open.
 
-This pod does not run `just bench`. The bench host runs N-trials
+The cloud build VM does not run `just bench`. The bench host runs N-trials
 and is the first writer of `results/batches/`.
 
 ## Bench-host spec (D-0071) — schema; writer is the T4.8 harness
 
 The schema below is the interface. The T4.8 trial-time commit lands
 the writer in `scripts/bench.py`; the dedicated host executes it
-(D-0055: this pod does not run `just bench`).
+(D-0055: the cloud build VM does not run `just bench`).
 `scripts/pcap_http.py` is the shared extract (`extract_pcap`);
 `scripts/d0070-pcap-pass.py` imports it. A third copy of the
 filters is a fail.
@@ -546,7 +546,7 @@ Approved. Code lives in this tree (`scripts/bench.py`,
 `scripts/bench-client.py`, `scripts/qemu-args.sh`,
 `scripts/pcap_http.py`, `scripts/linux-boot-test.sh`,
 `scripts/assert-pcap-syn-grid.sh`). The dedicated host executes
-it. This pod does not run `just bench` or `just linux-build`.
+it. The cloud build VM does not run `just bench` or `just linux-build`.
 `just test-linux` fail-closes here if `bench/linux/artifacts/`
 and `bench/linux/MANIFEST` are missing — that is the correct
 shape, not a skip.
@@ -663,8 +663,9 @@ runner and `scripts/measure-e2.sh` take the same device string
 ### Linux boot gate (`just test-linux`)
 
 Analogous to `just test` for Whimbrel. Not folded into `just test`
-— this pod has no Images, and a missing-artifact skip inside the
-sixteen-gate list would be fail-open. The recipe fail-closes.
+— the cloud build VM has no Images (those live on the bench host),
+and a missing-artifact skip inside the sixteen-gate list would be
+fail-open. The recipe fail-closes.
 
 Boot `Image-trimmed` + `rootfs.cpio` + quiet `-append` on the
 shared QEMU argv. The measurement client starts before QEMU
@@ -742,7 +743,7 @@ committed until linux-build has run on the bench host.
 Not a campaign. Not a sixth arm. Not an E0→E4 row. A **labeling
 pass** for gap 1 of
 `report/exhibits/linux-decomposition.md`. The dedicated host
-executes it (`just linux-initcall-label`). This pod fail-closes
+executes it (`just linux-initcall-label`). The cloud build VM fail-closes
 without `bench/linux/artifacts/`. Results never enter
 `runs.csv` / `phases.csv` / a cross-system table.
 
@@ -892,7 +893,7 @@ Diagnostic microseconds annotate gap 1 of
 
 ## Bench-host spec (D-0073 / T4.8b): fragment change + `just linux-build` + five-arm re-run
 
-Approved. This pod does not run `just linux-build` or `just
+Approved. The cloud build VM does not run `just linux-build` or `just
 bench-t48`. The dedicated host executes the sequence below. Read
 the projection **before** the rebuild starts; do not invent a
 quiet-row saving from the diagnostic microseconds after the fact.
@@ -1059,7 +1060,7 @@ labeling, not a retarget of the T4.8 exhibit.
    label pin, new System.map, still not a sixth arm, still not
    a replacement of `93ab617`.
 
-### What this pod already did
+### What the cloud build VM already did (the bench host still needs Images and the campaign)
 
 Fragment + `linux-build` reuse/hash gates + D-0073 + this spec
 + the T4.8 exhibit frozen as the before. Non-reversing-select
