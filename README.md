@@ -7,7 +7,7 @@ image and run in U-mode over a five-syscall interface (`write`, `exit`,
 `sbrk`, `gettime`, `yield`). At boot it brings up a hand-rolled
 virtio-net driver and network stack (Ethernet, ARP, IPv4, ICMP, UDP,
 TCP; smoltcp deliberately rejected) and serves one pinned HTTP
-response. The design rule everywhere: minimal and legible beats clever.
+response.
 
 The project's claims live in its measurement work: campaigns are
 pre-registered with falsifiers before they run, gates fail closed, and
