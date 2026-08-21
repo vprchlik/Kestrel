@@ -738,37 +738,41 @@ def require_pcap_intervals(
 
 
 def require_first_connect_control(runs: list[dict]) -> None:
-    """Listener-up is guest-independent. A miss fails the run, not a cell."""
+    """Listener-up is guest-independent. A miss fails the run, not a cell.
+
+    D-0079 said the ≤ 1 ms check is "automatically cross-lane" because
+    both lanes share a batch. It was not: the gate compared
+    release-default vs release-fast-boot by config name, and compared
+    system medians only when more than one `system` value was present.
+    A t47-kind campaign has four configs and `system=whimbrel` on every
+    row, so the m-lane arms were never in the comparison. Span every
+    arm present in the batch, regardless of `system`.
+    """
     rec = [r for r in runs if int(r["warmup"]) == 0]
     if not rec:
         return
-    by_cfg: dict[str, list[int]] = {}
-    by_sys: dict[str, list[int]] = {}
+    by_batch: dict[str, dict[str, list[int]]] = {}
     for r in rec:
-        v = int(r["e0_to_first_connect_ns"])
-        by_cfg.setdefault(r["config"], []).append(v)
-        by_sys.setdefault(r["system"], []).append(v)
-    if SAFE_CONFIG in by_cfg and FAST_CONFIG in by_cfg:
-        ms = statistics.median(by_cfg[SAFE_CONFIG])
-        mf = statistics.median(by_cfg[FAST_CONFIG])
-        delta = abs(ms - mf)
-        if delta > CONTROL_TOL_NS:
-            raise BenchFail(
-                f"TEST FAIL: first-connect control |safe − fast| = {delta:.0f} ns "
-                f"(safe={ms:.0f} fast={mf:.0f}) > 1 ms"
+        batch = r.get("batch_id") or "_"
+        by_batch.setdefault(batch, {}).setdefault(r["config"], []).append(
+            int(r["e0_to_first_connect_ns"])
+        )
+    for batch, by_cfg in sorted(by_batch.items()):
+        if len(by_cfg) < 2:
+            continue
+        meds = {cfg: statistics.median(vals) for cfg, vals in by_cfg.items()}
+        lo_cfg = min(meds, key=meds.get)
+        hi_cfg = max(meds, key=meds.get)
+        span = meds[hi_cfg] - meds[lo_cfg]
+        if span > CONTROL_TOL_NS:
+            listing = " ".join(
+                f"{cfg}={meds[cfg]:.0f}" for cfg in sorted(meds)
             )
-    if len(by_sys) > 1:
-        names = sorted(by_sys)
-        meds = {s: statistics.median(by_sys[s]) for s in names}
-        for i, a in enumerate(names):
-            for b in names[i + 1 :]:
-                delta = abs(meds[a] - meds[b])
-                if delta > CONTROL_TOL_NS:
-                    raise BenchFail(
-                        f"TEST FAIL: first-connect control |{a} − {b}| = "
-                        f"{delta:.0f} ns ({a}={meds[a]:.0f} {b}={meds[b]:.0f}) "
-                        f"> 1 ms"
-                    )
+            raise BenchFail(
+                f"TEST FAIL: first-connect control span = {span:.0f} ns "
+                f"(batch={batch} {lo_cfg}={meds[lo_cfg]:.0f} "
+                f"{hi_cfg}={meds[hi_cfg]:.0f}; {listing}) > 1 ms"
+            )
 
 
 # D-0078 act-on: one release-default boot before trial 1 of any
@@ -2789,7 +2793,7 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
                 },
             ]
         ),
-        "first-connect control |safe − fast|",
+        "first-connect control span",
         "first-connect |safe − fast| > 1 ms",
     )
     expect_fail(
@@ -2809,8 +2813,47 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
                 },
             ]
         ),
-        "first-connect control |linux − whimbrel|",
+        "first-connect control span",
         "first-connect cross-system > 1 ms",
+    )
+
+    def t47_connect_rows(m_fast_ns: int, batch: str = "b1") -> list[dict]:
+        def row(cfg: str, ns: int) -> dict:
+            return {
+                "warmup": 0,
+                "batch_id": batch,
+                "system": "whimbrel",
+                "config": cfg,
+                "e0_to_first_connect_ns": ns,
+            }
+
+        return [
+            row(SAFE_CONFIG, 18_500_000),
+            row(FAST_CONFIG, 18_600_000),
+            row("m-release-default", 18_550_000),
+            row("m-release-fast-boot", m_fast_ns),
+        ]
+
+    require_first_connect_control(t47_connect_rows(18_580_000))
+    fired.append("first-connect control spans all four t47 arms in a batch")
+    # OpenSBI pair within 1 ms; m-lane 1.5 ms away. The old gate
+    # compared only SAFE vs FAST and skipped the system pairwise when
+    # every row was system=whimbrel, so this passed.
+    expect_fail(
+        lambda: require_first_connect_control(t47_connect_rows(20_000_000)),
+        "first-connect control span",
+        "t47-kind m-lane first-connect span > 1 ms",
+    )
+    # Two batches: pooled m-fast median sits inside 1 ms of the
+    # others; batch 2's span does not. The registered check is
+    # per-batch, so this must fail.
+    expect_fail(
+        lambda: require_first_connect_control(
+            t47_connect_rows(18_580_000, "b1")
+            + t47_connect_rows(20_000_000, "b2")
+        ),
+        "first-connect control span",
+        "per-batch first-connect span > 1 ms (pooled would pass)",
     )
 
     def s_pair(safe_e4: int, fast_e4: int) -> list[dict]:
