@@ -19,8 +19,7 @@ against a minimal Linux VM.
     whole project — they are the intellectual core.
 - **Units of work, not calendar time.** Nothing here is scheduled. A milestone
   is done when its acceptance test passes and the end-of-milestone ritual
-  (glossary/decisions update + 5-question quiz)
-  is complete.
+  (glossary/decisions update) is complete.
 - Every milestone is now detailed to individual-task resolution below. M3 and
   M4 were intentionally kept at task-list resolution until their milestone
   start — the first action at each was expanding its section to full
@@ -50,7 +49,7 @@ the SBI console), then shuts the machine down so QEMU exits cleanly with code 0.
 ## Prerequisite concepts
 
 Understand each of these before (or while) doing the tasks. Each is a concept
-you should be able to explain out loud, unprompted, in an interview.
+you should be able to explain out loud, unprompted.
 
 **1. RISC-V privilege levels (M/S/U).** A RISC-V hart executes at one of three
 privilege levels: Machine (M) is the highest and is where firmware lives with
@@ -387,8 +386,7 @@ This enumeration is also the strongest available defense of D-0006: identity
 mapping means the PC, the stack pointer, and every return address keep their
 numeric values across the switch. A higher-half kernel has to map both the old
 and new views, jump, then drop the old one. That trampoline is why xv6 and
-Linux look the way they do here, and being able to say why we did not need one
-is a good interview answer.
+Linux look the way they do here. We did not need that trampoline.
 
 **12. Instruction width and `sepc`.** For an exception we resume *past*
 (`ebreak` in M1, `ecall` in M2), the handler must add the trapped
@@ -545,8 +543,7 @@ on exhaustion with the requested size and alignment.
 
 ### T1.9 — Milestone wrap — S
 Print the final marker, update the harness default marker to
-`M1 FUNDAMENTALS OK`, update GLOSSARY and DECISIONS, and run the five-question
-quiz.
+`M1 FUNDAMENTALS OK`, update GLOSSARY and DECISIONS.
 
 - **Acceptance:** `just test` (no arguments) passes on the new default marker.
 
@@ -919,7 +916,7 @@ what T2.1/T2.8 arrange by construction: nothing in the trap path allocates.
 ### T2.12 — Two demo tasks and milestone wrap — M
 Two counters writing at different rates, one of them using `sbrk`, both
 exiting; the last `exit` shuts down. Marker `M2 EXECUTION OK`, harness default
-updated, GLOSSARY and DECISIONS updated. Quiz is separate.
+updated, GLOSSARY and DECISIONS updated.
 
 - **Acceptance:** `just test` (no arguments) passes on the new default marker.
 
@@ -1183,8 +1180,8 @@ input, D-0040).
 
 ### T3.7 — IPv4 and ICMP echo — M
 IPv4 parse: version/IHL check, **verify the header checksum on RX** (ten
-lines, and the interview checksum question — skipping it because slirp is
-well-formed is the dishonest skip), honor IHL rather than assuming 20,
+lines; skipping it because slirp is well-formed is the dishonest skip),
+honor IHL rather than assuming 20,
 drop fragments (MF or offset ≠ 0) with a counter. No routing: everything
 TX goes to the gateway MAC. ICMP echo reply (type 8 → 0) plus a
 guest-initiated ping of 10.0.2.2 as the testable direction (concept 4).
@@ -1286,8 +1283,7 @@ hart does not print ticks forever.
 **(f) Wrap:** `M3 UNIKERNEL OK` marker after the first served response in
 the default boot; `just test` default flips to it; GLOSSARY (virtqueue,
 slirp, checksum, RTO, E0–E4, fast-boot, GARP, hostfwd, …) and DECISIONS
-catch-up; M3 summary in this file. Quiz handled separately per the M2
-precedent.
+catch-up; M3 summary in this file.
 
 - **Acceptance:** `just test` (no arguments) passes on `M3 UNIKERNEL OK`;
   boot prints the phase-timestamp block after the response; `just run-http`
@@ -1400,7 +1396,7 @@ harness architecture), D-0056 (pre-baseline corrections), D-0057
 governance), D-0059 (2 MiB superpages; amends D-0026), D-0060 (O(1) frame
 accounting), D-0061 (`-bios none` charter; scoped amendment to D-0003),
 D-0062 (Linux baseline), D-0063 (Unikraft spike), D-0064 (report, claims
-discipline, convergence gate, audits, quizzes). Subsequent M4 entries:
+discipline, convergence gate, audits). Subsequent M4 entries:
 D-0065 (bump/lazy), D-0066 (E3w→E4 remainder), D-0067 (per-batch
 result files), D-0068 (PHASE dump must not sit on publish→E4),
 D-0069 (pre-registration underestimates small-phase costs). The
@@ -1762,15 +1758,12 @@ shape.
 
 ### T4.11 — Report to final — L
 Content-complete draft (all exhibits, all sections, claims discipline per
-D-0064) → **second audit** → **comprehensive end-of-project quiz** →
-revision → final. **The second audit is a named step, not a vibe:** same
+D-0064) → **second audit** → revision → final. **The second audit is a named step, not a vibe:** same
 findings-only format as `docs/AUDIT-2026-08.md`, scoped to what changed
 since it — the superpage walker and verifier as landed, the harness
 as-built, the `-bios none` shim if it landed, and every number in the
 report checked against the CSVs that claim to generate it. Findings
-recorded as `docs/AUDIT-<date>.md`; blockers fixed before the quiz. The
-quiz sits between draft and final revision so what it surfaces marks
-sections needing rework, not just answers.
+recorded as `docs/AUDIT-<date>.md`; blockers fixed before revision.
 
 - **Acceptance:** second-audit findings file exists with dispositions;
   every number regenerated by `just bench` on a clean machine per
@@ -1778,8 +1771,8 @@ sections needing rework, not just answers.
 
 ### T4.12 — Wrap — S
 GLOSSARY (superpage, Sstc, PMP, buildroot, initramfs, vDSO, median/IQR,
-TCG, warm-up discard, …) and DECISIONS catch-up; the standing 5-question
-milestone quiz; the convergence-gate checklist walked and checked.
+TCG, warm-up discard, …) and DECISIONS catch-up; the convergence-gate
+checklist walked and checked.
 
 ## Milestone acceptance test
 
@@ -1797,7 +1790,7 @@ convergence gate below is fully checked.
 4. The comparison section exists in whichever D-0043 fallback shape the
    spike selected.
 5. Threats-to-validity each mitigated-and-measured or plainly stated.
-6. Second audit done with blockers closed; both quizzes done;
+6. Second audit done with blockers closed;
    GLOSSARY/DECISIONS current.
 7. Report finalized with sign-off.
 

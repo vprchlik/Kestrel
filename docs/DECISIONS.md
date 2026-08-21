@@ -2,7 +2,7 @@
 
 Every nontrivial choice gets an entry here **before** the code that implements
 it ("nontrivial" = a reviewer could reasonably ask "why not X?"). This log is
-the raw material for interview answers and the report's design section.
+the raw material for the report's design section.
 
 ## Entry format
 
@@ -27,8 +27,7 @@ D-0011 onward are working decisions made under those constraints.
 - **Decision:** the kernel and app are Rust, `#![no_std]` `#![no_main]`, with
   `core` + `alloc` only; unsafe code is allowed but localized and commented.
 - **Alternatives considered:** C (the systems lingua franca; rejected: memory
-  bugs cost debugging sessions we'd rather spend on OS concepts, and "why Rust
-  for OS work" is itself a strong interview topic). C++ (rejected: freestanding
+  bugs cost debugging sessions we'd rather spend on OS concepts). C++ (rejected: freestanding
   C++ brings runtime edge cases — exceptions, guards, ABI — without Rust's
   safety payoff). Zig (rejected: attractive for bare-metal but a smaller
   ecosystem and weaker story for the grad-school writeup than Rust's growing
@@ -70,7 +69,7 @@ D-0011 onward are working decisions made under those constraints.
   determinism and free instrumentation — `-d int`, GDB stub).
 - **Rationale:** staying in S-mode above stable firmware is exactly the
   position a real OS occupies; the SBI boundary is small, documented, and
-  interview-relevant ("what does firmware do for you?").
+  answers what firmware does for the kernel.
 - **Consequences:** anything M-mode (PMP, `medeleg`, mtime programming) is
   OpenSBI's job — we interact via `ecall` only. QEMU version gets pinned in
   the M4 report for reproducibility.
@@ -98,8 +97,8 @@ D-0011 onward are working decisions made under those constraints.
 - **Decision:** virtual memory uses Sv39 (three-level, 39-bit VA, 4 KiB pages),
   enabled from M1 onward.
 - **Alternatives considered:** Bare mode / no paging (rejected: forfeits W^X,
-  fault isolation for U-mode, and the single most interview-dense subsystem in
-  the project). Sv48/Sv57 (rejected: a fourth/fifth level buys address space we
+  fault isolation for U-mode, and the paging work the rest of the kernel sits
+  on). Sv48/Sv57 (rejected: a fourth/fifth level buys address space we
   will never use — 512 GiB is already ~4000× our RAM — and costs one more level
   of walk complexity in every diagram and debugging session).
 - **Rationale:** Sv39 is the smallest paging mode every rv64 implementation
@@ -233,9 +232,9 @@ D-0011 onward are working decisions made under those constraints.
 - **Decision:** M1 implements a free-list physical frame allocator and a
   linked-list heap allocator behind `GlobalAlloc`, written in-tree.
 - **Alternatives considered:** `linked_list_allocator` / `buddy_system_allocator`
-  crates (rejected: they're good code, but goal 1 requires defending the
-  allocator in an interview — "I depended on a crate" defends nothing; our
-  allocation patterns are tame, fragmentation sophistication buys us nothing).
+  crates (rejected: they're good code, but "I depended on a crate" explains
+  nothing about how allocation works here; our allocation patterns are tame,
+  fragmentation sophistication buys us nothing).
 - **Rationale:** the allocators are small (≈60–150 lines each), high-yield
   teaching artifacts, and the fail-loudly policy (panic on exhaustion with the
   requested size) keeps them honest.
@@ -254,8 +253,9 @@ D-0011 onward are working decisions made under those constraints.
   throughput). Generality-first / "build it like a real OS" (rejected: every
   abstraction layer added "for later" is unfalsifiable scope creep; D-0009
   exists for the same reason).
-- **Rationale:** both stated goals (interview defense, research writeup) reward
-  a system whose every line has a reason the author can articulate.
+- **Rationale:** both stated goals (understanding the system end to end, a
+  research writeup) reward a system whose every line has a reason the author
+  can articulate.
 - **Consequences:** this entry is the citation for future "why didn't you..."
   questions; deviations from it require their own decision entry.
 
@@ -598,7 +598,7 @@ D-0011 onward are working decisions made under those constraints.
 - **Rationale:** an address-sorted list makes adjacency a pointer
   comparison at insert time, so coalescing is the cheap correctness
   property rather than an extra pass. First-fit plus coalesce is the K&R
-  allocator; that is the interview explanation.
+  allocator.
 - **Consequences:** a stream of mixed-size alloc/free that never produces
   adjacent holes can still fragment until a request fails with free bytes
   remaining. M1's self-test does not hit that; if M2/M3 does, it is a
@@ -922,9 +922,9 @@ D-0011 onward are working decisions made under those constraints.
   what M4's latency bracketing wants).
 - **Rationale:** the kernel has spoken this convention since M0 — EID/FID in
   `a7`/`a6`, arguments in `a0`–`a5`, `(error, value)` back — so mirroring it
-  means one calling convention in the whole system, which is both a legibility
-  win and a good interview answer ("our syscall ABI is the ABI our kernel
-  itself calls"). Starting the numbering at 1 is the fail-loudly choice: a
+  means one calling convention in the whole system, which is a legibility
+  win: the syscall ABI is the ABI our kernel itself calls. Starting the
+  numbering at 1 is the fail-loudly choice: a
   wild jump with a zeroed `a7` lands on "invalid syscall 0" rather than
   silently being `write`.
 - **Consequences:** `a1` is clobbered on every syscall return, which the user
@@ -1156,7 +1156,7 @@ D-0011 onward are working decisions made under those constraints.
 - **Alternatives considered:** legacy virtio-mmio (rejected: page-shifted
   `QueuePFN` forces the three structures into one contiguous layout and the
   10/12-byte header ambiguity into the fast path; "we speak the current
-  spec" is also the defensible interview position). `MRG_RXBUF` (rejected:
+  spec" is the honest position). `MRG_RXBUF` (rejected:
   buys nothing at one connection and adds descriptor-chain walking).
   Preallocating the pool from the frame allocator before freeze (rejected:
   buffer addresses would depend on allocation order and the pool would need
@@ -1548,8 +1548,8 @@ D-0011 onward are working decisions made under those constraints.
   different clock).
 - **Rationale:** an echo server that exists only in a comment is how
   the dishonest skip happens. Shipping the type-8 path and saying
-  plainly that user-net cannot feed it keeps the interview answer
-  honest: the client RTT is the acceptance; the server is correct by
+  plainly that user-net cannot feed it keeps the claim honest: the client
+  RTT is the acceptance; the server is correct by
   construction and untested on the wire.
 - **Consequences:** `just test` greps `PING RTT` and asserts pcap
   echo-request then echo-reply. It does not send a host ping. Malformed
@@ -1613,8 +1613,8 @@ D-0011 onward are working decisions made under those constraints.
   Call distro `nc -u` directly (rejected: EOF/timeout behavior is not
   portable; a SOCK_DGRAM + `settimeout` is the same packet and is
   fail-closed).
-- **Rationale:** the pseudo-header and the 0/`0xFFFF` wrinkle are the
-  interview questions; they live in `udp.rs` with a self-test that
+- **Rationale:** the pseudo-header and the 0/`0xFFFF` wrinkle live in
+  `udp.rs` with a self-test that
   forces a zero computed sum. Dropping RX 0 is stricter than the RFC
   and is defensible against slirp (it always computes one) but is
   still a protocol choice, not "the RFC says so." The harness race
@@ -2679,7 +2679,7 @@ D-0011 onward are working decisions made under those constraints.
   at spike start; whichever fallback fires, the report's abstract states
   the comparison shape in its opening paragraphs.
 
-## D-0064: Report structure, claims discipline, convergence, audits, quizzes
+## D-0064: Report structure, claims discipline, convergence, audits
 - Date: 2026-08-16 — Status: accepted
 - **Decision:** report structure: abstract → background (short) →
   architecture of the apparatus (decision-log distilled; the deliberate
@@ -2706,30 +2706,26 @@ D-0011 onward are working decisions made under those constraints.
   historical-only / structural), so the kill-list exists before any
   prose does. **Draft-early:** the skeleton is written with real numbers
   at T4.3; all later work edits the draft; exhibit tables are generated
-  from CSV. **Second audit:** inside T4.11, between the
-  content-complete draft and the quiz — same findings-only format as
+  from CSV. **Second audit:** inside T4.11, after the
+  content-complete draft — same findings-only format as
   `docs/AUDIT-2026-08.md`, scoped to what changed since it (superpage
   walker/verifier as landed, harness as-built, the `-bios none` shim if
   it landed, and every report number checked against the CSVs that
   claim to generate it); recorded as `docs/AUDIT-<date>.md`; blockers
-  fixed before the quiz. **Quizzes:** the comprehensive end-of-project
-  quiz sits between the second audit and the final revision pass, so
-  what it surfaces marks sections needing rework; the standing
-  5-question milestone quiz happens at T4.12 as usual. **Convergence
+  fixed before revision. **Convergence
   gate** (duplicated in PLAN.md; the PLAN copy is normative): harness
   stable and all numbers regenerated; ladder closed by the 5% bar;
   `-bios none` concluded either way; comparison section in its selected
   fallback shape; threats each mitigated-and-measured or stated; second
-  audit's blockers closed; both quizzes done; sign-off.
+  audit's blockers closed; sign-off.
 - **Alternatives considered:** writing the report after the data is
   "done" (rejected: draft-early is the structural rule — a skeleton with
-  real numbers exists from T4.3 and everything edits it). Quiz after
-  final (rejected: ceremonial). Hand-typed exhibit tables (rejected:
-  the one mechanism that guarantees prose cannot drift from data is
-  generating tables from the CSVs). Skipping a second audit because the
-  first was clean-ish (rejected: the first audit's premise — green gates
-  do not certify labels — applies with more force to code written during
-  a measurement campaign).
+  real numbers exists from T4.3 and everything edits it). Hand-typed
+  exhibit tables (rejected: the one mechanism that guarantees prose
+  cannot drift from data is generating tables from the CSVs). Skipping
+  a second audit because the first was clean-ish (rejected: the first
+  audit's premise — green gates do not certify labels — applies with
+  more force to code written during a measurement campaign).
 - **Rationale:** the report is the artifact; its integrity mechanisms —
   generated exhibits, the regeneration appendix, pre-registered
   predictions citable from `docs/AUDIT-2026-08.md`, a scoped second
