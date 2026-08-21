@@ -1,4 +1,6 @@
 /target
+/target-nofp
+/target-fp
 serial.log
 qemu.log
 whimbrel.pcap
@@ -15,3 +17,5 @@ http.status
 *.rej
 *~
 .DS_Store
+__pycache__/
+*.pyc

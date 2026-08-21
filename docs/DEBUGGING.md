@@ -37,6 +37,10 @@ Bread-and-butter commands:
 (gdb) load                   # re-download the kernel after rebuild (with -S)
 ```
 
+Debug builds merge `-C force-frame-pointers=yes` via
+`scripts/cargo-debug.sh` (`just build` / `just debug`). Release does
+not (finding 14); GDB on a measured image will not have frame pointers.
+
 Notes:
 - QEMU's stub implements software breakpoints internally — `break` works even
   in ROM-like conditions; reach for `hbreak` if a breakpoint mysteriously
@@ -234,6 +238,34 @@ and 11 for the entries the transition actually uses. The general lesson:
 verify the specific translations the cliff depends on, not a representative
 sample of the range.
 
+**Mixed-granularity superpages (D-0059) — first response**
+
+RAM interior `[0x80400000, RAM_END)` is 2 MiB L1 leaves; everything the
+map distinguishes at 4 KiB grain stays L0 (W^X, guards, user slots and
+sections, virtio-mmio, the `[__heap_end, 0x80400000)` fragment). Wrong
+level is a panic, not a pass. `require_leaf` on the `satp` cliff stays
+L0 because those VAs remain in the 4 KiB region.
+
+- **Monitor `info mem`.** After paging is on, the decoded map should
+  show 2 MiB pages from `0x80400000`. 4 KiB throughout that range means
+  `map_range_2m` never ran (or `assert_range` never asked for L1).
+- **Panic `walk: misaligned 2 MiB PPN` / `map_2m: unaligned`.** This is
+  D-0026's named failure mode: a superpage PPN with nonzero low bits.
+  The mapper and the walker both refuse it.
+- **Panic `… L0 want L1` or `… L1 want L0`.** Mapper and verifier
+  disagree on the region's expected leaf level. The printed probe row
+  already has `L{}`; the panic names both.
+- **`page_verify` still ~2 ms, or `assert_range: L1 leaf … overruns
+  end`.** `assert_range` is still stepping 4 KiB against L1 leaves —
+  the named failed co-edit. Grain-correct verify is hundreds of
+  iterations, not ~32k.
+- **`tables=` not 5, or `tables_used=N want 5`.** L1 leaves were not
+  installed (still 67), or the image grew a table the derivation does
+  not count. Do not patch the assert; recompute `EXPECTED_TABLES`.
+- **`heap_end=… crossed RAM_L1_START`.** `__heap_end` reached the 2 MiB
+  region. That would add an L0 and invalidate the constant. Shrink or
+  recompute; do not raise `RAM_L1_START` to paper over it.
+
 **M2**
 1. `sret` to U-mode with `sstatus.SPP` still S, or `sepc` bogus.
 2. User page lacking the U bit → instruction page fault at the first user
@@ -377,7 +409,13 @@ no trap; the first channel that can name the bug is the one to read.
     `gateway 10.0.2.2 MAC learned` so the SYN is not dropped as noarp
     (D-0046). The live pcap assert is our request then slirp's reply
     (`assert-pcap-gateway-arp.sh`), not the T3.5/T3.6 slirp-asked-first
-    chain.
+    chain. **Converse (client-early runs):** a connect *before* any
+    guest TX makes slirp broadcast `who has 10.0.2.15 tell 10.0.2.2`
+    and queue the SYN; that ARP request as pcap frame 1 timestamps the
+    accept, and the queued SYN flushes ~µs after the guest's first
+    frame teaches slirp our MAC (D-0070). A pcap that starts with that
+    slirp request is a client that connected before the guest was
+    reachable, not a broken boot.
 11. `ipv4 drop_proto` non-zero on a happy boot used to be the hostfwd
     TCP SYN (protocol 6) hitting a stack that did not yet parse TCP.
     That exception **expired at T3.10** (D-0049). TCP exists, so
@@ -417,6 +455,16 @@ no trap; the first channel that can name the bug is the one to read.
     symbols (`.utext must follow boot stack`) is the same bug with the
     opposite fold. `core::hint::black_box` on the address keeps the
     comparison as a runtime load. Debug `opt-level=0` never hits this.
+15. **HTTP 200 then silence before `M3 UNIKERNEL OK` / PHASE (D-0068).**
+    After first-HTTP `wait_tx` the kernel `wfi`s so QEMU can deliver the
+    frame before DBCN occupies TCG. Wake source is the next tick
+    (`sie.STIE` plus a future deadline). If a later rung drops tick
+    arming, `timer::assert_ticks_armed` panics with finding 13 rather
+    than hanging. If that assert is gone and STIE is clear, the symptom
+    is: client has the body, serial has no PHASE dump, QEMU idle.
+    First response: gdb Ctrl-C, `$pc` on `wfi` in `timer::yield_once`,
+    `info registers sie` (STIE = bit 5). Do not "fix" it by moving the
+    dump back onto the publish→E4 path.
 
 ## 5. QEMU monitor — inspect a hung machine *without* GDB
 
@@ -469,3 +517,83 @@ Work the list in order; each step either finds it or shrinks the search space.
    bug's home. Then take a real break.
 10. **Found it?** Add symptom → cause to §4, and if the fix embodies a choice,
     log it in DECISIONS.md.
+
+## 7. Host-side gate failures (not guest bugs)
+
+1. **`just test` boots to `M3 UNIKERNEL OK`, then every pcap assert
+   dies with `tshark: You don't have permission to read the file`.**
+   Ubuntu 26.04 ships an enforcing AppArmor profile for `/usr/bin/tshark`
+   that denies reads of pcaps under `$HOME`. The harness writes
+   `whimbrel.pcap` in the repo. A copy in `/tmp` reads fine — that is
+   the diagnostic, not the fix. Local AppArmor override: SETUP.md §7.
+   Confirm with the audit log (`apparmor="DENIED"` on the pcap path).
+2. **`check-utext: no kernel at target/riscv64gc-unknown-none-elf/…`
+   after a build that seemed to succeed.** Cursor's agent shell injects
+   `CARGO_TARGET_DIR=/tmp/cursor-sandbox-cache/…`, so cargo writes the
+   image outside the tree and `check-utext.sh` looks at the in-tree
+   default. Unset the variable, or run from a plain login shell
+   (SETUP.md §7). Not a distro issue.
+
+## Variant ELF 2 MB larger than the kernel / variant S inflated (D-0079)
+
+Symptom: the `bios-none` donor ELF's first LOAD segment spans
+`0x8000_0000–0x8021_xxxx` with ~2 MB filesz — zero padding between the
+shim and `.text` — and any startup-slice (S) measurement of that image
+runs milliseconds long.
+
+Cause: LLD assigns sections to PT_LOADs in address order and pads
+same-flag gaps in the file; script placement does not change it, and
+`PHDRS` would rewrite the default image's headers. The 2 MB gap between
+the shim (`0x8000_0000`) and `BASE_ADDRESS` is filled with file bytes
+QEMU then loads.
+
+Fix (D-0079): never boot the donor ELF. Extract the blob
+(`objcopy -O binary --only-section=.mshim`) and pass it as
+`-bios mshim.bin` with the **default** kernel ELF. The donor exists
+only to be objcopied.
+
+## A "no-op" refactor moved the kernel hash (D-0079)
+
+Symptom: adding a `#[cfg]`-gated module declaration (or any line) to a
+source file changes the release binary's sha256 even though the feature
+is off and no generated code should differ.
+
+Cause: `panic!`/`assert!` capture `core::panic::Location` — file and
+**line** — into `.rodata`. Any edit that shifts line numbers below it
+rewrites those strings. The binary is different because its panic
+messages are.
+
+Fix / practice: additions that must not move the default hash go at the
+end of the file (`mod mshim;` sits last in `main.rs` for exactly this
+reason). When comparing hashes across a refactor, a moved hash with
+identical `.text` is this, not a codegen change — `readelf -x .rodata`
+diff shows the line-number strings. Campaigns are unaffected: each
+records its kernel sha per trial row.
+
+## A diagnostic against QEMU boots ran 50× faster than designed (D-0080)
+
+Symptom: a script that wraps QEMU in `timeout N` (or budgets wall time
+assuming boots last seconds) completes almost instantly; sampling loops
+built around those boots fire at millisecond cadence instead of their
+designed spacing. D-0080's drift probe registered ~35–40 min at ~1.5 s
+resolution and ran in **30 seconds** at 30.7 ms cadence — every gate it
+had still passed, and the session was too short by 60× to see the
+minutes-scale effect it was built to measure.
+
+Cause: the default image **self-terminates**. After the app serves its
+response and exits, the scheduler finds no ready task
+(`task.rs`: "no ready task; shutting down") and calls `sbi::shutdown()`
+— SBI SRST, honored by OpenSBI on `-bios default` and by the D-0079
+shim's sifive_test seam on `-bios none` — so QEMU exits ~270 ms after
+spawn. A `timeout 15` wrapper never binds; it is not pacing, it is a
+dead man's brake that never engages. Only `http-persist` builds
+(`just run-http`) keep serving.
+
+Fix / practice: never derive pacing, duration, or cadence from QEMU
+process lifetime. Enforce cadence explicitly (sleep to the next tick)
+and gate the *achieved* duration and cadence fail-closed at the end of
+the run; have the analyzer compute window spans from recorded
+timestamps rather than assuming them. Related trap from the same
+incident: the runner logged `date -u` while file mtimes showed local
+time, and the 30-second run was read as four hours — label every
+logged clock UTC explicitly.

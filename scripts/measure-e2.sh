@@ -12,7 +12,8 @@ KERNEL="target/${TARGET}/debug/whimbrel"
 QEMU="qemu-system-riscv64"
 PORT="${E2_GDB_PORT:-1234}"
 
-cargo build
+# Debug image: keep frame pointers for GDB (finding 14).
+bash scripts/cargo-debug.sh build
 
 if [ ! -f "$KERNEL" ]; then
     echo "TEST FAIL: no kernel at ${KERNEL}"
@@ -23,23 +24,27 @@ if ! command -v gdb-multiarch >/dev/null 2>&1; then
     exit 1
 fi
 
+# Finding 28: argv lives in qemu-args.sh (csum=off / TSO-family off
+# included). This freeze-at-reset path adds -S -gdb on top.
+# shellcheck disable=SC1091
+source "$ROOT/scripts/qemu-args.sh"
+
 log=$(mktemp)
 gdbout=$(mktemp)
+pcap=$(mktemp --suffix=.pcap)
 qpid=""
 cleanup() {
     if [ -n "$qpid" ]; then
         kill "$qpid" 2>/dev/null || true
         wait "$qpid" 2>/dev/null || true
     fi
-    rm -f "$log" "$gdbout"
+    rm -f "$log" "$gdbout" "$pcap"
 }
 trap cleanup EXIT
 
-"$QEMU" -machine virt -nographic -bios default \
-    -global virtio-mmio.force-legacy=false \
-    -netdev user,id=net0 \
-    -device virtio-net-device,netdev=net0 \
-    -S -gdb "tcp::${PORT}" \
+qemu_args_fill "$pcap" "${E2_TCP_PORT:-18080}"
+
+"$QEMU" "${QEMU_ARGS[@]}" -S -gdb "tcp::${PORT}" \
     -kernel "$KERNEL" >"$log" 2>&1 &
 qpid=$!
 

@@ -1,0 +1,9 @@
+# bench/linux/buildroot.fragment — on top of qemu_riscv64_virt_defconfig.
+BR2_TOOLCHAIN_BUILDROOT_MUSL=y     # static-linkable libc for /init
+BR2_INIT_NONE=y                    # buildroot's rootfs is not used
+# BR2_PACKAGE_BUSYBOX is not set   # no userspace beyond our /init
+# BR2_TARGET_ROOTFS_TAR is not set # no fs images; we run gen_init_cpio ourselves
+# Stock row: the pinned board kernel config, untouched.
+# Trimmed row: built out-of-tree with the SDK toolchain +
+# linux-trimmed.fragment (just linux-build step 4), so one
+# buildroot tree serves both rows.

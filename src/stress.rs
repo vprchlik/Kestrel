@@ -2,9 +2,10 @@
 //!
 //! Does not change the allocators. It holds a small working set, mutates it
 //! with an LCG for several thousand steps, then asserts the heap is one
-//! coalesced block and the frame free-list length matches the start. A
-//! second pass runs at 1 ms ticks to widen the window where a timer can
-//! land inside `alloc_frame` / `try_alloc`.
+//! coalesced block and available frames (`free_count`: bump remainder plus
+//! recycled) match the start. A recycled-list walk checks `RECYCLED`
+//! (finding 30 / D-0065). A second pass runs at 1 ms ticks to widen the
+//! window where a timer can land inside `alloc_frame` / `try_alloc`.
 
 use crate::frame;
 use crate::heap;
@@ -33,6 +34,7 @@ struct HeapSlot {
 }
 
 fn assert_restored(frames_start: usize, tag: &str) {
+    frame::check_recycled();
     let frames = frame::free_count();
     if frames != frames_start {
         panic!(

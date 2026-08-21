@@ -204,6 +204,27 @@ rw_csr!(satp, write_opts: [nostack, preserves_flags], {
 /// Unprivileged spec 20211203, Zicntr; privileged spec 20211203 §3.1.10.
 /// QEMU `virt` ticks this at 10 MHz. Use `rdtime` rather than `csrr time` so
 /// a write cannot be introduced by accident.
+/// Sstc supervisor timer comparator (D-0079 seam, bios-none lane only).
+/// CSR 0x14D per the Sstc extension spec; written by number because the
+/// assembler need not know the extension for a raw csrw. `sip.STIP` is
+/// architecturally `stimecmp <= time` — writing a future deadline both
+/// arms the next tick and acknowledges the current one.
+#[cfg(feature = "bios-none")]
+pub mod stimecmp {
+    use super::asm;
+
+    #[inline(always)]
+    pub fn write(val: usize) {
+        unsafe {
+            asm!(
+                "csrw 0x14D, {val}",
+                val = in(reg) val,
+                options(nomem, nostack, preserves_flags),
+            );
+        }
+    }
+}
+
 pub mod time {
     use super::asm;
 

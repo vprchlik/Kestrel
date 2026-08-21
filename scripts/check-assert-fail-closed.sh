@@ -35,6 +35,7 @@ expect_fail scripts/assert-pcap-udp-echo.sh "$tmp/no-such.pcap" missing
 expect_fail scripts/assert-pcap-tcp-handshake.sh "$tmp/no-such.pcap" missing
 expect_fail scripts/assert-pcap-http.sh "$tmp/no-such.pcap" missing
 expect_fail scripts/assert-pcap-tcp-retransmit.sh "$tmp/no-such.pcap" missing
+expect_fail scripts/assert-pcap-syn-grid.sh "$tmp/no-such.pcap" missing
 
 : >"$tmp/empty.pcap"
 expect_fail scripts/assert-pcap-garp.sh "$tmp/empty.pcap" empty
@@ -46,6 +47,7 @@ expect_fail scripts/assert-pcap-udp-echo.sh "$tmp/empty.pcap" empty
 expect_fail scripts/assert-pcap-tcp-handshake.sh "$tmp/empty.pcap" empty
 expect_fail scripts/assert-pcap-http.sh "$tmp/empty.pcap" empty
 expect_fail scripts/assert-pcap-tcp-retransmit.sh "$tmp/empty.pcap" empty
+expect_fail scripts/assert-pcap-syn-grid.sh "$tmp/empty.pcap" empty
 
 python3 - "$tmp" <<'PY'
 import struct, sys
@@ -321,6 +323,23 @@ write_pcap(d + "/http-no-fin.pcap", handshake + [http_nofin, peer_fin])
 write_pcap(d + "/http-no-peer-fin.pcap", handshake + [http_data])
 write_pcap(d + "/http-bad-csum.pcap", handshake + [http_bad_csum, peer_fin])
 write_pcap(d + "/http-rst.pcap", handshake + [http_data, peer_fin, tcp_rst])
+http_short_body = (
+    b"HTTP/1.0 200 OK\r\n"
+    b"Content-Type: text/plain\r\n"
+    b"Connection: close\r\n"
+    b"Content-Length: 1\r\n"
+    b"\r\n"
+    b"x"
+)
+http_short = tcp_frame(
+    slirp_mac, guest_mac, ip_guest, ip_gw,
+    tcp_hdr(80, 12345, 2001, 1001, ACK | PSH | FIN, ip_guest, ip_gw, http_short_body),
+)
+write_pcap(d + "/http-short.pcap", handshake + [http_short, peer_fin])
+write_pcap(d + "/syn-grid-happy.pcap", [(garp, 0), (tcp_syn, 500)])
+write_pcap(d + "/syn-grid-rto.pcap", [(garp, 0), (tcp_syn, 1_000_000)])
+write_pcap(d + "/syn-grid-no-tx.pcap", [tcp_syn])
+write_pcap(d + "/syn-grid-no-syn.pcap", [garp])
 write_pcap(
     d + "/rto-happy.pcap",
     [
@@ -428,7 +447,14 @@ expect_fail scripts/assert-pcap-http.sh "$tmp/http-no-fin.pcap" "no FIN from 10.
 expect_fail scripts/assert-pcap-http.sh "$tmp/http-no-peer-fin.pcap" "no peer FIN"
 expect_fail scripts/assert-pcap-http.sh "$tmp/http-bad-csum.pcap" "checksum.status"
 expect_fail scripts/assert-pcap-http.sh "$tmp/http-rst.pcap" "RST present"
+expect_fail scripts/assert-pcap-http.sh "$tmp/http-short.pcap" "tcp.len"
 bash scripts/assert-pcap-http.sh "$tmp/http-happy.pcap"
+
+expect_fail scripts/assert-pcap-syn-grid.sh "$tmp/hdr-only.pcap" "no guest first TX"
+expect_fail scripts/assert-pcap-syn-grid.sh "$tmp/syn-grid-no-tx.pcap" "no guest first TX"
+expect_fail scripts/assert-pcap-syn-grid.sh "$tmp/syn-grid-no-syn.pcap" "no TCP SYN"
+expect_fail scripts/assert-pcap-syn-grid.sh "$tmp/syn-grid-rto.pcap" "slirp's RTO"
+bash scripts/assert-pcap-syn-grid.sh "$tmp/syn-grid-happy.pcap"
 
 expect_fail scripts/assert-pcap-tcp-retransmit.sh "$tmp/http-happy.pcap" "want exactly 2 HTTP data segments"
 expect_fail scripts/assert-pcap-tcp-retransmit.sh "$tmp/rto-one-copy.pcap" "want exactly 2 HTTP data segments"

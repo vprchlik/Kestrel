@@ -25,6 +25,7 @@ use crate::timer;
 use crate::udp;
 use crate::virtio;
 use crate::virtq;
+#[cfg(feature = "net-init-selftest")]
 use core::arch::asm;
 
 /// ACKNOWLEDGE. Virtio 1.2 §2.1.
@@ -97,7 +98,9 @@ static mut PING_DONE: bool = false;
 
 /// One unread UDP payload (D-0040). `recv` copies this into the user
 /// buffer; a second datagram before that copy is dropped, not queued.
-const UDP_PAYLOAD_MAX: usize = 1472;
+/// Cap on one UDP payload queued for `recv`. Public so the kernel can
+/// `const`-assert the app buffer against it (D-0056 / finding 36).
+pub const UDP_PAYLOAD_MAX: usize = 1472;
 static mut UDP_PENDING: bool = false;
 static mut UDP_LEN: usize = 0;
 static mut UDP_SRC_IP: [u8; 4] = [0; 4];
@@ -356,7 +359,7 @@ pub fn init() {
     ping_gateway(base);
     #[cfg(feature = "net-init-selftest")]
     wait_tcp_handshake(base);
-    crate::phase::stamp(crate::phase::LISTEN);
+    crate::phase::stamp(crate::phase::NET_INIT_DONE);
 }
 
 /// Build a 12-byte zero virtio-net header plus a 60-byte Ethernet frame
@@ -421,6 +424,7 @@ fn wait_gateway_arp(base: usize) {
         let _ = poll_rx(base);
         if arp::lookup(GW).is_some() {
             println!("virtio-net: gateway 10.0.2.2 MAC learned");
+            crate::phase::stamp(crate::phase::SERVING_READY);
             dump();
             return;
         }
@@ -430,7 +434,12 @@ fn wait_gateway_arp(base: usize) {
             dump();
             panic!("virtio-net: no ARP reply for gateway 10.0.2.2");
         }
-        unsafe { asm!("wfi") };
+        // Spin, don't wfi (D-0056 / finding 12). Only the 10 ms timer
+        // could wake a wfi here, which quantized ARP latency to the tick.
+        // Finding 13 corollary: the 2 s timeout sits after the wfi in
+        // this loop, so removing timer arming without this change hangs
+        // forever — the first wfi with nothing pending never returns to
+        // the timeout check.
     }
 }
 
@@ -729,16 +738,25 @@ fn tx_tcp_seg(
         );
     }
     virtq::post_tx(0, post);
+    let first_http = data_len > 0 && crate::phase::get(crate::phase::E3G) == 0;
+    if first_http {
+        // Publish-time (D-0043 / D-0056). The doorbell store is the next
+        // stamp: under TCG it runs the device model in this thread.
+        crate::phase::stamp(crate::phase::E3G);
+    }
     unsafe { TX_POSTED = TX_POSTED.wrapping_add(1) };
     arm_tx_stall();
     println!("virtio-net: TX TCP seg seq={seq} ack={ack} flags={flags:#04x} dlen={data_len}");
     virtq::notify(base, virtq::Q_TX);
-    let first_http = data_len > 0 && crate::phase::get(crate::phase::E3G) == 0;
     if first_http {
-        crate::phase::stamp(crate::phase::E3G);
+        crate::phase::stamp(crate::phase::E3G_DOORBELL);
     }
     wait_tx(base, "TCP seg");
     if first_http {
+        // D-0068: yield so slirp/hostfwd can deliver before DBCN occupies
+        // TCG. Stamps already stored; only the print moves. `yield_once`
+        // asserts ticks are armed (finding 13) rather than assuming it.
+        timer::yield_once();
         crate::phase::print_after_response();
         crate::println_always!("M3 UNIKERNEL OK");
     }
@@ -985,7 +1003,10 @@ fn wait_ping_reply(base: usize) {
             dump();
             panic!("virtio-net: no echo reply from 10.0.2.2");
         }
-        unsafe { asm!("wfi") };
+        // Spin, don't wfi (D-0056 / finding 12). Same as wait_gateway_arp:
+        // the tick was the only wake. Finding 13 corollary: the 2 s
+        // timeout sits after the wfi, so removing timer arming without
+        // this change hangs forever.
     }
 }
 

@@ -27,7 +27,10 @@ const SYNACK_HLEN: usize = 24;
 /// 200 ms at the 10 MHz timebase (D-0041).
 const RTO_TICKS: usize = 2_000_000;
 const RTO_MAX: u8 = 8;
-const PAYLOAD_MAX: usize = 512;
+/// Cap on one TCP payload queued for `recv` / one unacked `send`.
+/// Public so the kernel can `const`-assert the app buffer against it
+/// (D-0056 / finding 36).
+pub const PAYLOAD_MAX: usize = 512;
 
 const FIN: u8 = 0x01;
 const SYN: u8 = 0x02;
@@ -582,6 +585,7 @@ pub fn handle(payload: &[u8], src: &[u8; 4], dst: &[u8; 4]) -> Out {
         };
         match t.state {
             State::Listen => {
+                crate::phase::stamp(crate::phase::SYN_RX);
                 let isn = csr::time::read() as u32;
                 t.remote_ip = *src;
                 t.remote_port = sport;
@@ -632,6 +636,7 @@ pub fn handle(payload: &[u8], src: &[u8; 4], dst: &[u8; 4]) -> Out {
     if t.state == State::SynRcvd {
         if flags & ACK != 0 && flags & SYN == 0 && ack == t.snd_nxt && seq == t.rcv_nxt {
             t.state = State::Established;
+            crate::phase::stamp(crate::phase::ESTABLISHED);
             unsafe { ESTABLISHED = ESTABLISHED.wrapping_add(1) };
             println!("TCP ESTABLISHED");
         } else {

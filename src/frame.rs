@@ -1,10 +1,11 @@
-//! Physical frame allocator: intrusive free list over `[__heap_end, RAM_END)`.
+//! Physical frame allocator: bump pointer plus a recycled intrusive list.
 //!
 //! Owns every 4 KiB frame above the linker heap carve-out (D-0024,
-//! `__heap_start`..`__heap_end`). Each free frame stores the next-free
-//! pointer in its own first 8 bytes; the only metadata in `.bss` is the list
-//! head (D-0019). Page tables, and later task stacks, come from here. Without
-//! it there is no allocatable physical memory beyond the static image.
+//! `__heap_start`..`__heap_end`). Virgin frames are a bump (D-0065);
+//! recycled frames store the next-free pointer in their first 8 bytes
+//! (D-0019, amended). Page tables, and later task stacks, come from here.
+//! Without it there is no allocatable physical memory beyond the static
+//! image.
 
 #![cfg_attr(
     any(feature = "panic-selftest", feature = "hang-selftest"),
@@ -27,9 +28,14 @@ extern "C" {
     static __heap_end: u8;
 }
 
+/// Recycled-list head. 0 means empty. Intrusive next-pointer in the frame.
 static mut HEAD: usize = 0;
+/// Next virgin frame in `[HEAP_END, RAM_END)`.
+static mut BUMP: usize = 0;
 static mut HEAP_END: usize = 0;
 static mut TOTAL: usize = 0;
+/// Length of the recycled list. `free_count` is arithmetic (D-0065).
+static mut RECYCLED: usize = 0;
 static mut FROZEN: bool = false;
 
 fn heap_start() -> usize {
@@ -47,8 +53,8 @@ fn read_be_u32(pa: usize) -> u32 {
 
 /// D-0023: validate the DTB header **before** `init`. The blob sits at
 /// `0x87e0_0000`, inside `[heap_end, RAM_END)`. After this check returns,
-/// the DTB is clobberable — `init` will write next-pointers through it and
-/// `alloc_frame` may hand those pages out.
+/// the DTB is clobberable — `alloc_frame` may hand those pages out when
+/// the bump reaches them. Init itself does not write through the blob.
 pub fn check_dtb(dtb_pa: usize) {
     let magic = read_be_u32(dtb_pa);
     let totalsize = read_be_u32(dtb_pa + 4) as usize;
@@ -65,60 +71,65 @@ pub fn check_dtb(dtb_pa: usize) {
             magic, DTB_MAGIC, dtb_pa, totalsize, end
         );
     }
+    // D-0079 verify-item (a): D-0065's clobberable-DTB assumption as an
+    // assert, not a hope. Clobbering is legal only because the blob
+    // sits inside the bump range [heap_end, RAM_END); a loader that
+    // placed it below heap_end would have it corrupted by the kernel
+    // image or the heap. Verified 0x87e0_0000 in both lanes (QEMU
+    // places it; OpenSBI passes it through).
+    if dtb_pa < heap_end() {
+        panic!(
+            "DTB at {:#x} below heap_end {:#x}: outside the D-0065 clobber range",
+            dtb_pa,
+            heap_end()
+        );
+    }
 }
 
-/// Link every frame in `[__heap_end, RAM_END)` into the free list.
-/// Heap bounds come from the linker (D-0024); do not re-derive them.
-/// Call `check_dtb` first (D-0023).
+/// Arm the bump over `[__heap_end, RAM_END)`. Heap bounds come from the
+/// linker (D-0024); do not re-derive them. Call `check_dtb` first (D-0023).
 pub fn init() {
     let start = heap_start();
     let end = heap_end();
     if start % PAGE_SIZE != 0 || end % PAGE_SIZE != 0 || end <= start || end > RAM_END {
         panic!("heap symbols unusable: start={:#x} end={:#x}", start, end);
     }
+    if (RAM_END - end) % PAGE_SIZE != 0 {
+        panic!(
+            "managed range not page-sized: end={:#x} ram_end={:#x}",
+            end, RAM_END
+        );
+    }
     unsafe {
         HEAP_END = end;
+        BUMP = end;
         HEAD = 0;
-        TOTAL = 0;
+        RECYCLED = 0;
+        TOTAL = (RAM_END - end) / PAGE_SIZE;
     }
-
-    let mut pa = end;
-    let mut n = 0usize;
-    while pa < RAM_END {
-        unsafe { core::ptr::write(pa as *mut usize, HEAD) };
-        unsafe { HEAD = pa };
-        pa += PAGE_SIZE;
-        n += 1;
-    }
-    unsafe { TOTAL = n };
 }
 
 pub fn total_frames() -> usize {
     unsafe { TOTAL }
 }
 
-/// Length of the free list. Read-only: does not allocate or free.
+/// Available frames: virgin remainder plus recycled length. O(1).
 #[cfg_attr(
     all(feature = "no-sret", not(feature = "freeze-selftest")),
     allow(dead_code)
 )]
 pub fn free_count() -> usize {
-    let mut n = 0usize;
-    let mut pa = unsafe { HEAD };
-    let cap = unsafe { TOTAL }.saturating_add(1);
-    while pa != 0 {
-        n += 1;
-        if n > cap {
-            panic!("frame free list looks cyclic after {} nodes", n);
-        }
-        pa = unsafe { core::ptr::read(pa as *const usize) };
+    let bump = unsafe { BUMP };
+    if bump > RAM_END {
+        panic!("frame bump {:#x} past RAM_END", bump);
     }
-    n
+    (RAM_END - bump) / PAGE_SIZE + unsafe { RECYCLED }
 }
 
 /// D-0036: after this, `alloc_frame` / `free_frame` panic printing the
 /// request. Called immediately before the first `sret` to U. Prints
-/// `frames frozen: free=N`.
+/// `frames frozen: free=N`. Semantics unchanged under D-0065: the bool
+/// is the freeze; `free_count()` is just the printed number.
 #[cfg_attr(
     all(feature = "no-sret", not(feature = "freeze-selftest")),
     allow(dead_code)
@@ -128,30 +139,41 @@ pub fn freeze() {
     println!("frames frozen: free={}", free_count());
 }
 
-/// Pop the head, **then** zero the frame. The next-pointer lives in the
-/// first 8 bytes; it must be copied into `HEAD` before `write_bytes` wipes
-/// it. Zero-on-free would erase that pointer while the frame is still on
-/// the list.
+/// Recycled list first (LIFO), then the bump. Zero after the next-pointer
+/// is copied out of a recycled frame.
 pub fn alloc_frame() -> usize {
     if unsafe { FROZEN } {
         panic!("alloc_frame after freeze");
     }
-    let pa = unsafe { HEAD };
-    if pa == 0 {
-        panic!("out of frames (total {})", unsafe { TOTAL });
-    }
-    let next = unsafe { core::ptr::read(pa as *const usize) };
-    unsafe { HEAD = next };
+    let recycled = unsafe { HEAD };
+    let pa = if recycled != 0 {
+        let next = unsafe { core::ptr::read(recycled as *const usize) };
+        let n = unsafe { RECYCLED };
+        if n == 0 {
+            panic!("recycled underflow while HEAD={:#x}", recycled);
+        }
+        unsafe {
+            HEAD = next;
+            RECYCLED = n - 1;
+        }
+        recycled
+    } else {
+        let bump = unsafe { BUMP };
+        if bump >= RAM_END {
+            panic!("out of frames (total {})", unsafe { TOTAL });
+        }
+        unsafe { BUMP = bump + PAGE_SIZE };
+        bump
+    };
     unsafe { core::ptr::write_bytes(pa as *mut u8, 0, PAGE_SIZE) };
     pa
 }
 
-/// Push `pa` as the new head. The cheap double-free check is `pa == HEAD`:
-/// it catches freeing the same frame twice with no intervening alloc
-/// (the second push would make a 1-cycle list). It does **not** scan the
-/// list, so it misses free-A / free-B / free-A and free-A / alloc / free-A
-/// (the latter is a live frame being freed, not a double-free of a listed
-/// one). O(n) would catch those; we are not doing O(n).
+/// Push `pa` as the new recycled head. The cheap double-free check is
+/// `pa == HEAD`: it catches freeing the same frame twice with no
+/// intervening alloc. It does **not** scan the list. O(n) would catch
+/// those; we are not doing O(n). A frame at or above `BUMP` was never
+/// handed out.
 #[cfg(any(not(feature = "fast-boot"), feature = "stress"))]
 pub fn free_frame(pa: usize) {
     if unsafe { FROZEN } {
@@ -160,12 +182,35 @@ pub fn free_frame(pa: usize) {
     if pa % PAGE_SIZE != 0 || pa < unsafe { HEAP_END } || pa >= RAM_END {
         panic!("free_frame: {:#x} is not a managed frame", pa);
     }
+    if pa >= unsafe { BUMP } {
+        panic!("free_frame: {:#x} is above bump {:#x}", pa, unsafe { BUMP });
+    }
     if pa == unsafe { HEAD } {
         panic!("double-free of {:#x} (already head)", pa);
     }
     unsafe {
         core::ptr::write(pa as *mut usize, HEAD);
         HEAD = pa;
+        RECYCLED += 1;
+    }
+}
+
+/// Walk the recycled list; panics on cycle or walk ≠ `RECYCLED`.
+#[cfg(any(not(feature = "fast-boot"), feature = "stress"))]
+pub fn check_recycled() {
+    let mut n = 0usize;
+    let mut pa = unsafe { HEAD };
+    let cap = unsafe { RECYCLED }.saturating_add(1);
+    while pa != 0 {
+        n += 1;
+        if n > cap {
+            panic!("recycled list looks cyclic after {} nodes", n);
+        }
+        pa = unsafe { core::ptr::read(pa as *const usize) };
+    }
+    let want = unsafe { RECYCLED };
+    if n != want {
+        panic!("recycled walk {} count {}", n, want);
     }
 }
 
@@ -191,6 +236,14 @@ pub fn self_test() {
     let c = alloc_frame();
     if c != a {
         panic!("LIFO broken: freed {:#x}, got {:#x}", a, c);
+    }
+    check_recycled();
+    if free_count() != total_frames() - 2 {
+        panic!(
+            "self_test accounting: free={} total={} want total-2",
+            free_count(),
+            total_frames()
+        );
     }
     println!(
         "frames {} heap_start={:#x} heap_end={:#x} ram_end={:#x}",

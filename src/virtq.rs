@@ -567,4 +567,5 @@ pub fn init() {
     write_queue_addrs(base, Q_TX, &p.tx);
     verify(base);
     println!("VIRTQ OK");
+    crate::phase::stamp(crate::phase::VIRTQ_INIT);
 }

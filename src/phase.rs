@@ -1,37 +1,72 @@
-//! Boot-to-first-HTTP-byte phase timestamps (D-0043).
+//! Boot-to-first-HTTP-byte phase timestamps (D-0043 / D-0057).
 //!
-//! Owns the static `rdtime` array stamped at `_start`, `stvec`, paging,
-//! freeze, first `sret`, `DRIVER_OK`, first RX, listen-ready, and
-//! response-TX (E3g). Printed once, after the response is on the wire —
-//! DBCN is one `ecall` per byte, so printing on the measured path would
-//! move E3g by milliseconds. Without this module M4 has no floor number.
+//! Owns the static `rdtime` array stamped along the attributed boot
+//! path. Printed once, after the response is on the wire *and* after a
+//! `wfi` so DBCN does not occupy TCG on the publish→E4 path (D-0068).
+//! DBCN is one `ecall` per byte; printing between publish and the
+//! client's first byte would measure instrumentation, not Whimbrel.
+//! Without this module M4 has no floor number.
+//!
+//! `NAMES` is the kernel's list. The three justfile HTTP gates share
+//! one `phase_names` variable (finding 26). The T4.1 harness parses
+//! whatever serial prints and is not a fourth copy.
 
 use crate::csr;
 use crate::println_always;
 
-pub const N: usize = 9;
+pub const N: usize = 22;
 pub const START: usize = 0;
-pub const STVEC: usize = 1;
-pub const PAGING: usize = 2;
+pub const STAMP_A: usize = 1;
+pub const STAMP_B: usize = 2;
+pub const STVEC: usize = 3;
+#[cfg(not(any(feature = "panic-selftest", feature = "hang-selftest")))]
+pub const FRAME_INIT: usize = 4;
+#[cfg(not(any(feature = "panic-selftest", feature = "hang-selftest")))]
+pub const TASK_INIT: usize = 5;
+pub const PAGE_BUILD: usize = 6;
+pub const PAGE_VERIFY: usize = 7;
+pub const ACTIVATE: usize = 8;
+pub const VIRTQ_INIT: usize = 9;
+pub const DRIVER_OK: usize = 10;
+pub const FIRST_RX: usize = 11;
+pub const SERVING_READY: usize = 12;
+pub const NET_INIT_DONE: usize = 13;
+#[cfg(not(any(feature = "panic-selftest", feature = "hang-selftest")))]
+pub const HEAP_INIT: usize = 14;
 #[cfg(not(feature = "no-sret"))]
-pub const FREEZE: usize = 3;
+pub const ACCOUNTING: usize = 15;
 #[cfg(not(feature = "no-sret"))]
-pub const SRET: usize = 4;
-pub const DRIVER_OK: usize = 5;
-pub const FIRST_RX: usize = 6;
-pub const LISTEN: usize = 7;
-pub const E3G: usize = 8;
+pub const FREEZE: usize = 16;
+#[cfg(not(feature = "no-sret"))]
+pub const SRET: usize = 17;
+pub const SYN_RX: usize = 18;
+pub const ESTABLISHED: usize = 19;
+pub const E3G: usize = 20;
+pub const E3G_DOORBELL: usize = 21;
 
 const NAMES: [&str; N] = [
     "_start",
+    "stamp_a",
+    "stamp_b",
     "stvec",
-    "paging",
-    "freeze",
-    "sret",
+    "frame_init",
+    "task_init",
+    "page_build",
+    "page_verify",
+    "activate",
+    "virtq_init",
     "DRIVER_OK",
     "first_rx",
-    "listen",
+    "serving_ready",
+    "net_init_done",
+    "heap_init",
+    "accounting",
+    "freeze",
+    "sret",
+    "syn_rx",
+    "established",
     "E3g",
+    "E3g_doorbell",
 ];
 
 /// Filled from `_start` (index 0) after `.bss` is zeroed, from the
@@ -57,8 +92,8 @@ pub fn get(i: usize) -> usize {
     unsafe { PHASE_STAMPS[i] }
 }
 
-/// Once, after the HTTP response TX completes. Always prints (fast-boot
-/// compiles out ordinary `println!`).
+/// Once, after the HTTP response TX completes and D-0068's yield
+/// returns. Always prints (fast-boot compiles out ordinary `println!`).
 pub fn print_after_response() {
     if unsafe { PRINTED } {
         return;
@@ -70,7 +105,8 @@ pub fn print_after_response() {
     println_always!("PHASE ticks (10 MHz, 100 ns/tick); ns = ticks * 100");
     let t0 = get(START);
     // Stamp order in the array is not wall-clock order (freeze/sret are
-    // after DRIVER_OK). Sort by rdtime so delta is the previous event.
+    // after DRIVER_OK; syn_rx can land during the ping wait). Sort by
+    // rdtime so delta is the previous event.
     let mut order = [0usize; N];
     let mut n = 0usize;
     for i in 0..N {

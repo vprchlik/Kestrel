@@ -19,13 +19,14 @@ against a minimal Linux VM.
     whole project — they are the intellectual core.
 - **Units of work, not calendar time.** Nothing here is scheduled. A milestone
   is done when its acceptance test passes and the end-of-milestone ritual
-  (glossary/decisions update + 5-question quiz, see `.cursor/rules/project.mdc`)
-  is complete.
-- M0, M1, and M2 are detailed to individual-task resolution below. **M3–M4 are
-  intentionally kept at task-list resolution** and marked
-  `[TO BE DETAILED at milestone start]` — the first action at each of those
-  milestones is expanding its section to full resolution using what prior
-  milestones taught us, and getting sign-off before code.
+  (glossary/decisions update) is complete.
+- Every milestone is now detailed to individual-task resolution below. M3 and
+  M4 were intentionally kept at task-list resolution until their milestone
+  start — the first action at each was expanding its section to full
+  resolution using what prior milestones taught us, with sign-off before
+  code. M3's expansion happened at its start; M4's happened 2026-08-16
+  (T4.0), preceded by the whole-tree audit recorded in
+  `docs/AUDIT-2026-08.md`.
 
 ## Milestone overview
 
@@ -33,9 +34,9 @@ against a minimal Linux VM.
 |---|---|---|---|
 | M0 | Boot | OpenSBI → kernel entry → UART "hello" → clean QEMU exit | done |
 | M1 | Fundamentals | Traps, SBI timer interrupts, frame allocator, Sv39 paging, heap | done |
-| M2 | Execution | U-mode, 5 syscalls, context switch, preemptive scheduling of 2+ tasks | detailed; not started |
+| M2 | Execution | U-mode, 5 syscalls, context switch, preemptive scheduling of 2+ tasks | done |
 | M3 | Unikernel | App-in-image as sole U-mode task, virtio-net, tiny HTTP responder | done |
-| M4 | Evaluation | Scripted reproducible benchmarks vs minimal Linux VM + technical report | [TO BE DETAILED at milestone start] |
+| M4 | Evaluation | Boot-to-first-HTTP-byte three ways + benchmark harness + technical report | detailed; in progress |
 
 ---
 
@@ -48,7 +49,7 @@ the SBI console), then shuts the machine down so QEMU exits cleanly with code 0.
 ## Prerequisite concepts
 
 Understand each of these before (or while) doing the tasks. Each is a concept
-you should be able to explain out loud, unprompted, in an interview.
+you should be able to explain out loud, unprompted.
 
 **1. RISC-V privilege levels (M/S/U).** A RISC-V hart executes at one of three
 privilege levels: Machine (M) is the highest and is where firmware lives with
@@ -385,8 +386,7 @@ This enumeration is also the strongest available defense of D-0006: identity
 mapping means the PC, the stack pointer, and every return address keep their
 numeric values across the switch. A higher-half kernel has to map both the old
 and new views, jump, then drop the old one. That trampoline is why xv6 and
-Linux look the way they do here, and being able to say why we did not need one
-is a good interview answer.
+Linux look the way they do here. We did not need that trampoline.
 
 **12. Instruction width and `sepc`.** For an exception we resume *past*
 (`ebreak` in M1, `ecall` in M2), the handler must add the trapped
@@ -543,8 +543,7 @@ on exhaustion with the requested size and alignment.
 
 ### T1.9 — Milestone wrap — S
 Print the final marker, update the harness default marker to
-`M1 FUNDAMENTALS OK`, update GLOSSARY and DECISIONS, and run the five-question
-quiz.
+`M1 FUNDAMENTALS OK`, update GLOSSARY and DECISIONS.
 
 - **Acceptance:** `just test` (no arguments) passes on the new default marker.
 
@@ -917,7 +916,7 @@ what T2.1/T2.8 arrange by construction: nothing in the trap path allocates.
 ### T2.12 — Two demo tasks and milestone wrap — M
 Two counters writing at different rates, one of them using `sbrk`, both
 exiting; the last `exit` shuts down. Marker `M2 EXECUTION OK`, harness default
-updated, GLOSSARY and DECISIONS updated. Quiz is separate.
+updated, GLOSSARY and DECISIONS updated.
 
 - **Acceptance:** `just test` (no arguments) passes on the new default marker.
 
@@ -1181,8 +1180,8 @@ input, D-0040).
 
 ### T3.7 — IPv4 and ICMP echo — M
 IPv4 parse: version/IHL check, **verify the header checksum on RX** (ten
-lines, and the interview checksum question — skipping it because slirp is
-well-formed is the dishonest skip), honor IHL rather than assuming 20,
+lines; skipping it because slirp is well-formed is the dishonest skip),
+honor IHL rather than assuming 20,
 drop fragments (MF or offset ≠ 0) with a counter. No routing: everything
 TX goes to the gateway MAC. ICMP echo reply (type 8 → 0) plus a
 guest-initiated ping of 10.0.2.2 as the testable direction (concept 4).
@@ -1284,8 +1283,7 @@ hart does not print ticks forever.
 **(f) Wrap:** `M3 UNIKERNEL OK` marker after the first served response in
 the default boot; `just test` default flips to it; GLOSSARY (virtqueue,
 slirp, checksum, RTO, E0–E4, fast-boot, GARP, hostfwd, …) and DECISIONS
-catch-up; M3 summary in this file. Quiz handled separately per the M2
-precedent.
+catch-up; M3 summary in this file.
 
 - **Acceptance:** `just test` (no arguments) passes on `M3 UNIKERNEL OK`;
   boot prints the phase-timestamp block after the response; `just run-http`
@@ -1379,33 +1377,441 @@ at init).
 
 ---
 
-# M4 — Evaluation  `[TO BE DETAILED at milestone start]`
+# M4 — Evaluation
 
-**Goal:** scripted, reproducible benchmarks comparing this unikernel against a
-minimal Linux VM under identical QEMU conditions — boot time, syscall latency,
-memory footprint — plus a technical report.
+**Goal:** the flagship result is **boot-to-first-HTTP-byte, three ways under
+identical conditions** — Whimbrel, minimal Linux (buildroot + a static-C
+accept-loop server as PID 1), and Unikraft's HTTP example via the riscv64
+PR with the recorded fallback ladder (D-0043). Framed as **floor-finding**:
+the minimum structurally necessary time from kernel entry to first HTTP
+byte, decomposed phase by phase, with the milliseconds a general-purpose OS
+spends that a single-purpose VM doesn't shown by measurement, not
+assertion. Deliverables: a benchmark harness producing raw CSV plus summary
+statistics, and a technical report. **The report is the artifact; the
+kernel is the apparatus.**
 
-**Task list (resolution deferred; expand + get sign-off before any code):**
-- Define metrics + methodology *first* (what "boot time" means: QEMU start →
-  first byte of app output; syscall latency: `gettime`-bracketed hot loops of
-  a cheap syscall, median of N; memory: guest-reported + host RSS + image
-  size); write it down before measuring — M
-- Minimal Linux baseline: prebuilt kernel + busybox/initramfs (buildroot or
-  distro kernel + hand-rolled initramfs — decision entry), same QEMU machine,
-  cores, RAM, virtio devices — L
-- Equivalent Linux-side workloads (init prints marker for boot-time; small
-  static binary looping `write`/`clock_gettime` for latency; busybox httpd or
-  equivalent for the net demo) — M
-- Benchmark harness: scripts that run N trials of each metric on both guests,
-  emit raw CSV + summary stats (median, IQR); pinned QEMU version recorded in
-  output — M
-- Report: architecture overview, methodology, results with tables/plots,
-  honest threats-to-validity section (QEMU ≠ hardware, user-net overhead,
-  Linux config choices), what I'd do next — L
-- End-of-project: final GLOSSARY/DECISIONS pass, interview-prep quiz over the
-  whole system — S
+**Decisions recorded before any code:** D-0055 (methodology freeze and
+harness architecture), D-0056 (pre-baseline corrections), D-0057
+(attribution stamps and phase renames), D-0058 (optimization-ladder
+governance), D-0059 (2 MiB superpages; amends D-0026), D-0060 (O(1) frame
+accounting), D-0061 (`-bios none` charter; scoped amendment to D-0003),
+D-0062 (Linux baseline), D-0063 (Unikraft spike), D-0064 (report, claims
+discipline, convergence gate, audits). Subsequent M4 entries:
+D-0065 (bump/lazy), D-0066 (E3w→E4 remainder), D-0067 (per-batch
+result files), D-0068 (PHASE dump must not sit on publish→E4),
+D-0069 (pre-registration underestimates small-phase costs). The
+pre-M4 whole-tree
+audit is `docs/AUDIT-2026-08.md`; task text below cites its findings by
+number.
 
-**Acceptance sketch:** `just bench` (or `scripts/bench.sh`) runs end-to-end on
-a clean machine following SETUP.md, produces `report/results/*.csv` and the
-numbers cited in the report are regenerated by it; report reviewed and
-finalized.
+**Standing structural rules for the milestone:**
+- **Methodology freezes before any optimization.** No rung lands until the
+  harness produces a stable baseline table (stability is numeric, D-0055)
+  on the dedicated Ubuntu host in SETUP.md. **T4.3 freeze:** measured
+  kernel `35861f3`; CSV freeze tag `baseline-t4.3`. T4.2 KVM-pod stamps
+  are ladder-ordering only, not report numbers. Every before/after claim
+  cites this baseline.
+  Pre-baseline corrections (T4.0b) and instrumentation (T4.2) were exempt
+  from the no-optimization rule but not from the full gate list.
+- **Draft-early.** The report skeleton is written with real numbers as soon
+  as the baseline table exists; all later work edits the draft. Exhibit
+  tables are generated from CSV by script, never typed, so prose cannot
+  drift from data. After T4.4 the generator reads the freeze from tag
+  `baseline-t4.3` and the after-ladder from a named T4.6 CSV commit
+  (D-0067).
+- **Convergence gate.** M4 is done when the checklist at the end of this
+  section is fully checked — an open-ended timeline must not become an
+  unfinished one.
+- **Git:** all M4 work on branch `m4-evaluation`; push to that branch only;
+  never to `main`.
+
+## Prerequisite concepts
+
+**1. Median and minimum answer different questions.** Measurement noise on
+this platform (host scheduling, TCG translation, slirp) is one-sided
+additive: it can make a run slower, never faster. So the minimum over N
+trials approaches the floor, while the median is the robust comparison
+statistic — an order statistic like min improves with N and is unfair
+across systems with different noise profiles. The report uses median/IQR
+for every comparison and before/after claim, shows min as the observed
+floor bound, and never uses means: a single descheduled run poisons a mean
+invisibly.
+
+**2. TCG time is not hardware time.** QEMU translates guest code;
+compute-dense phases (a 32k-entry page-table build) are taxed differently
+than I/O-dense phases (MMIO round trips into the device model). Ratios
+between phases would differ on silicon. Every claim carries "under QEMU
+TCG" conditions; this is threat-to-validity #1, stated in the abstract,
+not buried.
+
+**3. Guest-internal clocks vs. host-observed edges.** `rdtime` phase
+stamps decompose Whimbrel's boot at 100 ns resolution but exist only for
+Whimbrel. Linux printk timestamps and Unikraft's boot instrumentation are
+different instruments with different observation costs. Cross-system
+*comparisons* therefore ride only on host/client-observed edges
+(E0 → first-connect, E0 → E4) that need zero guest cooperation and are
+defined identically for all systems. Decompositions are per-system
+exhibits, labeled with their instrument.
+
+**4. The client is part of the apparatus.** First-byte requires a request,
+so the client retry loop (started before E0, D-0043) bounds E4 from above
+by its retry granularity. A fork-per-attempt curl loop has multi-ms exec
+overhead (audit finding 32); the measurement client must be a persistent
+process stamping a monotonic clock, and its measured granularity goes in
+threats-to-validity.
+
+**5. A superpage is a leaf at a higher level.** Sv39 lets a level-1 PTE
+with any of R/W/X set map 2 MiB; the PPN's low 9 bits must be zero or the
+walk faults (misaligned superpage). Mixed granularity means two leaf
+levels coexist, so a verifier must know which level each region is
+*supposed* to resolve at — a walk that accepts any level would bless
+exactly the failure D-0026 warned about.
+
+**6. What `-bios none` removes and what it obligates.** Without OpenSBI we
+enter at 0x8000_0000 in M-mode and inherit firmware's duties: PMP (QEMU
+implements PMP, so with no entry programmed every S/U access fails — the
+classic silent-boot footgun), `medeleg`/`mideleg`, `mcounteren.TM`
+(without it every `rdtime` in S-mode is an illegal instruction), and timer
+plumbing. With `menvcfg.STCE` (Sstc) set by our own M-mode boot code,
+S-mode arms `stimecmp` directly and M-mode needs no resident trap handler
+at all — the shim becomes pure boot code, and D-0018's one-site timer seam
+is the prepared landing spot.
+
+## Tasks
+
+### T4.0 — Decisions and plan — S
+D-0055 through D-0064 in DECISIONS.md; this section in PLAN.md; the audit
+findings into `docs/AUDIT-2026-08.md`; the stale milestone-table rows
+fixed (audit finding 16).
+
+- **Acceptance:** entries exist; sign-off recorded; docs only, no code.
+
+### T4.0b — Pre-baseline corrections — M
+Four audit findings whose fixes must precede any measurement, because
+each changes what the baseline would mean (D-0056):
+**(a) Fail-closed harness (finding 31):** `scripts/boot-test.sh` gets
+`set -euo pipefail` from line 1 (with deliberate `set +e` islands where
+exit codes are inspected); the build-failure mode is exercised once per
+the DEBUGGING.md §4 item 8 rule — a broken build must produce FAIL, not a
+stale-kernel PASS.
+**(b) E3g at publish (finding 9):** the E3g stamp moves between `post_tx`
+and `virtq::notify`, matching D-0043's definition; a second stamp
+`E3g_doorbell` lands after the notify store returns, so the synchronous
+device-model handoff is measured as its own line instead of silently
+absorbed. Harness phase lists (finding 26) co-edited.
+**(c) Spin, don't `wfi`, in boot RX waits (finding 12):** the `wfi`s in
+`wait_gateway_arp` / `wait_ping_reply` are removed in all profiles (one
+code path, D-0014), un-quantizing ARP/ping latency from the 10 ms tick.
+Finding 13's corollary is recorded in D-0056: ticks were load-bearing for
+those waits, and any future tick-removal rung is legal only because the
+waits no longer sleep.
+**(d) Buffer-size construction (finding 36):** the app exports its recv
+buffer sizes; kernel `const _` asserts tie them to `tcp::PAYLOAD_MAX` and
+`net::UDP_PAYLOAD_MAX` (the UDP image's buffer grows to match), so recv
+truncation-by-coincidence becomes unrepresentable.
+
+- **Acceptance:** a deliberately broken build makes every gate FAIL loudly;
+  full gate list green after; `just test-fast` shows the new `E3g` /
+  `E3g_doorbell` pair with plausible ordering; the const asserts reject a
+  deliberately shrunk buffer at compile time.
+
+### T4.1 — Benchmark harness — M
+`scripts/bench.sh` (surfaced as `just bench-*`): runs N trials of a named
+(system, config) pair; per trial: stamps E0 with a monotonic clock
+immediately before QEMU exec, runs the persistent measurement client
+(connect-retry from before E0; records first-connect and first-byte
+stamps and attempt counts), captures serial and pcap, parses `PHASE` lines
+into rows. Emits `results/runs.csv` (one row per trial: identity, host
+metadata, E0-anchored edges) and `results/phases.csv` (one row per
+trial × phase). A summary script computes n/median/IQR/min/max per metric.
+Pinning is enforced fail-loudly: QEMU version + binary hash, whimbrel SHA
++ dirty flag, host kernel, CPU model, governor, load average recorded per
+batch; the harness refuses to aggregate rows with mismatched QEMU version
+or a dirty tree. QEMU and client are `taskset`-pinned to separate cores.
+Warmup: first 3 trials of each config in a batch are marked and
+excluded by the summarizer (round-robin, then shuffled recorded
+trials). Every failure mode of every new assert is exercised once
+(missing tshark, malformed PHASE line, zero-trial CSV). **Finding 14 is
+settled here with a number:** one A/B batch, release+fast-boot with and
+without `-C force-frame-pointers=yes`; deltas inside the floor (E2→E3g
+Δ +0.250 ms, E0→E4 Δ +0.078 ms) and `.text` −15%, so the flag is
+stripped from release and kept for debug via `scripts/cargo-debug.sh`.
+Each trial records `/proc/stat` steal. Stability compares two
+interleaved batches, not the two arms inside one batch; the bar is not
+widened.
+
+- **Acceptance:** `just bench-whimbrel` produces both CSVs and the summary
+  for release-default ("safe") and release+fast-boot configs; two
+  interleaved 30-trial batches meet the stability criterion (per-metric
+  medians within max(2%, 200 µs) for all metrics ≥ 1 ms); the fail-closed
+  checks demonstrably fail; the frame-pointer decision is recorded with
+  its measured delta.
+
+### T4.2 — Attribution stamps and phase renames — M
+The stamp set becomes the audit's finding-3/5/6/7/9 decomposition,
+verbatim (D-0057): `frame_init`, `task_init`, `page_build`, `page_verify`
+split out of "paging"; the `satp` switch is stamped `activate`; `virtq_init`
+split out of the DRIVER_OK delta; `serving_ready` stamped when the
+gateway MAC is learned (the true earliest-serve point, finding 6);
+`LISTEN` renamed `net_init_done` (what it is); `heap_init` and
+`accounting` split out of the freeze delta (finding 7); `syn_rx` and
+`established` split the E3g tail into external arrival vs. kernel serve
+time (finding 9). Stamp overhead is measured by two adjacent stamps at
+boot and reported. Harness co-edits per finding 26: the three justfile
+phase lists and `phase.rs` N/NAMES move in the same commit.
+
+- **Acceptance:** all gates green; phase rows sum to E2→E3g within the
+  measured stamp overhead; `PHASE` output parses in the T4.1 harness;
+  the finding-10 inventory and finding-12 prediction are checked against
+  the first attributed table and the agreement or disagreement is
+  recorded (finding 12: overtaken-by-fix, D-0056.3; finding 10: see
+  D-0057). Ladder order after attribution: `frame_init`, then
+  `accounting`, then `page_verify`; superpages re-evaluated later.
+  Magnitudes are not report-grade.
+
+### T4.3 — Baseline freeze + report skeleton (draft-early) — M
+Full N-trial protocol on the dedicated host (SETUP.md), safe and fast
+configs; CSVs (or their regeneration recipe + summary) committed;
+baseline SHA recorded in D-0055. The dedicated host produces the freeze;
+the cloud build VM cannot. `report/` skeleton written: all section headers, the
+phase-decomposition exhibit generated from real CSV, the safe−fast
+per-phase delta as the first price-of-paranoia line, threats-to-validity
+seeded, and a **"numbers that must be regenerated" appendix stub seeded
+from audit findings 16–23** — the kill-list exists before any prose does.
+
+- **Acceptance:** skeleton committed; every number in it regenerated by
+  the harness; baseline SHA recorded; the appendix lists each inherited
+  number with its disposition (regenerate / historical-only / structural).
+  **Landed T4.3:** measured kernel `35861f3`; tag `baseline-t4.3`
+  (CSV freeze commit); `report/draft.md` plus generated exhibits.
+
+### T4.3b — Audit cleanup — S
+Findings 33–35, 37–39, and 36's remainder beyond the T4.0b const asserts:
+delete the write-only `SWITCH_12`/`SWITCH_21`; make the kernel FIN-flag
+test use the named `SEND_FIN`; remove `app::abort()` or reference it;
+drop the redundant `ERR_INVALID_PARAM` allow; fix D-0040's
+trap-path wording and the `stress` `heap_bytes` label; decide the
+`csr.rs` module-wide allow (scoped cfg or keep with a comment).
+Sequenced **after** the baseline freeze so the tree does not churn before
+the before is captured; none of these affect measurement.
+
+- **Acceptance:** zero warnings on all builds; full gate list green;
+  N-trial spot-check shows no phase moved beyond noise.
+
+### T4.4 — Rung 1: `frame_init` bump / lazy free-list — M
+T4.3 freeze: `frame_init` 7.20 ms (34% of E2→E3g). The bump-pointer /
+lazy free-list candidate (finding 10) is first. It **subsumes** D-0060:
+`free_count()` is a walk of the ~31k-node list the bump stops building;
+the co-edit is rewriting `free_count()` to bump arithmetic (walking
+`HEAD` after the change would count recycled frames only and is wrong).
+Design is D-0065 (amends D-0019; freeze unchanged, D-0036).
+**Landed T4.4** on the dedicated host: batches `20260817T052349Z-1` /
+`-2`, git_sha `83ca9f99`, stability PASS both configs. Fast E2→E3g
+21.42 → 9.17 ms (−57%), beating the ~9.5 ms projection. Leftover
+bounds missed (`frame_init` 141 µs, `accounting` 25 µs, safe freeze
+100 µs) while every ≥ 1 ms falsification line held. D-0060 recorded
+declined-by-subsumption.
+
+- **Acceptance:** gates green; N-trial rerun shows `frame_init` and
+  `accounting` both collapsed (and safe `freeze` no longer walks);
+  ladder row filled; D-0060 recorded declined-by-subsumption.
+
+### T4.5 — O(1) frame accounting — declined-by-subsumption
+D-0060 as a separate rung (allocated counter on the current intrusive
+list) is not landed. T4.4's representation change is the accounting
+fix. Do not start this task.
+
+- **Acceptance:** ladder row disposition `declined-by-subsumption`.
+
+### T4.6 — Superpages, then residue — M per rung
+Only rungs whose *attributed* projected gain ≥ 5% of the current E2→E3g
+median (D-0058). **2 MiB superpages (D-0059) measured 2026-08-17**
+(batches `20260817T061753Z-1`/`-2`, git_sha `76830e13`, stability
+PASS both configs). Fast E2→E3g 9.17 → 6.43 ms (−30%), in the
+5.5–8.0 ms range. Cumulative from freeze 21.42 → 6.43 ms (3.3×).
+`page_verify` 731 µs (grain-correct; not the 1.5–2.2 ms 4K-stepping
+band). `tables_used` = 5. Both paging phases overran their ranges
+(D-0069). `freeze` 7.3 → 12.2 µs is a named TCG secondary, not a
+co-edit miss.
+**Profile after T4.6:** no phase exceeds 19%; seven clear the 5%
+bar (322 µs). Only `virtq_init` (842 µs = 13%) is a real remaining
+E2→E3g *candidate* (discarded first pass). The other six are the
+HTTP byte, D-0043 paranoia, necessary task slots, the live NIC
+pass, leftover page_build, and ARP wait. Ladder is **not** closed
+(one candidate still clears). D-0068 dump placement landed and was
+measured: two invocations, E3w→E4 untouched, occupancy hypothesis
+not confirmed, yield kept. Next *action* is the Linux baseline.
+E0→E4 is 51.66 ms on the T4.6 batches; virtq_init is ~0.8 ms of
+that (1.6%). The former ~31 ms "E3w→E4" of that 52 ms is resolved
+(D-0070/D-0071): QEMU startup + guest boot wait + sub-ms delivery,
+each already counted once in E0→E4 — no separate host term exists.
+Do not take virtq_init next.
+**`virtq_init` (finding 4):** remains eligible at 13% of 6.43 ms;
+**not** bundled with `DRIVER_OK`. Ceiling on the gain: skip the
+discarded pass, keep `fill_descriptors`.
+Other residue, still data-driven: gate `ping_gateway` behind
+`not(fast-boot)`; tick arming under fast-boot (legal only after
+T4.0b(c)); E3g-tail only if `syn_rx`→`E3g` shows removable kernel
+time. Each rung: hypothesis → expected gain → land with its
+co-edit list → full gates → N-trial → ladder row → one commit.
+
+- **Acceptance:** every candidate landed-with-row or declined-with-reason;
+  the ladder closes when no remaining candidate clears the 5% bar (the
+  diminishing-returns floor declaration, cited in the report).
+
+### T4.7 — `-bios none`: firmware cost measured by removal — L
+Scoped amendment to D-0003 (D-0061): a measurement variant, not a platform
+change; `-bios default` remains the default everywhere. A pure-boot
+M-mode shim linked at 0x8000_0000 in the same ELF (kernel keeps its
+0x8020_0000 link address and S-mode identity): PMP catch-all, full
+delegation, `mcounteren.TM`, `menvcfg.STCE` (Sstc), `mret` to `_start`.
+No resident M-mode services: timer becomes `stimecmp` at D-0018's
+one-site seam; console becomes a polled NS16550A write (D-0004 revisited
+for this variant only); shutdown becomes the sifive_test store (D-0017's
+toolbox); UART + sifive_test pages mapped at build (D-0039 pattern).
+`mtvec` parks with a diagnostic: any M-mode trap after boot is a bug.
+Allowlisted S-kernel seams: entry, timer-arm site, console backend,
+shutdown backend, two page mappings. Variant harness touchpoints per
+audit finding 29. **Abandon criteria (returns-based, not calendar):**
+stop and write up the partial result if (a) the variant demands S-kernel
+changes beyond the allowlist, (b) the first working boot shows E0→E4
+savings under 2× the largest remaining S-mode rung, or (c) M-mode
+debugging exceeds what the DEBUGGING.md channels can name.
+
+- **Acceptance:** `just test-m` lane (boot, net, HTTP, fast-release
+  subset) green on the variant; N-trial rows; the firmware-cost exhibit
+  filled with the `-bios default` rows unchanged as primary.
+
+### T4.8 — Linux baseline — L
+Buildroot at a pinned release (D-0062): `qemu_riscv64_virt_defconfig`
+base; kernel trimmed toward tinyconfig keeping serial console,
+virtio-mmio/net, IPv4 TCP, initramfs, devtmpfs, ELF binfmt; modules,
+IPv6, block, and the rest off — each delta in a committed defconfig
+fragment. Two Linux rows: trimmed (primary, the good-faith floor attempt)
+and stock defconfig (reference showing what tuning bought). Initramfs is
+a hand-rolled cpio: `/init` *is* the server — static C, no busybox, no
+shell: socket → bind :80 → listen → `READY` marker → accept loop →
+single read → write the byte-identical 92-byte response → close.
+Cmdline primary `console=ttyS0 quiet loglevel=0 rdinit=/init`; secondary
+instrumented config (`loglevel=7`, `CONFIG_PRINTK_TIME`,
+`initcall_debug`). Comparisons ride only on client-observed edges;
+Linux's decomposition comes from the instrumented run and is presented
+with the asymmetry stated (different instrument, measured on the logging
+config, quiet-vs-instrumented delta shown). Same QEMU binary, machine,
+single CPU, default 128 MiB, same netdev/hostfwd/filter-dump.
+E3w→E4 dump placement (D-0068) landed and was measured: the dump
+is off the publish→E4 path on principle and did not take the ~31 ms
+term. D-0070 (confirmed) explained why: the term was the accepted
+connection waiting for the guest plus QEMU's own startup slice
+(D-0071), not host work; true delivery is `D_fin` at 63–155 µs.
+Cross-system tables carry no E3w-derived columns, E0→E4 is the
+comparison (two direct client-clock stamps, unconfounded by boot
+length), and E0→first-connect is a same-QEMU control.
+
+- **Acceptance:** `just bench-linux` produces both configs' rows through
+  the same harness; pcap shows the same handshake/response shape; the
+  build regenerates from a committed script + pinned tarball hash.
+
+### T4.8b — Act on the FTRACE miss — S
+D-0073. Same five-arm campaign as T4.8 (`just bench-t48`) on a new
+`Image-trimmed` with `# CONFIG_FTRACE is not set` plus the T4.8
+printk leftovers. T4.8 pins stay the before; the before/after is
+the finding. PLAN T4.9 remains the Unikraft spike.
+
+- **Acceptance:** `just linux-build` on the bench host produces a
+  new `Image-trimmed` (hash ≠ T4.8) and an unchanged `Image-stock`;
+  `just bench-t48` records T4.8b; exhibit pins `ffb7ac7` /
+  `d705ecb` / `93ab617` are not retargeted.
+
+### T4.9 — Unikraft spike — M
+Pin the PR #1698 branch commit and kraftkit version (D-0063). **Go** =
+the HTTP example builds for qemu/riscv64 at the pin, boots on our pinned
+QEMU with documented flag deltas, and answers the harness client.
+**No-go** = build failure surviving config-level fixes; riscv64 network
+path nonfunctional; or any fix requiring patches to Unikraft internals —
+then we would be benchmarking our fork, so the spike ends there (that
+line is both the go/no-go and the abandon criterion). Fallbacks per
+D-0043, in report terms: (1) three-way on client edges + their native
+boot instrumentation as a labeled exhibit; (2) different-ISA reference in
+a separate exhibit, never sharing a table with riscv64 numbers, plus a
+source-level riscv64 boot-path analysis; (3) two-way quantitative +
+qualitative Unikraft section, stated in the abstract. If their build
+requires a different QEMU version, a Whimbrel control row runs under that
+QEMU to bound the version effect. Sequenced right after T4.3 so the
+comparison section's shape settles while the draft is young.
+
+- **Acceptance:** go/no-go recorded with evidence; the corresponding
+  report section exists in the draft with numbers or the qualitative
+  analysis.
+
+### T4.10 — Secondary metrics — M
+Syscall latency: Whimbrel `gettime`-bracketed hot loop (100k iterations)
+of `gettime`; Linux both ways — forced trap path
+(`syscall(SYS_clock_gettime)`) *and* vDSO, the latter approximating what
+a single-privilege unikernel gets (the comparison D-0010 promised).
+Memory: image bytes, guest-reported free (frames free vs. MemFree), QEMU
+max RSS — with D-0030's reservation-vs-working-set caveat stated, and
+finding 11 (the idle heap) noted. All through the same harness and CSV
+shape.
+
+- **Acceptance:** exhibit filled from N-trial data on both systems.
+
+### T4.11 — Report to final — L
+Content-complete draft (all exhibits, all sections, claims discipline per
+D-0064) → **second audit** → revision → final. **The second audit is a named step, not a vibe:** same
+findings-only format as `docs/AUDIT-2026-08.md`, scoped to what changed
+since it — the superpage walker and verifier as landed, the harness
+as-built, the `-bios none` shim if it landed, and every number in the
+report checked against the CSVs that claim to generate it. Findings
+recorded as `docs/AUDIT-<date>.md`; blockers fixed before revision.
+
+- **Acceptance:** second-audit findings file exists with dispositions;
+  every number regenerated by `just bench` on a clean machine per
+  SETUP.md; report reviewed and finalized with sign-off.
+
+### T4.12 — Wrap — S
+GLOSSARY (superpage, Sstc, PMP, buildroot, initramfs, vDSO, median/IQR,
+TCG, warm-up discard, …) and DECISIONS catch-up; the convergence-gate
+checklist walked and checked.
+
+## Milestone acceptance test
+
+`just bench` runs end-to-end on a clean machine following SETUP.md,
+regenerates `results/*.csv` and every number cited in the report, and the
+convergence gate below is fully checked.
+
+**Convergence gate (what "done" means for M4):**
+1. Harness stable per the numeric criterion; all report numbers
+   regenerated by it under the pinned QEMU.
+2. Ladder closed: every rung landed-with-row or declined-with-reason; no
+   remaining candidate clears the 5% bar.
+3. `-bios none` investigation concluded: landed with its exhibit, or
+   abandoned by its recorded criteria with the partial result written up.
+4. The comparison section exists in whichever D-0043 fallback shape the
+   spike selected.
+5. Threats-to-validity each mitigated-and-measured or plainly stated.
+6. Second audit done with blockers closed;
+   GLOSSARY/DECISIONS current.
+7. Report finalized with sign-off.
+
+## Risks and likely failure modes
+
+- **Harness gold-plating.** The stability criterion is T4.1's finish
+  line, not "perfect"; if it cannot be met, investigating why is
+  methodology work with a finding at the end, not an excuse to lower it.
+- **TCG variance swamps sub-ms rungs.** The 5% bar and min-alongside-
+  median exist for this; audit finding 12's prediction was the first
+  test and was overtaken by D-0056.3 before T4.2 measured.
+- **Superpage silent-wrong.** The D-0026 failure mode is made a panic by
+  the level-aware verifier; the D-0059 co-edit checklist prevents the
+  mystery-gate-failure version.
+- **`-bios none` PMP/delegation footguns produce silent boots.** The shim
+  is the one place M-mode state is programmed; DEBUGGING.md gains an
+  M-mode section with the first-response ladder.
+- **Buildroot host-side build time.** Pinned, scripted, cached; the
+  kernel config is committed so rebuilds are mechanical.
+- **Unikraft PR drift.** Pinned commit; the no-core-patches line caps the
+  spike structurally.
+- **Report scope creep.** Claims discipline (D-0064) plus the convergence
+  gate; "fastest" never appears without its conditions clause in the same
+  sentence.

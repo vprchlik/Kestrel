@@ -108,6 +108,13 @@ compile_error!("net-udp-selftest is exclusive of the HTTP images");
 /// FAIL and HANG without editing this file.
 #[no_mangle]
 extern "C" fn kmain(_hartid: usize, dtb_pa: usize) -> ! {
+    crate::phase::stamp(crate::phase::STAMP_A);
+    crate::phase::stamp(crate::phase::STAMP_B);
+    // D-0079: the bios-none lane has no SBI to probe; its console is
+    // the polled UART, proven by the very next println reaching the
+    // gate's grep. An SBI ecall here would land in the shim's M
+    // diagnostic — which is exactly what the skeleton milestone did.
+    #[cfg(not(feature = "bios-none"))]
     sbi::require_dbcn();
     println!("whimbrel: hello from hart {}, dtb at {:#x}", _hartid, dtb_pa);
     {
@@ -163,19 +170,23 @@ extern "C" fn kmain(_hartid: usize, dtb_pa: usize) -> ! {
             }
         }
         // D-0023: header check before init. After this the DTB at
-        // 0x87e00000 is clobberable — it lies inside the free-list range.
+        // 0x87e00000 is clobberable — it lies in the bump range (D-0065);
+        // init does not write through it.
         frame::check_dtb(dtb_pa);
         frame::init();
+        crate::phase::stamp(crate::phase::FRAME_INIT);
         #[cfg(not(feature = "fast-boot"))]
         frame::self_test();
         task::check_layout();
         task::init();
+        crate::phase::stamp(crate::phase::TASK_INIT);
         page::init();
         page::activate();
         virtio::probe();
         virtq::init();
         net::init();
         heap::init();
+        crate::phase::stamp(crate::phase::HEAP_INIT);
         #[cfg(not(feature = "fast-boot"))]
         heap::self_test();
         println!("M1 FUNDAMENTALS OK");
@@ -278,3 +289,10 @@ fn park() -> ! {
         unsafe { asm!("wfi") };
     }
 }
+
+// D-0079: the M-mode shim donor. Declared last so the cfg'd module
+// shifts no line numbers above it — panic-location strings are
+// file:line, and moving them would change the default kernel's hash
+// (DEBUGGING.md has the full lesson).
+#[cfg(feature = "mshim")]
+mod mshim;

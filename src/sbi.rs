@@ -5,6 +5,11 @@
 //! shutdown, and TIME set-timer. Without this module the kernel cannot talk
 //! to firmware.
 
+// D-0079: the bios-none lane compiles this module for its types and
+// the shutdown seam but calls none of the SBI vocabulary; keeping the
+// constants legible beats scattering thirty cfg gates.
+#![cfg_attr(feature = "bios-none", allow(dead_code))]
+
 use core::arch::asm;
 
 /// SBI success. Spec: Binary Encoding, error codes.
@@ -71,6 +76,9 @@ pub const SRST_TYPE_SHUTDOWN: usize = 0;
     allow(dead_code)
 )]
 pub const SRST_REASON_NONE: usize = 0;
+/// sifive_test FINISHER_PASS (QEMU hw/misc/sifive_test.c): QEMU exits 0.
+#[cfg(feature = "bios-none")]
+pub const SIFIVE_TEST_PASS: u32 = 0x5555;
 
 /// Return of an SBI call: `a0` = error, `a1` = value.
 #[derive(Clone, Copy)]
@@ -182,6 +190,42 @@ pub fn console_write_byte(byte: u8) {
     allow(dead_code)
 )]
 pub fn shutdown() -> Sbiret {
+    // D-0079 seam (bios-none): sifive_test FINISHER_PASS instead of
+    // SRST — there is no SBI to ask. The store does not return on
+    // success. "Ran" = the store executes (an unmapped device page
+    // would fault loudly in the kernel handler instead); "worked" =
+    // QEMU exits 0, which the boot gate requires for PASS — a wrong
+    // value writes cleanly, returns, parks the guest, and fails the
+    // gate as a 124 HANG. Callers' print-and-park path is unchanged.
+    #[cfg(feature = "bios-none")]
+    {
+        unsafe {
+            core::ptr::write_volatile(
+                crate::page::SIFIVE_TEST_MMIO as *mut u32,
+                SIFIVE_TEST_PASS,
+            );
+        }
+        // Never return: QEMU processes the exit on its main loop, so
+        // the store completes and the vCPU keeps executing until the
+        // teardown lands. Returning here raced that teardown into the
+        // caller's "shutdown failed" panic on 1 of ~80 campaign trials
+        // (t47 first attempt) — the trial was perfect, the exit lost
+        // the race. Park instead: a wrong value or a dead device now
+        // parks into the gate's 124 HANG, which is the same loud
+        // verdict the SRST path gets from a hung ecall.
+        loop {
+            unsafe { core::arch::asm!("wfi", options(nomem, nostack)) };
+        }
+    }
+    #[cfg(not(feature = "bios-none"))]
+    {
+        shutdown_srst()
+    }
+}
+
+/// The -bios default body of `shutdown`: probe SRST, then reset.
+#[cfg(not(feature = "bios-none"))]
+fn shutdown_srst() -> Sbiret {
     let probe = probe_extension(EID_SRST);
     if probe.error != SBI_SUCCESS {
         return probe;

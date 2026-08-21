@@ -14,7 +14,6 @@
 use crate::csr;
 use crate::net;
 use crate::println;
-use crate::sbi;
 use crate::task;
 use crate::trap::TrapFrame;
 use crate::uaccess::{self, UserPtrError};
@@ -49,6 +48,13 @@ const _: () = assert!(SYS_RESERVED == 0);
 const _: () = assert!(SYS_WRITE + 4 == SYS_YIELD);
 const _: () = assert!(SYS_WRITE + 6 == SYS_SEND);
 const _: () = assert!(SYS_RECV + 1 == SYS_SEND);
+
+/// App recv buffer vs kernel caps (D-0056 / finding 36). One line each;
+/// silent truncation is then unrepresentable.
+#[cfg(not(feature = "net-udp-selftest"))]
+const _: () = assert!(app::RECV_BUF >= crate::tcp::PAYLOAD_MAX);
+#[cfg(feature = "net-udp-selftest")]
+const _: () = assert!(app::RECV_BUF >= crate::net::UDP_PAYLOAD_MAX);
 
 static mut USER_OK: bool = false;
 static mut SYSCALL_OK: bool = false;
@@ -124,7 +130,11 @@ fn sys_write(frame: &mut TrapFrame) -> &mut TrapFrame {
         Ok(bytes) => {
             task.writes += 1;
             for &b in bytes {
-                sbi::console_write_byte(b);
+                // One console backend (D-0079): route through the same
+                // seam the kernel prints use — a direct DBCN call here
+                // was the second copy, found when the bios-none lane
+                // died at cause 9 on the app's first write syscall.
+                crate::console::put_byte(b);
             }
             advance_ecall(frame);
             frame.set_retval(OK, bytes.len());

@@ -1,9 +1,16 @@
 #!/usr/bin/env bash
+set -euo pipefail
 # Headless boot gate (D-0017). Verdict from serial + QEMU status together.
 # Usage: scripts/boot-test.sh [cargo-feature]
 #   no arg              → default image, expect PASS
 #   panic-selftest      → FAIL (panic line echoed)
 #   hang-selftest       → HANG
+#
+# Fail-closed from line 1 (D-0056 / finding 31): a failed cargo build
+# must not reach QEMU. The leftover ELF is a previous successful
+# image; check-utext and boot would PASS it. `set +e` only around the
+# timeout/QEMU island, where 124 is a hang verdict rather than a
+# script error.
 #
 # net-init-selftest still fires one hostfwd connect, but only after the
 # gateway MAC is learned (D-0054). Waiting for TX ARP reply was the
@@ -11,7 +18,6 @@
 # Default / HTTP / UDP / fast-boot have no watcher. Panic/hang never
 # print DRIVER_OK. CLIENT_EARLY=1 starts the HTTP retry loop before E0
 # (D-0043); otherwise curl waits for HTTP READY (correctness gate).
-set -u
 
 EXPECT="${EXPECT:-M3 UNIKERNEL OK}"
 TIMEOUT_S="${TIMEOUT_S:-5}"
@@ -19,10 +25,10 @@ FEATURE="${1:-}"
 PROFILE="${PROFILE:-debug}"
 TARGET="riscv64gc-unknown-none-elf"
 KERNEL="target/${TARGET}/${PROFILE}/whimbrel"
-QEMU="qemu-system-riscv64"
-# D-0038 / D-0039 / D-0042 / D-0043: keep in sync with justfile qemu_args
-# and .cargo/config.toml.
-QEMU_ARGS=(-machine virt -nographic -bios default -global virtio-mmio.force-legacy=false -netdev user,id=net0,hostfwd=tcp::8080-:80,hostfwd=udp::7777-:7 -device virtio-net-device,netdev=net0 -object filter-dump,id=f0,netdev=net0,file=whimbrel.pcap)
+# D-0038 / D-0039 / D-0042 / D-0043 / D-0055: one argv definition.
+# shellcheck disable=SC1091
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/qemu-args.sh"
+qemu_args_fill whimbrel.pcap
 
 feat=()
 if [ -n "$FEATURE" ]; then
@@ -31,12 +37,21 @@ fi
 profile_flag=()
 if [ "$PROFILE" = release ]; then
     profile_flag=(--release)
-elif [ "$PROFILE" != debug ]; then
+    if ! cargo build "${feat[@]}" "${profile_flag[@]}"; then
+        echo 'TEST FAIL: cargo build failed (refusing to boot a stale kernel)'
+        exit 1
+    fi
+elif [ "$PROFILE" = debug ]; then
+    # Finding 14: frame pointers on debug only. Wrapper merges `--config`
+    # with linker.ld; RUSTFLAGS would drop the script.
+    if ! bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/cargo-debug.sh" build "${feat[@]}"; then
+        echo 'TEST FAIL: cargo build failed (refusing to boot a stale kernel)'
+        exit 1
+    fi
+else
     echo "TEST FAIL: PROFILE=${PROFILE} is not debug or release"
     exit 1
 fi
-
-cargo build "${feat[@]}" "${profile_flag[@]}"
 # Feature builds that never enter U-mode can GC .utext. Userptr selftests
 # do enter U, so they still need the check.
 case "${FEATURE}" in
@@ -74,10 +89,13 @@ fi
 
 hpid=""
 http_images=0
-if [ -z "$FEATURE" ] || [ "$FEATURE" = "net-http-selftest" ] \
-    || [ "$FEATURE" = "tcp-drop-first-tx" ] || [ "$FEATURE" = "fast-boot" ]; then
-    http_images=1
-fi
+# D-0079: feature lists may be comma-joined (bios-none,fast-boot), so
+# match by member, not by equality. bios-none alone is the default
+# HTTP image on the no-firmware lane.
+case ",$FEATURE," in
+    ,,|*,net-http-selftest,*|*,tcp-drop-first-tx,*|*,fast-boot,*|*,bios-none,*)
+        http_images=1 ;;
+esac
 if [ "$http_images" -eq 1 ] && [ "${CLIENT_EARLY:-}" = 1 ]; then
     # D-0043: retry loop starts before QEMU exec so sret→E3g is not
     # "wait for HTTP READY then spawn curl".
@@ -144,6 +162,9 @@ if [ "$status" -eq 124 ]; then
     exit 2
 fi
 if grep -a -q "$EXPECT" serial.log && [ "$status" -eq 0 ]; then
+    if grep -a -q '^PHASE ticks' serial.log; then
+        python3 scripts/bench.py check-serial serial.log
+    fi
     echo "TEST PASS: found \"${EXPECT}\""
     exit 0
 fi

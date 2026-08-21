@@ -7,7 +7,7 @@
 # long enough for SYN/ACK during `wait_tcp_handshake`, then close()s
 # with FIN. The kernel closes that unused TCB so LISTEN is restored
 # (D-0053). Timeout is seconds, default 0.3.
-set -u
+set -euo pipefail
 TIMEOUT="${1:-0.3}"
 python3 - "$TIMEOUT" <<'PY'
 import socket, sys

@@ -5,14 +5,19 @@ set shell := ["bash", "-uc"]
 target    := "riscv64gc-unknown-none-elf"
 kernel    := "target/" + target + "/debug/whimbrel"
 qemu      := "qemu-system-riscv64"
-# D-0038 / D-0039 / D-0042 / D-0043: modern virtio-mmio, a net device,
-# hostfwd (slirp ARPs 10.0.2.15 on a host TCP connect), and capture on
-# every invocation.
-qemu_args := "-machine virt -nographic -bios default -global virtio-mmio.force-legacy=false -netdev user,id=net0,hostfwd=tcp::8080-:80,hostfwd=udp::7777-:7 -device virtio-net-device,netdev=net0 -object filter-dump,id=f0,netdev=net0,file=whimbrel.pcap"
+# D-0038 / D-0039 / D-0042 / D-0043 / D-0055: argv lives in
+# scripts/qemu-args.sh so the bench harness is not a fifth copy
+# (audit finding 28).
+qemu_args := `bash scripts/qemu-args.sh`
+
+# D-0057 / finding 26: one name list for the three HTTP phase greps.
+# The harness parses PHASE lines from serial and is not a fourth copy.
+phase_names := "_start stamp_a stamp_b stvec frame_init task_init page_build page_verify activate virtq_init DRIVER_OK first_rx serving_ready net_init_done heap_init accounting freeze sret syn_rx established E3g E3g_doorbell"
 
 # Cross-compile the debug kernel for riscv64gc-unknown-none-elf.
+# Frame pointers: scripts/cargo-debug.sh (finding 14).
 build:
-    cargo build
+    bash scripts/cargo-debug.sh build
 
 # Boot the default kernel in QEMU (extra flags as one quoted arg).
 run qemu_extra="": build
@@ -20,12 +25,12 @@ run qemu_extra="": build
 
 # Boot the persist HTTP image and sit on :8080 until QEMU is killed.
 run-http:
-    cargo build --features http-persist
+    bash scripts/cargo-debug.sh build --features http-persist
     {{qemu}} {{qemu_args}} -kernel {{kernel}}
 
 # Boot a kmain panic image (live serial; prefer test-panic for the verdict).
 panic timeout_s="5":
-    cargo build --features panic-selftest
+    bash scripts/cargo-debug.sh build --features panic-selftest
     timeout --foreground {{timeout_s}} {{qemu}} {{qemu_args}} -kernel {{kernel}}
 
 # Boot frozen at reset with the GDB stub on tcp::1234.
@@ -48,7 +53,7 @@ check-utext: build
 check-utext-planted:
     #!/usr/bin/env bash
     set -euo pipefail
-    cargo build --features utext-c-fld-selftest
+    bash scripts/cargo-debug.sh build --features utext-c-fld-selftest
     set +e
     out=$(bash scripts/check-utext.sh {{kernel}} 2>&1)
     st=$?
@@ -63,12 +68,12 @@ check-utext-planted:
         exit 1
     fi
     echo 'TEST PASS: planted c.fld rejected by name'
-    cargo build
+    bash scripts/cargo-debug.sh build
 
 # Headless default boot: M3 UNIKERNEL OK, curl 200, phases, gateway ARP.
 test expect="M3 UNIKERNEL OK" timeout_s="12":
     #!/usr/bin/env bash
-    set -u
+    set -euo pipefail
     e='{{expect}}'
     t='{{timeout_s}}'
     case "$e" in expect=*) e="${e#expect=}" ;; esac
@@ -184,7 +189,9 @@ test expect="M3 UNIKERNEL OK" timeout_s="12":
             echo 'TEST FAIL: unexpected retransmit on the happy path'
             exit 1
         fi
-        for ph in _start stvec paging DRIVER_OK first_rx listen freeze sret E3g; do
+        # Finding 26 / D-0057: one `phase_names` list (test / test-fast /
+        # test-fast-release). The harness parses serial, not this list.
+        for ph in {{phase_names}}; do
             if ! grep -a -q "PHASE ${ph} " "$log"; then
                 echo "TEST FAIL: missing PHASE ${ph}"
                 exit 1
@@ -195,6 +202,7 @@ test expect="M3 UNIKERNEL OK" timeout_s="12":
             grep -a 'PHASE .* unset' "$log" || true
             exit 1
         fi
+        python3 scripts/bench.py check-serial "$log"
         if [ ! -f http.status ]; then
             echo 'TEST FAIL: http.status missing (curl never ran or was killed first)'
             exit 1
@@ -647,7 +655,7 @@ test-fast:
     set -euo pipefail
     EXPECT="M3 UNIKERNEL OK" TIMEOUT_S=12 bash scripts/boot-test.sh fast-boot
     log=serial.log
-    for ph in _start stvec paging DRIVER_OK first_rx listen freeze sret E3g; do
+    for ph in {{phase_names}}; do
         if ! grep -a -q "PHASE ${ph} " "$log"; then
             echo "TEST FAIL: missing PHASE ${ph}"
             exit 1
@@ -658,6 +666,7 @@ test-fast:
         grep -a 'PHASE .* unset' "$log" || true
         exit 1
     fi
+    python3 scripts/bench.py check-serial "$log"
     if [ ! -f http.status ] || [ "$(cat http.status)" != "0" ]; then
         echo "TEST FAIL: curl status $(cat http.status 2>/dev/null || echo missing), want 0"
         exit 1
@@ -683,7 +692,7 @@ test-fast-release:
     PROFILE=release CLIENT_EARLY=1 EXPECT="M3 UNIKERNEL OK" TIMEOUT_S=12 \
         bash scripts/boot-test.sh fast-boot
     log=serial.log
-    for ph in _start stvec paging DRIVER_OK first_rx listen freeze sret E3g; do
+    for ph in {{phase_names}}; do
         if ! grep -a -q "PHASE ${ph} " "$log"; then
             echo "TEST FAIL: missing PHASE ${ph}"
             exit 1
@@ -694,6 +703,7 @@ test-fast-release:
         grep -a 'PHASE .* unset' "$log" || true
         exit 1
     fi
+    python3 scripts/bench.py check-serial "$log"
     if [ ! -f http.status ] || [ "$(cat http.status)" != "0" ]; then
         echo "TEST FAIL: curl status $(cat http.status 2>/dev/null || echo missing), want 0"
         exit 1
@@ -711,6 +721,153 @@ test-fast-release:
         exit 1
     fi
     echo 'TEST PASS: release fast-boot M3 UNIKERNEL OK, curl 200, phases'
+
+# D-0061 / D-0079: the no-firmware lane's gate subset (boot, net, HTTP,
+# fast-release). Builds the donor, extracts the shim blob into QEMU's
+# -bios slot, then runs the release default image (boot markers, tick
+# wait = taken-interrupt proof, selftests, curl 200) and the measured
+# fast-boot profile (early client, PHASE presence, pcap asserts).
+# boot-test PASS requires QEMU exit 0, which is the sifive_test
+# shutdown proof: a wrong store value parks the guest into a 124 HANG.
+# The full 16-gate list stays on -bios default.
+test-m:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build --release --features mshim
+    blob=target/riscv64gc-unknown-none-elf/release/mshim.bin
+    bash scripts/mshim-blob.sh \
+        target/riscv64gc-unknown-none-elf/release/whimbrel "$blob"
+    QEMU_BIOS="$blob" PROFILE=release EXPECT="M3 UNIKERNEL OK" \
+        TIMEOUT_S=12 bash scripts/boot-test.sh bios-none
+    if [ ! -f http.status ] || [ "$(cat http.status)" != "0" ]; then
+        echo "TEST FAIL: lane curl status $(cat http.status 2>/dev/null || echo missing), want 0"
+        exit 1
+    fi
+    if ! python3 -c 'import sys; sys.exit(0 if open("http.body","rb").read()==b"whimbrel\n" else 1)'; then
+        echo 'TEST FAIL: lane HTTP body is not exactly whimbrel\n'
+        exit 1
+    fi
+    QEMU_BIOS="$blob" PROFILE=release CLIENT_EARLY=1 EXPECT="M3 UNIKERNEL OK" \
+        TIMEOUT_S=12 bash scripts/boot-test.sh bios-none,fast-boot
+    log=serial.log
+    for ph in {{phase_names}}; do
+        if ! grep -a -q "PHASE ${ph} " "$log"; then
+            echo "TEST FAIL: lane missing PHASE ${ph}"
+            exit 1
+        fi
+    done
+    if grep -a -q 'PHASE .* unset' "$log"; then
+        echo 'TEST FAIL: a lane PHASE stamp was unset'
+        exit 1
+    fi
+    python3 scripts/bench.py check-serial "$log"
+    if [ ! -f http.status ] || [ "$(cat http.status)" != "0" ]; then
+        echo "TEST FAIL: lane fast curl status $(cat http.status 2>/dev/null || echo missing), want 0"
+        exit 1
+    fi
+    if ! bash scripts/assert-pcap-gateway-arp.sh whimbrel.pcap; then
+        echo 'TEST FAIL: lane pcap gateway ARP assertion'
+        exit 1
+    fi
+    if ! bash scripts/assert-pcap-http.sh whimbrel.pcap; then
+        echo 'TEST FAIL: lane pcap HTTP assertion'
+        exit 1
+    fi
+    echo 'TEST PASS: test-m — boot, net, HTTP, fast-release under the M-mode shim'
+
+# T4.1 / D-0055: N=30 recorded + 3 warmup per config, two interleaved
+# batches (configs mixed, recorded trial order shuffled). Writes
+# results/runs.csv, results/phases.csv, results/summary.txt.
+bench-whimbrel:
+    bash scripts/bench.sh whimbrel
+
+# D-0079 / T4.7: the with/without-firmware pair, four whimbrel arms
+# interleaved in one campaign (shared canary, shared controls) so the
+# exhibit's same-campaign gate can hold. Dedicated bench host only.
+bench-t47:
+    bash scripts/bench.sh t47
+
+# T4.8 five-arm campaign. Requires bench/linux/artifacts + MANIFEST.
+# The cloud build VM does not run it (D-0055). D-0073 / T4.8b uses the same
+# recipe after linux-build produces a new Image-trimmed.
+bench-t48:
+    bash scripts/bench.sh t48
+
+# Fail-closed checks (missing tshark, malformed PHASE, zero-trial CSV,
+# QEMU/git mismatch, dirty tree, host controls, origin sync, D-0071
+# schema / S / first-connect / pcap intervals, T4.8 argv / PHASE skip).
+bench-selftest:
+    bash scripts/bench.sh selftest
+
+# Finding 14: release+fast-boot with vs without force-frame-pointers.
+bench-fp-ab:
+    bash scripts/bench.sh fp-ab
+
+# Recompute n/median/IQR/min/max from existing CSVs.
+bench-summary:
+    bash scripts/bench.sh summarize --stability
+
+# T4.3 / T4.4 / T4.6 / T4.8 / T4.8b / T4.7: regenerate report exhibits
+# from git objects. Baseline: tag baseline-t4.3. After-ladder / Δ: T4.6
+# CSV commit. Cross-system: T4.8 CSV commit ffb7ac7 (frozen pre-FTRACE;
+# D-0073 does not retarget this). T4.8b: CSV commit a0c53e2 (D-0073
+# after + D-0075 /init), cross-system-t48b.md, with T4.8 as the before.
+# T4.7: t47c CSV commit c2759e2 → t47-firmware.md. Linux decomposition:
+# serial pin d705ecb plus D-0072 labels 93ab617. Working-tree CSVs /
+# serials are not read (D-0067).
+report-exhibits:
+    python3 scripts/report-exhibits.py
+
+# Failing-input selftest for validate / validate_t48 / validate_t47.
+# Does not write exhibits.
+report-exhibits-selftest:
+    python3 scripts/report-exhibits.py selftest
+
+# Failing-input selftest for the derived D-0078 finding. Does not write the exhibit.
+regime-witness-selftest:
+    python3 scripts/regime-witness.py selftest
+
+# D-0072: label the 327 ms printk hole. Same Image-trimmed, cmdline
+# = instrumented MANIFEST append + ignore_loglevel, System.map
+# offline. One boot, not a campaign arm, never runs.csv. Bench host.
+# The cloud build VM fail-closes without the bench-host artifacts. Selftest does not boot.
+linux-initcall-label:
+    python3 scripts/label-linux-initcalls.py selftest
+    bash scripts/linux-initcall-label.sh
+
+label-linux-initcalls-selftest:
+    python3 scripts/label-linux-initcalls.py selftest
+
+# D-0070 read-only tshark pass over recorded T4.6 / D-0068 pcaps.
+# git show of those CSV objects; results/trials/ must already exist.
+# extract_pcap is scripts/pcap_http.py (shared with the T4.8 harness).
+d0070-pcap-pass:
+    python3 scripts/d0070-pcap-pass.py
+
+d0070-pcap-pass-selftest:
+    python3 scripts/d0070-pcap-pass.py selftest
+
+# T4.8 / D-0062 / D-0073: pin, fetch, and build Linux baseline
+# artifacts on the dedicated host. Prints five verification blocks
+# plus D-0073 3b and D-0062 keeps 3c. Reuse of Image-trimmed is fragment-stamp gated.
+# Stock hash must stay the T4.8 pin; trimmed must move. Never
+# inside a batch. T4.8b runs this before just bench-t48.
+# merge_config "redefined by fragment" is informational.
+# "not in final .config": three cases (survival / vanished /
+# dependent drop). Keeps are asserted on the final .config.
+linux-build:
+    python3 scripts/linux-merge-warnings.py selftest
+    bash scripts/linux-build.sh
+
+linux-merge-warnings-selftest:
+    python3 scripts/linux-merge-warnings.py selftest
+
+# Linux boot gate: MANIFEST hashes, READY (CRLF-tolerant), 92-byte
+# on-wire RESP / pcap HTTP, SYN-grid, no RST, QEMU exit 0.
+# Fail-closed if artifacts are missing. HTTP client is bench-client
+# (queued SYN / confound A); never curl-after-READY.
+test-linux image="trimmed" timeout_s="60":
+    TIMEOUT_S={{timeout_s}} bash scripts/linux-boot-test.sh {{image}}
 
 # Disassemble the kernel (extra flags as one quoted arg).
 objdump flags="-d": build

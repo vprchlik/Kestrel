@@ -1,0 +1,16 @@
+# Latest-run CSVs (runs.csv, phases.csv) are tracked at HEAD for the
+# current rung. The T4.3 freeze lives in tag baseline-t4.3. Once D-0067
+# lands on the bench host, results/batches/<batch_id>/ is the history
+# that does not require git archaeology.
+/summary.txt
+# D-0077: diagnostic record of trials that tripped a gate. Never
+# aggregated, never published. Ignored so a leftover from an
+# aborted campaign cannot make the tree dirty at the next launch
+# (git_identity reads git status --porcelain once, at batch start).
+/gate-failures.csv
+smoke/
+pcaps/
+trials/
+bin/
+fp-ab/
+selftest/

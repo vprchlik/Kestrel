@@ -1,0 +1,11 @@
+# bench/linux/PIN — D-0062 / T4.8. just linux-build verifies; it never records.
+# Buildroot 2026.02 point release (D-0062). 2026.02.3 is the latest 2026.02.x
+# on https://buildroot.org/downloads/ as of 2026-08-18.
+# KERNEL_VERSION is qemu_riscv64_virt_defconfig's
+# BR2_LINUX_KERNEL_CUSTOM_VERSION_VALUE; the recipe re-reads the defconfig
+# after extract and fails if it disagrees.
+BUILDROOT_RELEASE=2026.02.3
+BUILDROOT_TARBALL=buildroot-2026.02.3.tar.xz
+BUILDROOT_URL=https://buildroot.org/downloads/buildroot-2026.02.3.tar.xz
+BUILDROOT_SHA256=5a59e7501b0b4ec52c41f4bfa79412320e0b37eae5f719605a258e8d0c6fc7fb
+KERNEL_VERSION=6.18.7

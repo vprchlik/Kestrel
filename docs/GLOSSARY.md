@@ -19,6 +19,13 @@ use it. A wrong checksum is a silent drop at slirp: hung curl, clean serial.
 The pcap asserts `tcp.checksum.status` good; the kernel self-test is
 `CHECKSUM OK`.
 
+**cliff crossing.** A boot where the guest's first wire TX arrives after
+slirp has already dropped the ARP-pending frame (~1 s), so the queued
+hostfwd SYN is only retried on slirp's ~6 s RTO grid and E0→E4 jumps by
+about six seconds. Measured as `e0→E4 > 3 s`. It is campaign-fatal, and
+D-0074 keeps slirp's drop precisely because it is what makes the
+underlying loss visible at all.
+
 **CSR (Control and Status Register).** Per-hart special registers (e.g.
 `sstatus`, `satp`, `scause`) accessed by dedicated instructions (`csrr`,
 `csrw`) rather than loads/stores. They configure privileged behavior and record
@@ -33,6 +40,14 @@ after probing it via BASE (D-0015). OpenSBI v1.3 implements it and drives the
 (RAM size, device addresses, interrupt routing) that QEMU generates and OpenSBI
 passes to the kernel in register `a1`. Real kernels parse it for portability;
 we print the pointer but hardcode the `virt` layout instead (see D-0012).
+
+**early mode.** The cluster of boots whose Linux `/init` announce lands
+at ~156.4 ms guest-mono instead of the ~165.6 ms clean median — about
+9 ms early, and the only boots on which the guest's first ARP solicit is
+ever lost. Its frequency is a host state, not an image property: 4.73%
+of boots one morning and 1.67% the same afternoon on identical sources
+(D-0076). Only early-mode boots are *exposed* to the race, which is why
+no-event counts must quote the exposed denominator.
 
 **ecall.** The RISC-V instruction that requests service from a higher
 privilege level by raising a synchronous exception. From S-mode it is how we
@@ -52,14 +67,16 @@ can satisfy the request. Combined with coalescing adjacent frees (D-0027)
 it is the K&R allocator: after `Vec` growth the old buffers merge into one
 hole rather than a staircase of unusable sizes.
 
-**frame.** A 4 KiB physical page. The frame allocator's intrusive free list
-owns `[__heap_end, RAM_END)`; the heap's variable-size blocks live in the
-1 MiB carve-out below that and never come from this list (D-0024).
+**frame.** A 4 KiB physical page. The frame allocator owns
+`[__heap_end, RAM_END)`: a bump for virgin frames and an intrusive list
+of recycled frames (D-0065, amending D-0019). The heap's variable-size
+blocks live in the 1 MiB carve-out below that and never come from this
+pool (D-0024).
 
 **frame freeze.** `frame::freeze()` immediately before the first `sret` to U
 (D-0036). After it, `alloc_frame` / `free_frame` panic printing the request.
-The 67 frames already gone are 65 page tables plus the two `FRAME OK`
-self-test leftovers.
+The 7 frames already gone are 5 page tables (`EXPECTED_TABLES`,
+D-0059) plus the two `FRAME OK` self-test leftovers (D-0036).
 
 **GARP (gratuitous ARP).** An ARP request with `spa = tpa` equal to our IP,
 Ethernet-broadcast. We send one after the gateway cache is filled (D-0054)
@@ -93,11 +110,26 @@ identity-mapped kernel address `0x80200000`. Build a PA with bit 31 set
 from a positive `lui` plus `addi`/`slli`, or mask the high half after.
 This will bite again anywhere a test names a high address.
 
+**loss event.** A boot on which the guest's first ARP solicit never
+reaches the TX ring, so the frame on the wire is the `neigh` retransmit
+rather than the original. Measured as `ftx_wall − announce_wall >
+100 ms`; ~4.5 % of boots on the D-0074 host. The wire shows exactly one
+ARP request either way, which is why it needs a stamp rather than a
+frame count to detect (D-0074, D-0075).
+
 **mret / sret.** "Return from trap" instructions for M-mode and S-mode
 respectively: they restore the previous privilege level and interrupt-enable
 state from status-register fields (`MPP`/`SPP`, `MPIE`/`SPIE`) and jump to the
 saved PC (`mepc`/`sepc`). They are also the *only* way privilege goes down —
 OpenSBI `mret`s into our kernel, and our kernel will `sret` into U-mode.
+
+**M-mode shim.** The 320-byte firmware replacement of the `-bios none`
+lane (D-0061/D-0079): a straight-line M-mode program in QEMU's `-bios`
+slot that sets the PMP catch-all, transcribes OpenSBI's delegation
+masks, enables counters and Sstc, installs both trap diagnostics, and
+`mret`s into the unmodified kernel. No resident services — after
+`mret`, any M-mode trap is a bug and prints itself. Checkpoint letters
+`ZPDCTVM` bisect a silent boot to one block.
 
 **MEDELEG.** The M-mode CSR that chooses which exceptions reach S-mode.
 OpenSBI on this platform sets `0xf0b509`: codes 0, 3, 8, 10, 12, 13, 15,
@@ -105,10 +137,29 @@ OpenSBI on this platform sets `0xf0b509`: codes 0, 3, 8, 10, 12, 13, 15,
 from a task (cause 2) therefore dumps in firmware, not in our handler
 (D-0034). We read the boot log; we do not write `medeleg`.
 
+**margin.** The announce instant minus the last virtio control-queue
+completion before it — the per-boot risk observable for a loss event.
+Over 550 boots it is discrete, not continuous: ~0.2 ms on every event,
+~12.4 ms on every clean boot, nothing in between (D-0074 Outcome). It
+needs a QEMU `virtqueue_pop` trace, so it is a bench-diagnostic
+quantity and is deliberately not recorded during a campaign.
+
 **measurement edges (E0–E4).** Named timestamps for boot-to-first-HTTP-byte
 (D-0043): E0 = host clock at QEMU exec; E1 = machine start (`mtime` ≈ 0);
 E2 = kernel entry (`rdtime` at `_start`); E3g = `rdtime` at response-TX
-publish; E3w = pcap timestamp of that frame; E4 = first byte at the client.
+publish; E3w = pcap timestamp of that frame (constructed on the E0
+timeline as first-connect plus the pcap-relative SYN/ACK→HTTP
+interval); E4 = first byte at the client. "E4−E3w" is retired as a
+reported metric: the pcap pass (D-0070, confirmed) showed the
+construction's anchor is false under hostfwd — connect-success is
+the host kernel accepting into QEMU's listen backlog, not the guest
+handshake — so the term was QEMU startup (D-0071's S, ~6.8 ms) plus
+the accepted connection waiting for the guest to boot to net-init
+(W), both already counted once in E0→E4. True publish→client
+delivery is bounded by `D_fin` at 63–155 µs. The PHASE dump yields
+once after `wait_tx`, then prints (D-0068); the D-0068 null was
+this in disguise — there was never tens of ms of post-publish host
+work to reorder.
 T3.12(a) measured the E2 offset as 0, so `_start` *is* the OpenSBI phase.
 Headline E2→E3g uses a client retrying before E0; `just test`'s
 curl-after-`HTTP READY` E3g is harness wait (D-0043).
@@ -148,7 +199,9 @@ error (PLAN M1 concept 11).
 **PTE (page-table entry).** A 64-bit Sv39 word: V/R/W/X/U/G/A/D in the low
 bits, PPN in [53:10]. Any of R/W/X set makes it a leaf (including a 2 MiB
 or 1 GiB superpage); a non-leaf must have V=1 and R=W=X=0 or the walk
-stops early (concept 11.4). We use only 4 KiB leaves (D-0026).
+stops early (concept 11.4). The RAM interior uses 2 MiB L1 leaves
+(D-0059); 4 KiB L0 everywhere the map distinguishes at 4 KiB grain.
+1 GiB L2 leaves are still rejected (D-0026).
 
 **RVC (compressed instructions).** The C extension gives 16-bit encodings for
 common integer operations; a trap can land on either a 2-byte or a 4-byte
@@ -224,14 +277,19 @@ M1 arms through SBI TIME instead (D-0018); Sstc is the M4 comparison, not
 the M1 mechanism.
 
 **superpage.** An Sv39 leaf at level 1 (2 MiB) or level 2 (1 GiB). The PPN
-must be aligned to that size or the walk faults. M1 maps everything with
-4 KiB (level-0) leaves (D-0026): kernel W^X and the 4 KiB guard already
-force that grain, and a mixed path is how a non-leaf with R/W/X set
-accidentally becomes a misaligned superpage.
+must be aligned to that size or the walk faults. We map the aligned
+KERNEL_RW RAM interior (`[0x80400000, RAM_END)`) with 2 MiB L1 leaves
+(D-0059) and keep 4 KiB L0 for W^X, guards, user slots/sections,
+virtio-mmio, and alignment fragments. 1 GiB leaves are still rejected
+(D-0026): one PTE would span OpenSBI, the guard, and every W^X
+boundary. A mixed path whose verifier does not know the expected
+level per region is how a non-leaf with R/W/X set accidentally
+becomes a misaligned superpage — that is a panic, not a pass.
 
 **Sv39.** The smallest rv64 virtual-memory mode: 39-bit virtual addresses
-translated through three levels of 512-entry page tables to 4 KiB pages (with
-2 MiB / 1 GiB leaves possible at higher levels; we do not use them, D-0026).
+translated through three levels of 512-entry page tables to 4 KiB pages, with
+2 MiB L1 leaves on the RAM interior (D-0059) and 1 GiB L2 leaves unused
+(D-0026).
 512 GiB of address space — absurdly more than our 128 MiB of RAM, which is
 why we don't need Sv48.
 
@@ -292,3 +350,6 @@ R+W. The identity map enforces this at page granularity (D-0019).
 until an interrupt arrives — the polite form of an idle loop, and what our
 parked hart executes. With `sie.STIE` set it wakes every 10 ms; that is not
 quiescence. QEMU actually idles the host CPU on it, unlike a spin loop.
+D-0068 uses one `wfi` after first-HTTP `wait_tx` so slirp can deliver
+before DBCN occupies TCG. That `wfi` asserts `sie.STIE` first (finding 13):
+with ticks not armed and nothing pending, `wfi` never returns.

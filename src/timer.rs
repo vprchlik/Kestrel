@@ -4,9 +4,14 @@
 //! (`arm`). Trap dispatch calls `on_interrupt`; without this module there
 //! are no timer interrupts and `sip.STIP` can never be acknowledged from
 //! S-mode. M4's Sstc comparison replaces the body of `arm`, nothing else.
+//! D-0068's post-publish `wfi` lives here because it is illegal unless
+//! ticks are armed (finding 13).
+
+use core::arch::asm;
 
 use crate::csr;
 use crate::println;
+#[cfg(not(feature = "bios-none"))]
 use crate::sbi;
 
 /// QEMU `virt` timebase is 10 MHz (`aclint-mtimer @ 10000000Hz`). PLAN T1.3 /
@@ -30,6 +35,12 @@ static mut TICKS: usize = 0;
 /// `sstatus.SIE`. Arm *before* SIE so a leftover `STIP` cannot fire with
 /// no future deadline programmed.
 pub fn init() {
+    // D-0079 seam: Sstc has no probe, so the bios-none lane skips
+    // require_time — D-0018's observability argument is restored by a
+    // different channel: a missing menvcfg.STCE makes the first
+    // `stimecmp` write below an illegal instruction, caught loudly at
+    // the kernel's (or, pre-install, the shim's) S trap vector.
+    #[cfg(not(feature = "bios-none"))]
     sbi::require_time();
     csr::sie::set(csr::sie::STIE);
     arm();
@@ -45,7 +56,45 @@ pub fn init() {
 /// write-clearable from S-mode; OpenSBI clears it when the new deadline is
 /// in the future.
 pub fn arm() {
-    sbi::set_timer(csr::time::read().wrapping_add(unsafe { PERIOD_NOW }));
+    let deadline = csr::time::read().wrapping_add(unsafe { PERIOD_NOW });
+    // D-0079 seam (bios-none): write the Sstc comparator directly.
+    // The STIP acknowledgement transfers *strengthened*: under SBI
+    // TIME it was OpenSBI behaviour that a future deadline clears
+    // STIP; under Sstc, `sip.STIP` is architecturally the read-only
+    // reflection of `stimecmp <= time`. "Ran" = the csrw does not
+    // trap; "worked" = ticks are *taken* — proven by the default
+    // image's `tick 1..3` boot wait, which hangs the boot gate loudly
+    // if delivery is broken (fast-boot's D-0068 yield alone cannot
+    // distinguish wake-by-pending from a taken interrupt).
+    #[cfg(feature = "bios-none")]
+    csr::stimecmp::write(deadline);
+    #[cfg(not(feature = "bios-none"))]
+    sbi::set_timer(deadline);
+}
+
+/// Finding 13 / D-0056.3: a `wfi` with `sie.STIE` clear and nothing else
+/// pending never returns. D-0068's yield is that `wfi`. A later rung that
+/// drops tick arming must fail here instead of hanging the HTTP path.
+pub fn assert_ticks_armed() {
+    if csr::sie::read() & csr::sie::STIE == 0 {
+        panic!("finding 13: ticks not armed (sie.STIE=0); D-0068 wfi would hang");
+    }
+}
+
+/// Halt until the next pending interrupt so QEMU's main loop can deliver
+/// an already-queued frame before DBCN occupies TCG (D-0068).
+///
+/// Called from the trap handler (`sstatus.SIE` is 0). Do not set SIE:
+/// that reopens D-0036. `wfi` wakes when `sip.STIP` becomes pending even
+/// if the interrupt is not taken. Re-arm first: a leftover STIP (a tick
+/// that arrived during this syscall, not taken because SIE is 0) would
+/// make `wfi` a no-op and leave the dump on the publish→E4 path.
+pub fn yield_once() {
+    assert_ticks_armed();
+    arm();
+    unsafe {
+        asm!("wfi", options(nomem, nostack, preserves_flags));
+    }
 }
 
 /// Next `arm` uses this many `rdtime` ticks. Re-arms immediately so the new

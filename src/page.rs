@@ -2,10 +2,13 @@
 //! activate it.
 //!
 //! Owns the root table and every intermediate table allocated for the M1
-//! identity map (D-0019, D-0025, D-0026), the M2 user map (D-0031), and
-//! the M3 virtio-mmio window (D-0039).
-//! `map` creates those tables from the frame allocator; `walk` decodes raw
-//! PTEs by bit position and does not call `map`'s helpers. `activate` is
+//! identity map (D-0019, D-0025, D-0059 amending D-0026), the M2 user map
+//! (D-0031), and the M3 virtio-mmio window (D-0039). Mixed granularity:
+//! 4 KiB leaves for W^X, guards, user slots, virtio, and alignment
+//! fragments; 2 MiB L1 leaves for the aligned KERNEL_RW RAM interior.
+//! `map` / `map_2m` create those tables from the frame allocator; `walk`
+//! decodes raw PTEs by bit position and does not call the mapper's helpers.
+//! `activate` is
 //! the only `satp` write: SIE off, `csrw satp`, `sfence.vma`, SIE restored
 //! (D-0022). T2.2 adds no second fence — the user map is built in the same
 //! `build` pass, before activation. Without this module there is no
@@ -30,8 +33,29 @@ const VPN_BITS: usize = 9;
 const VPN_MASK: usize = (1 << VPN_BITS) - 1;
 /// Page offset bits. §4.4.1.
 const OFF_BITS: usize = 12;
+/// 2 MiB superpage size (Sv39 level-1 leaf). §4.4.1.
+const MEGA: usize = 2 * 1024 * 1024;
+const MEGA_MASK: usize = MEGA - 1;
+/// First 2 MiB-aligned VA whose 2 MiB slot is uniform KERNEL_RW.
+/// `0x8020_0000..0x8040_0000` holds W^X, the guard, user slots, and heap.
+const RAM_L1_START: usize = 0x8040_0000;
 /// Sv39 walk depth: level 2 is the root, level 0 is the 4 KiB leaf. §4.4.1.
 const ROOT_LEVEL: usize = 2;
+/// Table frames this map consumes on QEMU `virt` 128 MiB while
+/// `__heap_end` stays below `RAM_L1_START` (D-0059):
+/// 1 root + 1 RAM L1 (VPN[2]=2) + 1 RAM L0 (the mixed 0x80200000 slot)
+/// + 1 MMIO L1 (VPN[2]=0) + 1 MMIO L0 (UART+virtio 2 MiB). L1[2..63]
+/// are 2 MiB leaves, so they allocate no L0. UART's L0[0] stays empty
+/// (D-0025). The window is MMIO, not RAM: `frame::total_frames()` does
+/// not change. If `__heap_end` crosses `RAM_L1_START`, `ram_l1_start`
+/// panics so this constant is recomputed, not silently wrong.
+#[cfg(not(feature = "bios-none"))]
+pub const EXPECTED_TABLES: usize = 5;
+/// D-0079: +1 — sifive_test at 0x10_0000 needs an L0 under L1[0];
+/// the UART page shares the existing MMIO L0 (same 2 MiB window as
+/// virtio) and adds no table.
+#[cfg(feature = "bios-none")]
+pub const EXPECTED_TABLES: usize = 6;
 
 /// Mapper flag bits. Privileged spec 20211203 §4.3.1 Table 4.2.
 /// The walker below does **not** use these constants.
@@ -58,6 +82,11 @@ const NONLEAF: u64 = FLAG_V;
 const ABOVE_RAM: usize = 0x9000_0000;
 /// QEMU `virt` UART. Unmapped (D-0025). Extra probe, not a required marker.
 const UART_MMIO: usize = 0x1000_0000;
+/// sifive_test poweroff device (QEMU virt, `hw/misc/sifive_test.c`).
+/// D-0079 seam: the bios-none lane's shutdown backend; mapped R+W so
+/// `sbi::shutdown` can store FINISHER_PASS with paging on.
+#[cfg(feature = "bios-none")]
+pub const SIFIVE_TEST_MMIO: usize = 0x10_0000;
 
 extern "C" {
     static __kernel_start: u8;
@@ -111,14 +140,34 @@ pub fn root_pa() -> usize {
 }
 
 /// Table frames consumed by `init` (root + intermediates).
-/// On QEMU `virt` 128 MiB identity-mapped from `0x8020_0000` plus the
-/// virtio-mmio window at `0x1000_1000` this is 67:
-/// 1 root + 1 L1 (VPN[2]=2) + 63 L0 (2 MiB slots from L1[1] through L1[63])
-/// + 1 L1 (VPN[2]=0, the gigapage that contains MMIO) + 1 L0 (VPN[1]=0x80,
-/// the 2 MiB that holds UART + virtio). UART's L0[0] stays empty (D-0025).
-/// The window is MMIO, not RAM: `frame::total_frames()` does not change.
+/// Equals [`EXPECTED_TABLES`] on the production image (D-0059).
 pub fn tables_used() -> usize {
     unsafe { TABLES }
+}
+
+/// First VA that must be a 2 MiB KERNEL_RW leaf. Panics if `__heap_end`
+/// has crossed `RAM_L1_START` — that would add an L0 and invalidate
+/// [`EXPECTED_TABLES`].
+fn ram_l1_start() -> usize {
+    let he = heap_end();
+    // Strictly below: `he == RAM_L1_START` would make the "free frames"
+    // L0 probe and the "first 2M" L1 probe the same VA.
+    if he >= RAM_L1_START {
+        panic!(
+            "heap_end={:#x} crossed RAM_L1_START={:#x}; recompute EXPECTED_TABLES",
+            he, RAM_L1_START
+        );
+    }
+    RAM_L1_START
+}
+
+fn leaf_bytes(level: usize) -> usize {
+    match level {
+        0 => PAGE_SIZE,
+        1 => MEGA,
+        2 => 1 << 30,
+        _ => panic!("leaf_bytes: level {}", level),
+    }
 }
 
 /// `satp` value T1.7 will write: `MODE=8 << 60 | PPN(root)`. Not written here.
@@ -192,6 +241,56 @@ fn map_range(root: usize, start: usize, end: usize, flags: u64) {
     while va < end {
         map(root, va, va, flags);
         va += PAGE_SIZE;
+    }
+}
+
+/// Identity-map one 2 MiB L1 leaf. Panics on misaligned VA/PA (D-0026's
+/// recorded failure mode: a superpage PPN with nonzero low bits faults).
+fn map_2m(root: usize, va: usize, pa: usize, flags: u64) {
+    if va & MEGA_MASK != 0 || pa & MEGA_MASK != 0 {
+        panic!("map_2m: unaligned va={:#x} pa={:#x}", va, pa);
+    }
+    if va != pa {
+        panic!("map_2m: not identity va={:#x} pa={:#x}", va, pa);
+    }
+    if flags & FLAG_W != 0 && flags & FLAG_R == 0 {
+        panic!("map_2m: W without R va={:#x}", va);
+    }
+    if flags & (FLAG_R | FLAG_W | FLAG_X) == 0 {
+        panic!("map_2m: leaf with R=W=X=0 va={:#x}", va);
+    }
+
+    let l2_slot = pte_slot(root, vpn(va, ROOT_LEVEL));
+    let l2_raw = unsafe { core::ptr::read(l2_slot) };
+    let l1 = if l2_raw == 0 {
+        let next = alloc_table();
+        unsafe { core::ptr::write(l2_slot, encode_leaf(next, NONLEAF)) };
+        next
+    } else if l2_raw & (FLAG_R | FLAG_W | FLAG_X) != 0 {
+        panic!("map_2m: 1 GiB leaf at L2 va={:#x} pte={:#x}", va, l2_raw);
+    } else if l2_raw & FLAG_V == 0 {
+        panic!("map_2m: V=0 but nonzero pte={:#x} va={:#x}", l2_raw, va);
+    } else {
+        ((l2_raw >> 10) << OFF_BITS) as usize
+    };
+
+    let l1_slot = pte_slot(l1, vpn(va, 1));
+    let l1_raw = unsafe { core::ptr::read(l1_slot) };
+    if l1_raw != 0 {
+        panic!("map_2m: remap va={:#x} old={:#x}", va, l1_raw);
+    }
+    unsafe { core::ptr::write(l1_slot, encode_leaf(pa, flags)) };
+}
+
+/// Identity-map `[start, end)` with 2 MiB leaves. Both ends 2 MiB-aligned.
+fn map_range_2m(root: usize, start: usize, end: usize, flags: u64) {
+    if start & MEGA_MASK != 0 || end & MEGA_MASK != 0 || start > end {
+        panic!("map_range_2m: [{:#x}, {:#x})", start, end);
+    }
+    let mut va = start;
+    while va < end {
+        map_2m(root, va, va, flags);
+        va += MEGA;
     }
 }
 
@@ -284,11 +383,27 @@ fn build() -> usize {
         map_range(root, s.kstack_bottom, s.kstack_top, LEAF_RW);
     }
     map_range(root, hs, he, LEAF_RW);
-    map_range(root, he, RAM_END, LEAF_RW);
+    // 4 KiB fragment up to the first uniform 2 MiB boundary, then L1 leaves
+    // for the aligned RAM interior (D-0059). Grain-aware: not a 4 KiB loop.
+    let l1 = ram_l1_start();
+    map_range(root, he, l1, LEAF_RW);
+    map_range_2m(root, l1, RAM_END, LEAF_RW);
     // OpenSBI [RAM_START, ks) omitted. UART at 0x10000000 stays unmapped
-    // (D-0025). Virtio-mmio window: R+W, never X, U=0, before activate
-    // so D-0031's post-activation ban stands (D-0039).
+    // (D-0025) — except in the bios-none lane, whose console *is* the
+    // UART (D-0079). Virtio-mmio window: R+W, never X, U=0, before
+    // activate so D-0031's post-activation ban stands (D-0039).
     map_range(root, virtio::MMIO_BASE, virtio::MMIO_END, LEAF_RW);
+    // D-0079 seams: the two variant device pages, mapped before
+    // activate for the same D-0031 reason. The UART one is the page a
+    // post-activate panic would print through — which is why `verify`
+    // walks it while translation is still Bare and the console still
+    // works: a missing mapping here must be caught by a walker that
+    // can talk, not by the first faulting print.
+    #[cfg(feature = "bios-none")]
+    {
+        map_range(root, UART_MMIO, UART_MMIO + PAGE_SIZE, LEAF_RW);
+        map_range(root, SIFIVE_TEST_MMIO, SIFIVE_TEST_MMIO + PAGE_SIZE, LEAF_RW);
+    }
 
     root
 }
@@ -353,13 +468,19 @@ fn walk(root: usize, va: usize) -> Walk {
                     va, level, raw
                 );
             }
-            if level != 0 {
+            if level == 2 {
                 panic!(
-                    "walk: superpage leaf at L{} va={:#x} pte={:#x} (D-0026: 4 KiB only)",
-                    level, va, raw
+                    "walk: 1 GiB superpage va={:#x} pte={:#x} (D-0026: still rejected)",
+                    va, raw
                 );
             }
-            let pa = ((pte_ppn(raw) as usize) << 12) | (va & 0xfff);
+            if level == 1 && pte_ppn(raw) & 0x1ff != 0 {
+                panic!(
+                    "walk: misaligned 2 MiB PPN va={:#x} pte={:#x}",
+                    va, raw
+                );
+            }
+            let pa = ((pte_ppn(raw) as usize) << 12) | (va & (leaf_bytes(level) - 1));
             return Walk::Mapped { pa, raw, level };
         }
         // Non-leaf: V=1, R=W=X=0. U/G/A/D reserved and must be zero (§4.3.1).
@@ -384,12 +505,14 @@ fn walk(root: usize, va: usize) -> Walk {
 #[derive(Clone, Copy)]
 enum Expect {
     Unmapped,
-    /// Identity-mapped 4 KiB leaf. A=1 D=1 G=0; `u` is per-probe (D-0031).
+    /// Identity-mapped leaf at `level` (0 = 4 KiB, 1 = 2 MiB). A=1 D=1 G=0;
+    /// `u` is per-probe (D-0031). Wrong level is a panic, not a pass (D-0059).
     Mapped {
         r: bool,
         w: bool,
         x: bool,
         u: bool,
+        level: usize,
     },
 }
 
@@ -428,9 +551,15 @@ fn fmt_flags(raw: u64) -> &'static str {
 
 fn probe(root: usize, name: &str, va: usize, expect: Expect) {
     match (walk(root, va), expect) {
-        (Walk::Mapped { pa, raw, level }, Expect::Mapped { r, w, x, u }) => {
+        (Walk::Mapped { pa, raw, level }, Expect::Mapped { r, w, x, u, level: want }) => {
             if pa != va {
                 panic!("{}: va={:#x} -> pa={:#x}, want identity", name, va, pa);
+            }
+            if level != want {
+                panic!(
+                    "{}: va={:#x} L{} want L{} pte={:#x}",
+                    name, va, level, want, raw
+                );
             }
             if !flags_match(raw, r, w, x, u) {
                 panic!(
@@ -464,10 +593,10 @@ fn probe(root: usize, name: &str, va: usize, expect: Expect) {
                 name, va, pa, level, raw
             );
         }
-        (Walk::Unmapped { level, raw }, Expect::Mapped { r, w, x, u }) => {
+        (Walk::Unmapped { level, raw }, Expect::Mapped { r, w, x, u, level: want }) => {
             panic!(
-                "{}: va={:#x} unmapped at L{} pte={:#x}, want R={} W={} X={} U={}",
-                name, va, level, raw, r, w, x, u
+                "{}: va={:#x} unmapped at L{} pte={:#x}, want L{} R={} W={} X={} U={}",
+                name, va, level, raw, want, r, w, x, u
             );
         }
     }
@@ -478,40 +607,55 @@ const KERNEL_RX: Expect = Expect::Mapped {
     w: false,
     x: true,
     u: false,
+    level: 0,
 };
 const KERNEL_R: Expect = Expect::Mapped {
     r: true,
     w: false,
     x: false,
     u: false,
+    level: 0,
 };
 const KERNEL_RW: Expect = Expect::Mapped {
     r: true,
     w: true,
     x: false,
     u: false,
+    level: 0,
+};
+const KERNEL_RW_L1: Expect = Expect::Mapped {
+    r: true,
+    w: true,
+    x: false,
+    u: false,
+    level: 1,
 };
 const USER_RX: Expect = Expect::Mapped {
     r: true,
     w: false,
     x: true,
     u: true,
+    level: 0,
 };
 const USER_R: Expect = Expect::Mapped {
     r: true,
     w: false,
     x: false,
     u: true,
+    level: 0,
 };
 const USER_RW: Expect = Expect::Mapped {
     r: true,
     w: true,
     x: false,
     u: true,
+    level: 0,
 };
 
-/// Walk every page in `[start, end)`. Empty range: no-op. Catches interior
-/// pages the printed probes do not show (T1.7's near-miss).
+/// Walk every leaf in `[start, end)`. Empty range: no-op. Steps by the
+/// leaf grain that resolved (D-0059): a 4 KiB loop against L1 leaves is
+/// the named failed co-edit. Catches interior pages the printed probes
+/// do not show (T1.7's near-miss).
 fn assert_range(root: usize, start: usize, end: usize, expect: Expect) {
     if start == end {
         return;
@@ -522,11 +666,20 @@ fn assert_range(root: usize, start: usize, end: usize, expect: Expect) {
     let mut va = start;
     while va < end {
         match (walk(root, va), expect) {
-            (Walk::Mapped { pa, raw, level }, Expect::Mapped { r, w, x, u }) => {
-                if pa != va || level != 0 || !flags_match(raw, r, w, x, u) {
+            (
+                Walk::Mapped { pa, raw, level },
+                Expect::Mapped {
+                    r,
+                    w,
+                    x,
+                    u,
+                    level: want,
+                },
+            ) => {
+                if pa != va || level != want || !flags_match(raw, r, w, x, u) {
                     panic!(
-                        "assert_range: va={:#x} -> pa={:#x} L{} pte={:#x}, want R={} W={} X={} U={}",
-                        va, pa, level, raw, r, w, x, u
+                        "assert_range: va={:#x} -> pa={:#x} L{} pte={:#x}, want L{} R={} W={} X={} U={}",
+                        va, pa, level, raw, want, r, w, x, u
                     );
                 }
                 if u && pte_bit(raw, U_BIT) == false {
@@ -535,9 +688,34 @@ fn assert_range(root: usize, start: usize, end: usize, expect: Expect) {
                 if !u && pte_bit(raw, U_BIT) {
                     panic!("kernel page gained U bit: va={:#x} pte={:#x}", va, raw);
                 }
+                let step = leaf_bytes(level);
+                if va % step != 0 {
+                    panic!(
+                        "assert_range: va={:#x} not aligned to L{} grain {:#x}",
+                        va, level, step
+                    );
+                }
+                let next = match va.checked_add(step) {
+                    Some(n) => n,
+                    None => panic!("assert_range: va={:#x} + {:#x} overflow", va, step),
+                };
+                if next > end {
+                    panic!(
+                        "assert_range: L{} leaf va={:#x} overruns end {:#x}",
+                        level, va, end
+                    );
+                }
+                va = next;
             }
             (Walk::Unmapped { level, raw }, Expect::Unmapped) => {
-                let _ = (level, raw);
+                let _ = raw;
+                let step = leaf_bytes(level);
+                let base = va & !(step - 1);
+                let next = match base.checked_add(step) {
+                    Some(n) => n,
+                    None => panic!("assert_range: unmapped step overflow va={:#x}", va),
+                };
+                va = if next > end { end } else { next };
             }
             (Walk::Mapped { pa, raw, level }, Expect::Unmapped) => {
                 panic!(
@@ -545,14 +723,13 @@ fn assert_range(root: usize, start: usize, end: usize, expect: Expect) {
                     va, pa, level, raw
                 );
             }
-            (Walk::Unmapped { level, raw }, Expect::Mapped { r, w, x, u }) => {
+            (Walk::Unmapped { level, raw }, Expect::Mapped { r, w, x, u, level: want }) => {
                 panic!(
-                    "assert_range: va={:#x} unmapped at L{} pte={:#x}, want R={} W={} X={} U={}",
-                    va, level, raw, r, w, x, u
+                    "assert_range: va={:#x} unmapped at L{} pte={:#x}, want L{} R={} W={} X={} U={}",
+                    va, level, raw, want, r, w, x, u
                 );
             }
         }
-        va += PAGE_SIZE;
     }
 }
 
@@ -585,12 +762,19 @@ fn verify(root: usize) {
     probe(root, "stack", boot_stack_top() - 0x10, KERNEL_RW);
     probe(root, "heap", heap_start(), KERNEL_RW);
     probe(root, "free frames", heap_end(), KERNEL_RW);
-    probe(root, "last RAM", RAM_END - PAGE_SIZE, KERNEL_RW);
+    probe(root, "first 2M", ram_l1_start(), KERNEL_RW_L1);
+    probe(root, "last RAM", RAM_END - PAGE_SIZE, KERNEL_RW_L1);
     probe(root, "page table", root, KERNEL_RW);
     probe(root, "guard", bss_end(), Expect::Unmapped);
     probe(root, "OpenSBI", RAM_START, Expect::Unmapped);
     probe(root, "above RAM", ABOVE_RAM, Expect::Unmapped);
+    #[cfg(not(feature = "bios-none"))]
     probe(root, "UART MMIO", UART_MMIO, Expect::Unmapped);
+    #[cfg(feature = "bios-none")]
+    {
+        probe(root, "UART MMIO", UART_MMIO, KERNEL_RW);
+        probe(root, "sifive_test", SIFIVE_TEST_MMIO, KERNEL_RW);
+    }
     // D-0039: window mapped R+W, U=0, non-X. First and last byte, then
     // assert_range walks every interior page the printed rows skip.
     probe_span(
@@ -686,8 +870,19 @@ fn verify(root: usize) {
         assert_range(root, s.kstack_guard, s.kstack_bottom, Expect::Unmapped);
         assert_range(root, s.kstack_bottom, s.kstack_top, KERNEL_RW);
     }
-    assert_range(root, heap_start(), RAM_END, KERNEL_RW);
+    assert_range(root, heap_start(), ram_l1_start(), KERNEL_RW);
+    assert_range(root, ram_l1_start(), RAM_END, KERNEL_RW_L1);
     assert_range(root, virtio::MMIO_BASE, virtio::MMIO_END, KERNEL_RW);
+    #[cfg(feature = "bios-none")]
+    {
+        assert_range(root, UART_MMIO, UART_MMIO + PAGE_SIZE, KERNEL_RW);
+        assert_range(
+            root,
+            SIFIVE_TEST_MMIO,
+            SIFIVE_TEST_MMIO + PAGE_SIZE,
+            KERNEL_RW,
+        );
+    }
 }
 
 /// Build the map, print the `satp` we would write, walk the probes, print
@@ -709,7 +904,16 @@ pub fn init() {
         _satp,
         root >> OFF_BITS
     );
+    crate::phase::stamp(crate::phase::PAGE_BUILD);
     verify(root);
+    crate::phase::stamp(crate::phase::PAGE_VERIFY);
+    if tables_used() != EXPECTED_TABLES {
+        panic!(
+            "tables_used={} want {} (D-0059)",
+            tables_used(),
+            EXPECTED_TABLES
+        );
+    }
     println!("PAGETABLE OK");
 }
 
@@ -813,5 +1017,5 @@ pub fn activate() {
         panic!("satp wrote {:#x}, read {:#x}", satp, got);
     }
     println!("PAGING OK");
-    crate::phase::stamp(crate::phase::PAGING);
+    crate::phase::stamp(crate::phase::ACTIVATE);
 }

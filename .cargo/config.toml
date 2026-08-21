@@ -8,9 +8,12 @@ target = "riscv64gc-unknown-none-elf"
 rustflags = [
     # Place sections per linker.ld (entry at 0x8020_0000 etc.).
     "-C", "link-arg=-Tlinker.ld",
-    # Frame pointers make GDB backtraces work on bare metal.
-    "-C", "force-frame-pointers=yes",
+    # Finding 14: do not force frame pointers on release. Image size is a
+    # reported metric; the T4.1 A/B sat inside the stability floor while
+    # .text dropped ~15%. Debug builds re-add the flag via
+    # scripts/cargo-debug.sh so GDB backtraces still work.
 ]
 # `cargo run` boots QEMU directly (cargo appends the ELF path after -kernel).
-# The justfile is the primary interface; this is a convenience.
-runner = "qemu-system-riscv64 -machine virt -nographic -bios default -global virtio-mmio.force-legacy=false -netdev user,id=net0,hostfwd=tcp::8080-:80,hostfwd=udp::7777-:7 -device virtio-net-device,netdev=net0 -object filter-dump,id=f0,netdev=net0,file=whimbrel.pcap -kernel"
+# The justfile is the primary interface; this is a convenience. Argv must
+# match scripts/qemu-args.sh (D-0055 / finding 28); cargo cannot source bash.
+runner = "qemu-system-riscv64 -machine virt -nographic -bios default -global virtio-mmio.force-legacy=false -netdev user,id=net0,hostfwd=tcp::8080-:80,hostfwd=udp::7777-:7 -device virtio-net-device,netdev=net0,csum=off,guest_csum=off,gso=off,guest_tso4=off,guest_tso6=off,guest_ecn=off,guest_ufo=off,guest_uso4=off,guest_uso6=off,host_tso4=off,host_tso6=off,host_ecn=off,host_ufo=off,host_uso=off -object filter-dump,id=f0,netdev=net0,file=whimbrel.pcap -kernel"
