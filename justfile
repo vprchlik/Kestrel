@@ -817,6 +817,14 @@ bench-summary:
 report-exhibits:
     python3 scripts/report-exhibits.py
 
+# Failing-input selftest for validate / validate_t48. Does not write exhibits.
+report-exhibits-selftest:
+    python3 scripts/report-exhibits.py selftest
+
+# Failing-input selftest for the derived D-0078 finding. Does not write the exhibit.
+regime-witness-selftest:
+    python3 scripts/regime-witness.py selftest
+
 # D-0072: label the 327 ms printk hole. Same Image-trimmed, cmdline
 # = instrumented MANIFEST append + ignore_loglevel, System.map
 # offline. One boot, not a campaign arm, never runs.csv. Bench host.

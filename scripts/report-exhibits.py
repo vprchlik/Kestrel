@@ -16,6 +16,7 @@ local `just bench` leftover cannot become an exhibit.
 
 Never type the numbers this script prints.
 `just report-exhibits` regenerates report/exhibits/.
+Failing-input selftest: `just report-exhibits-selftest` (does not write exhibits).
 """
 
 from __future__ import annotations
@@ -281,6 +282,8 @@ def validate(
     want_batches: frozenset[str],
     want_sha_prefix: str,
     label: str,
+    *,
+    n_per_cfg: int = 60,
 ) -> None:
     rec = recorded(runs)
     if runs_schema(runs[0].keys()) != "old":
@@ -312,10 +315,10 @@ def validate(
         )
     for cfg in (SAFE, FAST):
         n = sum(1 for r in rec if r["config"] == cfg)
-        if n != 60:
+        if n != n_per_cfg:
             raise ExhibitFail(
-                f"TEST FAIL: {label} {cfg} has {n} recorded trials, want 60 "
-                "(30 × 2 batches)"
+                f"TEST FAIL: {label} {cfg} has {n} recorded trials, "
+                f"want {n_per_cfg}"
             )
     steal = [int(r["steal_ticks"]) for r in rec]
     if any(s != 0 for s in steal):
@@ -323,9 +326,12 @@ def validate(
             f"TEST FAIL: nonzero steal_ticks in recorded {label} "
             f"(nonzero={sum(1 for s in steal if s != 0)}/{len(steal)})"
         )
-    if len(rec) != 120:
+    # Unreachable if the per-config counts and config-set checks hold.
+    # Kept as a belt; the selftest cannot plant it independently.
+    if len(rec) != n_per_cfg * 2:
         raise ExhibitFail(
-            f"TEST FAIL: {label} has {len(rec)} recorded trials, want 120"
+            f"TEST FAIL: {label} has {len(rec)} recorded trials, "
+            f"want {n_per_cfg * 2}"
         )
     for field, want in (
         ("virt", "none"),
@@ -349,9 +355,11 @@ def validate(
         and p["phase"] == "E3g"
         and (p["batch_id"], p["trial"], p["config"]) in rec_keys
     ]
-    if len(e3g) != 120:
+    want_e3g = n_per_cfg * 2
+    if len(e3g) != want_e3g:
         raise ExhibitFail(
-            f"TEST FAIL: {label} has {len(e3g)} recorded E3g rows, want 120"
+            f"TEST FAIL: {label} has {len(e3g)} recorded E3g rows, "
+            f"want {want_e3g}"
         )
 
 
@@ -380,6 +388,7 @@ def validate_t48(
     sha_prefix: str = T48_SHA_PREFIX,
     n_per_arm: int = T48_N_PER_ARM,
     label: str = "T4.8",
+    manifest_text: str | None = None,
 ) -> None:
     if runs_schema(runs[0].keys()) != "new":
         raise ExhibitFail(f"TEST FAIL: {label} is not new-schema")
@@ -412,7 +421,7 @@ def validate_t48(
         if n != n_per_arm:
             raise ExhibitFail(
                 f"TEST FAIL: {label} {cfg} has {n} recorded trials, "
-                f"want {n_per_arm} (30 × 2 batches)"
+                f"want {n_per_arm}"
             )
         systems = {r["system"] for r in rec if r["config"] == cfg}
         if systems != {sys}:
@@ -425,6 +434,7 @@ def validate_t48(
             f"TEST FAIL: nonzero steal_ticks in recorded {label} "
             f"(nonzero={sum(1 for s in steal if s != 0)}/{len(steal)})"
         )
+    # Unreachable if the per-arm counts and config-set checks hold.
     if len(rec) != n_per_arm * len(T48_ARM_ORDER):
         raise ExhibitFail(
             f"TEST FAIL: {label} has {len(rec)} recorded trials, "
@@ -442,7 +452,11 @@ def validate_t48(
                 f"TEST FAIL: {label} {field} values {sorted(vals)} "
                 f"want {{{want!r}}}"
             )
-    man = parse_linux_manifest(git_show(rev, "bench/linux/MANIFEST"))
+    man = parse_linux_manifest(
+        manifest_text
+        if manifest_text is not None
+        else git_show(rev, "bench/linux/MANIFEST")
+    )
     for cfg, image in (
         ("stock", "Image-stock"),
         ("trimmed", "Image-trimmed"),
@@ -498,10 +512,11 @@ def validate_t48(
         and p["config"] in {FAST, SAFE}
         and (p["batch_id"], p["trial"], p["config"]) in rec_keys
     ]
-    if len(e3g) != 120:
+    want_e3g = n_per_arm * 2
+    if len(e3g) != want_e3g:
         raise ExhibitFail(
             f"TEST FAIL: {label} has {len(e3g)} recorded Whimbrel E3g rows, "
-            "want 120"
+            f"want {want_e3g}"
         )
 
 
@@ -1988,6 +2003,358 @@ def write_linux_decomposition(
     return "\n".join(lines)
 
 
+def cmd_selftest() -> int:
+    """Planted failing inputs for validate / validate_t48. Does not write exhibits."""
+    fired: list[str] = []
+
+    def expect_fail(fn, needle: str, label: str) -> None:
+        try:
+            fn()
+            raise ExhibitFail(f"{label} did not fire")
+        except ExhibitFail as e:
+            if needle not in str(e):
+                raise
+            fired.append(f"{label}: {e}")
+
+    batches = frozenset({"b-1", "b-2"})
+    sha = "abc1234deadbeef"
+    n = 2
+
+    def old_run(**over: object) -> dict:
+        row = {
+            "batch_id": "b-1",
+            "trial": "1",
+            "warmup": "0",
+            "system": "whimbrel",
+            "config": SAFE,
+            "git_sha": sha,
+            "dirty": "0",
+            "steal_ticks": "0",
+            "virt": "none",
+            "governor": "performance",
+            "smt_control": "off",
+            "cpufreq_boost": "0",
+            "e0_to_e3w_ns": "1",
+            "e0_to_e4_ns": "1",
+            "e0_to_first_connect_ns": "1",
+        }
+        row.update(over)  # type: ignore[arg-type]
+        return row
+
+    def e3g_row(batch: str, trial: str, cfg: str) -> dict:
+        return {
+            "batch_id": batch,
+            "trial": trial,
+            "warmup": "0",
+            "config": cfg,
+            "phase": "E3g",
+        }
+
+    def old_campaign() -> tuple[list[dict], list[dict]]:
+        runs: list[dict] = []
+        phases: list[dict] = []
+        for batch in ("b-1", "b-2"):
+            for cfg in (SAFE, FAST):
+                t = "1"
+                runs.append(old_run(batch_id=batch, trial=t, config=cfg))
+                phases.append(e3g_row(batch, t, cfg))
+        return runs, phases
+
+    def check_old(runs: list[dict], phases: list[dict], **kw: object) -> None:
+        validate(
+            runs,
+            phases,
+            batches,
+            "abc1234",
+            "old-fix",
+            n_per_cfg=n,
+            **kw,  # type: ignore[arg-type]
+        )
+
+    runs, phases = old_campaign()
+    check_old(runs, phases)
+    fired.append("validate accepts a clean old-schema fixture")
+
+    newish = [dict(r, w_ns="1", d_ack_ns="1", d_fin_ns="1") for r in runs]
+    for r in newish:
+        del r["e0_to_e3w_ns"]
+    expect_fail(
+        lambda: check_old(newish, phases),
+        "is not old-schema",
+        "validate schema",
+    )
+    bad_batch = [dict(r, batch_id="other" if r["batch_id"] == "b-1" else r["batch_id"]) for r in runs]
+    expect_fail(
+        lambda: check_old(bad_batch, phases),
+        "batch_id set",
+        "validate batch-set",
+    )
+    mixed = [dict(r) for r in runs]
+    mixed[0]["git_sha"] = "zzzzzzzdeadbeef"
+    expect_fail(lambda: check_old(mixed, phases), "mixed git_sha", "validate mixed sha")
+    expect_fail(
+        lambda: validate(runs, phases, batches, "nope", "old-fix", n_per_cfg=n),
+        "does not start with",
+        "validate sha-prefix",
+    )
+    dirty = [dict(r, dirty="1") for r in runs]
+    expect_fail(lambda: check_old(dirty, phases), "dirty-tree row", "validate dirty")
+    one_cfg = [r for r in runs if r["config"] == SAFE]
+    one_ph = [p for p in phases if p["config"] == SAFE]
+    expect_fail(lambda: check_old(one_cfg, one_ph), "configs", "validate configs")
+    short = runs[:-1]
+    short_ph = phases[:-1]
+    expect_fail(
+        lambda: check_old(short, short_ph),
+        "recorded trials, want 2",
+        "validate n-per-arm",
+    )
+    stolen = [dict(r, steal_ticks="1") for r in runs]
+    expect_fail(
+        lambda: check_old(stolen, phases),
+        "nonzero steal_ticks",
+        "validate steal",
+    )
+    nogov = [dict(r) for r in runs]
+    for r in nogov:
+        del r["governor"]
+    expect_fail(
+        lambda: check_old(nogov, phases),
+        "runs.csv missing governor",
+        "validate missing host-control field",
+    )
+    gov = [dict(r, governor="powersave") for r in runs]
+    expect_fail(
+        lambda: check_old(gov, phases),
+        "governor values",
+        "validate governor",
+    )
+    expect_fail(
+        lambda: check_old(runs, []),
+        "recorded E3g rows",
+        "validate E3g count",
+    )
+
+    stock_h = "a" * 64
+    trim_h = "b" * 64
+    man_text = (
+        f"artifact Image-stock {stock_h}\n"
+        f"artifact Image-trimmed {trim_h}\n"
+        f"artifact rootfs.cpio {'c' * 64}\n"
+        f"artifact init {'d' * 64}\n"
+    )
+    t48_batches = frozenset({"t-1", "t-2"})
+    t48_sha = "1005399fixture"
+    t48_n = 2
+
+    def new_run(**over: object) -> dict:
+        row = {
+            "batch_id": "t-1",
+            "trial": "1",
+            "warmup": "0",
+            "system": "whimbrel",
+            "config": FAST,
+            "git_sha": t48_sha,
+            "dirty": "0",
+            "steal_ticks": "0",
+            "virt": "none",
+            "governor": "performance",
+            "smt_control": "off",
+            "cpufreq_boost": "0",
+            "kernel_sha256": "k" * 64,
+            "w_ns": "1",
+            "d_ack_ns": "1",
+            "d_fin_ns": "1",
+            "e0_to_e4_ns": "45000000",
+            "e0_to_first_connect_ns": "18500000",
+        }
+        row.update(over)  # type: ignore[arg-type]
+        return row
+
+    def t48_campaign() -> tuple[list[dict], list[dict]]:
+        runs: list[dict] = []
+        phases: list[dict] = []
+        hashes = {
+            "stock": stock_h,
+            "trimmed": trim_h,
+            "trimmed-instrumented": trim_h,
+        }
+        e4 = {"stock": "50000000", "trimmed": "40000000"}
+        for batch in ("t-1", "t-2"):
+            for sys, cfg in T48_ARM_ORDER:
+                runs.append(
+                    new_run(
+                        batch_id=batch,
+                        trial="1",
+                        system=sys,
+                        config=cfg,
+                        kernel_sha256=hashes.get(cfg, "k" * 64),
+                        e0_to_e4_ns=e4.get(cfg, "45000000"),
+                    )
+                )
+                if cfg in {FAST, SAFE}:
+                    phases.append(
+                        {
+                            "batch_id": batch,
+                            "trial": "1",
+                            "warmup": "0",
+                            "config": cfg,
+                            "phase": "E3g",
+                            "system": "whimbrel",
+                        }
+                    )
+        return runs, phases
+
+    def check_t48(runs: list[dict], phases: list[dict], **kw: object) -> None:
+        validate_t48(
+            runs,
+            phases,
+            rev="unused",
+            batches=t48_batches,
+            sha_prefix="1005399",
+            n_per_arm=t48_n,
+            label="t48-fix",
+            manifest_text=man_text,
+            **kw,  # type: ignore[arg-type]
+        )
+
+    t_runs, t_ph = t48_campaign()
+    check_t48(t_runs, t_ph)
+    fired.append("validate_t48 accepts a clean five-arm fixture")
+
+    old_t = [dict(r, e0_to_e3w_ns="1") for r in t_runs]
+    for r in old_t:
+        del r["w_ns"]
+        del r["d_ack_ns"]
+        del r["d_fin_ns"]
+    expect_fail(
+        lambda: check_t48(old_t, t_ph),
+        "is not new-schema",
+        "validate_t48 schema",
+    )
+    t_batch = [dict(r, batch_id="x" if r["batch_id"] == "t-1" else r["batch_id"]) for r in t_runs]
+    expect_fail(
+        lambda: check_t48(t_batch, t_ph),
+        "batch_id set",
+        "validate_t48 batch-set",
+    )
+    t_mixed = [dict(r) for r in t_runs]
+    t_mixed[0]["git_sha"] = "0" * 12
+    expect_fail(
+        lambda: check_t48(t_mixed, t_ph), "mixed git_sha", "validate_t48 mixed sha"
+    )
+    expect_fail(
+        lambda: validate_t48(
+            t_runs,
+            t_ph,
+            rev="unused",
+            batches=t48_batches,
+            sha_prefix="nope",
+            n_per_arm=t48_n,
+            label="t48-fix",
+            manifest_text=man_text,
+        ),
+        "does not start with",
+        "validate_t48 sha-prefix",
+    )
+    t_dirty = [dict(r, dirty="1") for r in t_runs]
+    expect_fail(
+        lambda: check_t48(t_dirty, t_ph), "dirty-tree row", "validate_t48 dirty"
+    )
+    t_cfg = [r for r in t_runs if r["config"] != "stock"]
+    expect_fail(lambda: check_t48(t_cfg, t_ph), "configs", "validate_t48 configs")
+    t_short = [r for r in t_runs if not (r["config"] == "stock" and r["batch_id"] == "t-2")]
+    expect_fail(
+        lambda: check_t48(t_short, t_ph),
+        "stock has 1 recorded trials, want 2",
+        "validate_t48 n-per-arm",
+    )
+    t_sys = [dict(r, system="whimbrel") if r["config"] == "stock" else dict(r) for r in t_runs]
+    expect_fail(
+        lambda: check_t48(t_sys, t_ph),
+        "system",
+        "validate_t48 arm system",
+    )
+    t_steal = [dict(r, steal_ticks="1") for r in t_runs]
+    expect_fail(
+        lambda: check_t48(t_steal, t_ph),
+        "nonzero steal_ticks",
+        "validate_t48 steal",
+    )
+    t_gov = [dict(r, governor="schedutil") for r in t_runs]
+    expect_fail(
+        lambda: check_t48(t_gov, t_ph),
+        "governor values",
+        "validate_t48 governor",
+    )
+    t_hash = [
+        dict(r, kernel_sha256="e" * 64) if r["config"] == "stock" else dict(r)
+        for r in t_runs
+    ]
+    expect_fail(
+        lambda: check_t48(t_hash, t_ph),
+        "kernel_sha256",
+        "validate_t48 MANIFEST-hash",
+    )
+    expect_fail(
+        lambda: validate_t48(
+            t_runs,
+            t_ph,
+            rev="unused",
+            batches=t48_batches,
+            sha_prefix="1005399",
+            n_per_arm=t48_n,
+            label="t48-fix",
+            manifest_text="artifact Image-stock " + stock_h + "\n",
+        ),
+        "MANIFEST missing",
+        "validate_t48 MANIFEST incomplete",
+    )
+    t_span = [
+        dict(r, e0_to_first_connect_ns="20500000") if r["config"] == FAST else dict(r)
+        for r in t_runs
+    ]
+    expect_fail(
+        lambda: check_t48(t_span, t_ph),
+        "first-connect medians span",
+        "validate_t48 span",
+    )
+    t_trip = [
+        dict(r, e0_to_e4_ns="60000000") if r["config"] == "trimmed" else dict(r)
+        for r in t_runs
+    ]
+    expect_fail(
+        lambda: check_t48(t_trip, t_ph),
+        "trimmed is not published",
+        "validate_t48 tripwire",
+    )
+    linux_ph = t_ph + [
+        {
+            "batch_id": "t-1",
+            "trial": "1",
+            "warmup": "0",
+            "config": "stock",
+            "phase": "E3g",
+            "system": "linux",
+        }
+    ]
+    expect_fail(
+        lambda: check_t48(t_runs, linux_ph),
+        "Linux PHASE rows",
+        "validate_t48 linux PHASE",
+    )
+    expect_fail(
+        lambda: check_t48(t_runs, []),
+        "recorded Whimbrel E3g rows",
+        "validate_t48 E3g count",
+    )
+
+    print("TEST PASS: report-exhibits fail-closed selftest")
+    for line in fired:
+        print(f"  fired: {line}")
+    return 0
+
+
 def main() -> int:
     try:
         base_runs = read_csv_text(
@@ -2122,4 +2489,13 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    if sys.argv[1:] == ["selftest"]:
+        try:
+            sys.exit(cmd_selftest())
+        except ExhibitFail as e:
+            print(e, file=sys.stderr)
+            sys.exit(1)
+    if len(sys.argv) > 1:
+        print("usage: report-exhibits.py [selftest]", file=sys.stderr)
+        sys.exit(2)
     sys.exit(main())

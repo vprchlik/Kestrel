@@ -74,9 +74,15 @@ def show(rev: str, path: str) -> str:
         raise Fail(f"TEST FAIL: git show {rev}:{path}: {e.stderr.strip()}")
 
 
-def campaign(rev: str) -> dict:
-    runs = list(csv.DictReader(io.StringIO(show(rev, "results/runs.csv"))))
-    phases = list(csv.DictReader(io.StringIO(show(rev, "results/phases.csv"))))
+def campaign(
+    rev: str,
+    runs: list[dict] | None = None,
+    phases: list[dict] | None = None,
+) -> dict:
+    if runs is None:
+        runs = list(csv.DictReader(io.StringIO(show(rev, "results/runs.csv"))))
+    if phases is None:
+        phases = list(csv.DictReader(io.StringIO(show(rev, "results/phases.csv"))))
     rec = [r for r in runs if r["warmup"] == "0" and r["config"] == "release-default"]
     if not rec:
         raise Fail(f"TEST FAIL: {rev} has no recorded release-default rows")
@@ -173,6 +179,39 @@ def warmup_join(rev: str, runs: list[dict], phases: list[dict]) -> dict | None:
             trial = int(r["trial"])
             gaps.append((bi, trial, safe[bi][trial - 1], gap_s))
     return {"batches": batches, "safe": safe, "m": m_wu, "gaps": gaps}
+
+
+def family_corroborated(fam: list[dict]) -> bool:
+    meds = [c["med"] for c in fam]
+    both = min(meds) < DIVIDE_MS < max(meds)
+    return both or any(
+        c["canary"]
+        and (float(c["canary"].split("/")[1]) < DIVIDE_MS) != (c["med"] < DIVIDE_MS)
+        for c in fam
+    )
+
+
+def classify_row(c: dict, corroborated: bool) -> tuple[str, str, str]:
+    """regime, uniform cell, canary-vs-witness verdict — the table's derived cells."""
+    if corroborated:
+        side = "inflated" if c["med"] >= DIVIDE_MS else "deflated"
+        uniform = all(
+            (v >= DIVIDE_MS) == (c["med"] >= DIVIDE_MS)
+            for v in (c["lo"], c["hi"])
+        )
+        uni = "yes" if uniform else "**MIXED**"
+    else:
+        side, uni = "—", f"span {c['hi'] - c['lo']:.2f}"
+    if c["canary"]:
+        c_side = (
+            "inflated"
+            if float(c["canary"].split("/")[1]) >= DIVIDE_MS
+            else "deflated"
+        )
+        verdict = "AGREE" if (not corroborated or c_side == side) else "**DISAGREE**"
+    else:
+        verdict = "n/a (pre-canary)" if "canary" not in c["note"] else "n/a"
+    return side, uni, verdict
 
 
 def regime_side(ms: float) -> str:
@@ -355,6 +394,253 @@ def structural_finding(rows: list[dict]) -> list[str]:
     return lines
 
 
+def cmd_selftest() -> int:
+    """Planted failing inputs for the derived witness conclusion. Does not write the exhibit."""
+    fired: list[str] = []
+
+    def expect_fail(fn, needle: str, label: str) -> None:
+        try:
+            fn()
+            raise Fail(f"{label} did not fire")
+        except Fail as e:
+            if needle not in str(e):
+                raise
+            fired.append(f"{label}: {e}")
+
+    if regime_side(12.0) != "deflated" or regime_side(14.0) != "inflated":
+        raise Fail("regime_side divide unexpected")
+    fired.append("regime_side 12 deflated / 14 inflated")
+    if is_dip(11.0, [16.0, 16.1, 16.2]) is False:
+        raise Fail("is_dip missed a 5 ms gap")
+    if is_dip(16.0, [16.0, 16.1, 16.2]) is True:
+        raise Fail("is_dip fired on a non-dip")
+    fired.append("is_dip distinguishes a 1 ms-below-median dip")
+
+    agree = {
+        "label": "agree-camp",
+        "note": "",
+        "canary": "1.000/16.100",
+        "canary_pv": 16.1,
+        "med": 16.2,
+        "lo": 16.0,
+        "hi": 16.4,
+        "n": 60,
+        "kernel": "k",
+        "warmup": {
+            "batches": ["b-1", "b-2"],
+            "safe": [[16.3, 16.2, 16.1], [16.2, 16.3, 16.0]],
+            "m": [[10.8, 10.9, 10.7], [10.7, 10.8, 10.9]],
+            "gaps": [],
+        },
+    }
+    disagree = {
+        **agree,
+        "label": "disagree-camp",
+        "canary": "1.000/12.000",
+        "canary_pv": 12.0,
+        "med": 16.2,
+        "lo": 16.0,
+        "hi": 16.4,
+        "warmup": {
+            "batches": ["b-1", "b-2"],
+            "safe": [[16.3, 16.2, 16.1], [16.2, 16.3, 16.0]],
+            "m": [[10.8, 10.9, 10.7], [10.7, 10.8, 10.9]],
+            "gaps": [],
+        },
+    }
+    mixed_w = {
+        **disagree,
+        "label": "mixed-camp",
+        "lo": 12.0,
+        "hi": 16.5,
+        "med": 16.2,
+    }
+
+    fam_two = [agree, disagree]
+    if not family_corroborated(fam_two):
+        raise Fail("two-cluster family was not corroborated")
+    side, uni, verdict = classify_row(agree, True)
+    if verdict != "AGREE" or side != "inflated" or uni != "yes":
+        raise Fail(f"agreeing canary classified {side}/{uni}/{verdict}")
+    fired.append("agreeing canary is AGREE, not DISAGREE")
+    side, uni, verdict = classify_row(disagree, True)
+    if verdict != "**DISAGREE**":
+        raise Fail(f"disagreeing canary classified {verdict}")
+    fired.append("disagreeing canary is DISAGREE")
+    side, uni, verdict = classify_row(mixed_w, True)
+    if uni != "**MIXED**":
+        raise Fail(f"non-uniform witness classified {uni}, not MIXED")
+    fired.append("non-uniform witness is MIXED, not silently yes")
+    fam_one = [agree]
+    if family_corroborated(fam_one):
+        raise Fail("single-cluster agreeing family was corroborated")
+    side, uni, verdict = classify_row(agree, False)
+    if side != "—":
+        raise Fail(f"single-cluster family silently classified regime {side}")
+    fired.append("single-cluster family is not regime-classified")
+
+    paras = structural_finding([agree, disagree])
+    names_m = None
+    for part in paras[0].split("(")[1:]:
+        if part.endswith(").") or "). " in part:
+            names_m = part.split(")")[0]
+            break
+    if names_m != "disagree-camp":
+        raise Fail(
+            f"disagreement list {names_m!r}, want 'disagree-camp' only: "
+            f"{paras[0]}"
+        )
+    if "1 disagreement" not in paras[0]:
+        raise Fail(f"disagreement sentence unexpected: {paras[0]}")
+    fired.append("structural_finding reports 1 disagreement (disagree-camp only)")
+
+    # Cluster bound: disagreeing canary at 12.00, no position-1 dip.
+    base_paras = structural_finding([disagree])
+    base_blob = "\n".join(base_paras)
+    if "[12.00, 12.00]" not in base_blob:
+        raise Fail(f"cluster bound unexpected without extra dip: {base_blob}")
+    dipped = {
+        **disagree,
+        "label": "dip-camp",
+        "warmup": {
+            "batches": ["b-1", "b-2"],
+            "safe": [[11.00, 16.2, 16.1], [16.2, 16.3, 16.0]],
+            "m": [[10.8, 10.9, 10.7], [10.7, 10.8, 10.9]],
+            "gaps": [],
+        },
+    }
+    dip_blob = "\n".join(structural_finding([dipped]))
+    if "[11.00, 12.00]" not in dip_blob:
+        raise Fail(f"cluster bound did not move with planted dip: {dip_blob}")
+    fired.append("cluster bound moves when a planted boot falls outside it")
+
+    no_m_dip = "\n".join(structural_finding([disagree]))
+    if "same position dips on the m-lane" in no_m_dip:
+        raise Fail("m-lane dip claim survived input with no m-lane dip")
+    fired.append("m-lane dip claim absent when the m-lane does not dip")
+    m_dipped = {
+        **disagree,
+        "warmup": {
+            "batches": ["b-1", "b-2"],
+            "safe": [[16.3, 16.2, 16.1], [16.2, 16.3, 16.0]],
+            "m": [[7.18, 10.9, 10.8], [10.7, 10.8, 10.9]],
+            "gaps": [],
+        },
+    }
+    m_blob = "\n".join(structural_finding([m_dipped]))
+    if "same position dips on the m-lane" not in m_blob or "7.18" not in m_blob:
+        raise Fail(f"m-lane dip claim missing on dipping input: {m_blob}")
+    fired.append("m-lane dip claim present when position-1 actually dips")
+
+    flip_blob = "\n".join(structural_finding([disagree]))
+    if "refutes a first-two-warmups flip" not in flip_blob or "disagree-camp" not in flip_blob:
+        raise Fail(f"flip-refute sentence missing when canary ≠ batch-1: {flip_blob}")
+    # Canary matches batch-1 (both deflated) while the recorded witness
+    # is inflated: disagreement with the witness, but not a first-boot flip.
+    canary_is_b1 = {
+        **disagree,
+        "label": "canary-is-b1",
+        "warmup": {
+            "batches": ["b-1", "b-2"],
+            "safe": [[12.00, 16.2, 16.1], [16.2, 16.3, 16.0]],
+            "m": None,
+            "gaps": [],
+        },
+    }
+    match_blob = "\n".join(structural_finding([canary_is_b1]))
+    if "refutes a first-two-warmups flip" in match_blob:
+        raise Fail("flip-refute sentence survived input where canary matches batch-1")
+    fired.append("flip-refute sentence tracks canary vs batch-1, not vs the witness")
+
+    expect_fail(
+        lambda: structural_finding([]),
+        "no pinned campaign has warmup rows",
+        "structural_finding empty",
+    )
+    no_cluster = {
+        **agree,
+        "canary": "",
+        "canary_pv": None,
+    }
+    expect_fail(
+        lambda: structural_finding([no_cluster]),
+        "found no canary or position-1 dip",
+        "structural_finding no cluster",
+    )
+
+    rec = {
+        "warmup": "0",
+        "config": "release-default",
+        "kernel_sha256": "k" * 64,
+        "canary_stvec_ns": "1000000",
+        "canary_page_verify_ns": "16100000",
+        "batch_id": "b-1",
+        "trial": "4",
+        "run_order": "10",
+        "e0_mono_ns": "0",
+        "e0_to_e4_ns": "50000000",
+    }
+    pv = {
+        "batch_id": "b-1",
+        "trial": "4",
+        "warmup": "0",
+        "config": "release-default",
+        "phase": "page_verify",
+        "delta_ns": "16200000",
+    }
+    expect_fail(
+        lambda: campaign("plant", runs=[], phases=[]),
+        "no recorded release-default rows",
+        "campaign no safe-arm rows",
+    )
+    mixed_k = [
+        rec,
+        {**rec, "kernel_sha256": "z" * 64, "trial": "5"},
+    ]
+    expect_fail(
+        lambda: campaign("plant", runs=mixed_k, phases=[pv, {**pv, "trial": "5"}]),
+        "mixed safe-arm kernel_sha256",
+        "campaign mixed kernel",
+    )
+    expect_fail(
+        lambda: campaign("plant", runs=[rec], phases=[]),
+        "no safe-arm page_verify rows",
+        "campaign no page_verify",
+    )
+
+    wu_runs = [
+        {
+            **rec,
+            "warmup": "1",
+            "trial": str(t),
+            "batch_id": "b-1",
+            "run_order": str(t),
+        }
+        for t in (1, 2)
+    ]
+    wu_ph = [
+        {
+            "batch_id": "b-1",
+            "trial": str(t),
+            "warmup": "1",
+            "config": "release-default",
+            "phase": "page_verify",
+            "delta_ns": "16000000",
+        }
+        for t in (1, 2)
+    ]
+    expect_fail(
+        lambda: warmup_join("plant", wu_runs, wu_ph),
+        "want [1, 2, 3]",
+        "warmup_join incomplete trials",
+    )
+
+    print("TEST PASS: regime-witness fail-closed selftest")
+    for line in fired:
+        print(f"  fired: {line}")
+    return 0
+
+
 def main() -> int:
     rows = []
     for label, rev, note in PINS:
@@ -378,17 +664,13 @@ def main() -> int:
         "that exhibits both clusters or a corroborating in-family boot",
         "record. Warmup `page_verify` is joined by batch and trial",
         "position; the closing finding is computed from that join.",
-        "Regeneration: `python3 scripts/regime-witness.py`.",
+        "Regeneration: `python3 scripts/regime-witness.py`. "
+        "Failing-input selftest: `python3 scripts/regime-witness.py selftest`.",
         "",
     ]
     for kern in sorted(families, key=lambda k: min(r["label"] for r in families[k])):
         fam = families[kern]
-        meds = [c["med"] for c in fam]
-        both = min(meds) < DIVIDE_MS < max(meds)
-        corroborated = both or any(
-            c["canary"] and (float(c["canary"].split("/")[1]) < DIVIDE_MS) != (c["med"] < DIVIDE_MS)
-            for c in fam
-        )
+        corroborated = family_corroborated(fam)
         lines.append(f"### kernel family `{kern[:12]}…`")
         lines.append("")
         if corroborated:
@@ -408,20 +690,7 @@ def main() -> int:
         )
         lines.append("|---|---:|---|---|---|---|---|")
         for c in fam:
-            if corroborated:
-                side = "inflated" if c["med"] >= DIVIDE_MS else "deflated"
-                uniform = all(
-                    (v >= DIVIDE_MS) == (c["med"] >= DIVIDE_MS)
-                    for v in (c["lo"], c["hi"])
-                )
-                uni = "yes" if uniform else "**MIXED**"
-            else:
-                side, uni = "—", f"span {c['hi']-c['lo']:.2f}"
-            if c["canary"]:
-                c_side = "inflated" if float(c["canary"].split("/")[1]) >= DIVIDE_MS else "deflated"
-                verdict = "AGREE" if (not corroborated or c_side == side) else "**DISAGREE**"
-            else:
-                verdict = "n/a (pre-canary)" if "canary" not in c["note"] else "n/a"
+            side, uni, verdict = classify_row(c, corroborated)
             note = f" ({c['note']})" if c["note"] else ""
             lines.append(
                 f"| {c['label']}{note} | {c['n']} | {c['med']:.2f} "
@@ -466,6 +735,15 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    if sys.argv[1:] == ["selftest"]:
+        try:
+            sys.exit(cmd_selftest())
+        except Fail as e:
+            print(e, file=sys.stderr)
+            sys.exit(1)
+    if len(sys.argv) > 1:
+        print("usage: regime-witness.py [selftest]", file=sys.stderr)
+        sys.exit(2)
     try:
         sys.exit(main())
     except Fail as e:
