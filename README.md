@@ -50,7 +50,7 @@ same host and same QEMU for every arm), the trimmed Linux baseline takes
 **18.3×**, and the comparison carries a known measured bias toward
 Whimbrel: the D-0075 `/init` neighbor-table round trip adds 2.87 ms to
 every Linux row, published in the exhibit. This is what single-purpose
-structure buys under stated conditions, not a "fastest OS" claim.
+structure buys under stated conditions.
 
 Two more measured results:
 
