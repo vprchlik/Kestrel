@@ -443,12 +443,96 @@ def detect_virt() -> str:
     return text if text else "unavailable"
 
 
+def parse_cpu_list(text: str) -> list[int]:
+    """Kernel `cpu/online` lists: `0-7`, `0,2-3,7`."""
+    raw = text.strip()
+    if not raw:
+        raise BenchFail("TEST FAIL: online CPU list is empty")
+    cpus: list[int] = []
+    try:
+        for part in raw.split(","):
+            part = part.strip()
+            if not part:
+                raise ValueError("empty field")
+            if "-" in part:
+                a, b = part.split("-", 1)
+                lo, hi = int(a), int(b)
+                if hi < lo:
+                    raise ValueError("inverted range")
+                cpus.extend(range(lo, hi + 1))
+            else:
+                cpus.append(int(part))
+    except ValueError:
+        raise BenchFail(f"TEST FAIL: malformed CPU list {raw!r}") from None
+    if not cpus:
+        raise BenchFail("TEST FAIL: online CPU list is empty")
+    return sorted(set(cpus))
+
+
+def summarize_governors(govs: dict[int, str]) -> str:
+    """One value if unanimous; otherwise a mixed: listing that cannot pass."""
+    if not govs:
+        raise BenchFail("TEST FAIL: no online CPUs to read governors")
+    vals = set(govs.values())
+    if len(vals) == 1:
+        return next(iter(vals))
+    parts = ",".join(f"cpu{c}={govs[c]}" for c in sorted(govs))
+    return f"mixed:{parts}"
+
+
+def read_governor_control() -> str:
+    """Every online CPU's scaling_governor, not cpu0 alone (D-0055)."""
+    online = Path("/sys/devices/system/cpu/online")
+    if not online.is_file():
+        return "unavailable"
+    govs = {
+        cpu: read_sysfs(
+            Path(f"/sys/devices/system/cpu/cpu{cpu}/cpufreq/scaling_governor")
+        )
+        for cpu in parse_cpu_list(online.read_text())
+    }
+    return summarize_governors(govs)
+
+
+def require_steal_delta_zero(steal_delta: int) -> None:
+    """Per-trial /proc/stat steal delta. D-0055: 0 on every trial.
+
+    USER_HZ=100 ⇒ 10 ms/tick. Zero cannot rule out sub-tick steal
+    (necessary, not sufficient). Nonzero is at least one accounted
+    steal tick during the trial, not a quantization artifact.
+    """
+    if steal_delta < 0:
+        raise BenchFail("TEST FAIL: /proc/stat steal went backwards")
+    if steal_delta != 0:
+        tick_ns = steal_ticks_to_ns(1)
+        raise BenchFail(
+            f"TEST FAIL: steal_ticks={steal_delta} on this trial "
+            f"(D-0055: steal 0 on every trial, warmup included; "
+            f"1 tick = {tick_ns} ns)"
+        )
+
+
+def require_zero_steal(runs: list[dict]) -> None:
+    """CSV replay of require_steal_delta_zero; warmup included."""
+    if not runs or "steal_ticks" not in runs[0]:
+        return
+    bad = [r for r in runs if int(r["steal_ticks"]) != 0]
+    if not bad:
+        return
+    r = bad[0]
+    raise BenchFail(
+        f"TEST FAIL: steal_ticks={r['steal_ticks']} on "
+        f"batch={r.get('batch_id', '?')} trial={r.get('trial', '?')} "
+        f"warmup={r.get('warmup', '?')} "
+        f"({len(bad)} nonzero / {len(runs)}; D-0055: steal 0 on every "
+        f"trial, warmup included)"
+    )
+
+
 def host_controls() -> dict:
     """Snapshot of the five dedicated-host controls (D-0055 / SETUP.md §7)."""
     return {
-        "governor": read_sysfs(
-            Path("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor")
-        ),
+        "governor": read_governor_control(),
         "smt_control": read_sysfs(Path("/sys/devices/system/cpu/smt/control")),
         "cpufreq_boost": read_sysfs(
             Path("/sys/devices/system/cpu/cpufreq/boost")
@@ -1636,8 +1720,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             )
             raise
         steal_delta = read_steal_ticks() - steal0
-        if steal_delta < 0:
-            raise BenchFail("TEST FAIL: /proc/stat steal went backwards")
+        require_steal_delta_zero(steal_delta)
         rel_pcap = os.path.relpath(pcap, ROOT)
         run_rows.append(
             {
@@ -1877,6 +1960,7 @@ def cmd_summarize(args: argparse.Namespace) -> int:
     phases = getattr(args, "phases", None) or read_csv(out_dir / "phases.csv")
     schema = runs_schema(runs[0].keys()) if runs else runs_schema(RUNS_FIELDS)
     assert_aggregatable(runs, allow_dirty=getattr(args, "allow_dirty", False))
+    require_zero_steal(runs)
     expect_n = getattr(args, "expect_n", None)
     expect_warmup = getattr(args, "expect_warmup", None)
     lines = [
@@ -2328,6 +2412,86 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
             if want not in str(e):
                 raise
             fired.append(f"host control {key}={bad!r}: {e}")
+
+    if parse_cpu_list("0-3") != [0, 1, 2, 3]:
+        raise BenchFail("CPU range 0-3 parse unexpected")
+    if parse_cpu_list("0,2-3,7") != [0, 2, 3, 7]:
+        raise BenchFail("CPU list 0,2-3,7 parse unexpected")
+    try:
+        parse_cpu_list("")
+        raise BenchFail("empty CPU list did not fire")
+    except BenchFail as e:
+        if "online CPU list is empty" not in str(e):
+            raise
+        fired.append(f"empty CPU list: {e}")
+    try:
+        parse_cpu_list("3-1")
+        raise BenchFail("inverted CPU range did not fire")
+    except BenchFail as e:
+        if "malformed CPU list" not in str(e):
+            raise
+        fired.append(f"inverted CPU range: {e}")
+    if summarize_governors({0: "performance", 7: "performance"}) != "performance":
+        raise BenchFail("unanimous governors did not collapse to performance")
+    fired.append("unanimous governors collapse to performance")
+    mixed = summarize_governors({0: "performance", 1: "schedutil"})
+    try:
+        require_host_controls({**good_ctrl, "governor": mixed})
+        raise BenchFail("mixed governors did not fire")
+    except BenchFail as e:
+        if "schedutil" not in str(e) or "mixed:" not in str(e):
+            raise
+        fired.append(f"mixed governors (cpu0-only would pass): {e}")
+
+    require_steal_delta_zero(0)
+    fired.append("steal delta 0 accepted")
+    try:
+        require_steal_delta_zero(1)
+        raise BenchFail("nonzero steal delta did not fire")
+    except BenchFail as e:
+        if "steal_ticks=1 on this trial" not in str(e):
+            raise
+        fired.append(f"nonzero steal delta: {e}")
+    try:
+        require_steal_delta_zero(-1)
+        raise BenchFail("negative steal delta did not fire")
+    except BenchFail as e:
+        if "steal went backwards" not in str(e):
+            raise
+        fired.append(f"negative steal delta: {e}")
+    require_zero_steal(
+        [
+            {
+                "steal_ticks": "0",
+                "batch_id": "b1",
+                "trial": "1",
+                "warmup": "1",
+            }
+        ]
+    )
+    fired.append("zero steal CSV accepted (warmup included)")
+    try:
+        require_zero_steal(
+            [
+                {
+                    "steal_ticks": "0",
+                    "batch_id": "b1",
+                    "trial": "1",
+                    "warmup": "0",
+                },
+                {
+                    "steal_ticks": "1",
+                    "batch_id": "b1",
+                    "trial": "2",
+                    "warmup": "1",
+                },
+            ]
+        )
+        raise BenchFail("warmup steal_ticks=1 did not fire")
+    except BenchFail as e:
+        if "warmup=1" not in str(e) or "steal_ticks=1" not in str(e):
+            raise
+        fired.append(f"warmup steal (exhibit validators skip): {e}")
 
     ctrl_mis = tmp / "ctrl-runs.csv"
     _write_fixture_runs(
