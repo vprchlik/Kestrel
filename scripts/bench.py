@@ -1268,22 +1268,31 @@ def run_trial(
     }
 
 
-# D-0055 registered campaign shape. The D-0080 audit found these were
-# argparse defaults silently overridable via BENCH_N / BENCH_WARMUP —
-# a nonconforming campaign with normal-looking CSVs. Campaign kinds
-# now gate on them; fp-ab is a diagnostic kind and is exempt.
+# D-0055 registered campaign shape. The D-0080 audit found n/warmup
+# were argparse defaults silently overridable via BENCH_N / BENCH_WARMUP,
+# and classified two-batch interleaving as "ENFORCED structurally." The
+# batch count is the same class as n/warmup: `--batches` defaults from
+# BENCH_BATCHES, and cmd_run used to pass stability=batches>=2, so
+# batches=1 skipped the two-batch comparison and still printed TEST
+# PASS. Campaign kinds now gate n, warmup, and batches; fp-ab is a
+# diagnostic kind and is exempt.
 REGISTERED_N = 30
 REGISTERED_WARMUP = 3
+REGISTERED_BATCHES = 2
 CAMPAIGN_KINDS = ("whimbrel", "t48", "t47")
 
 
-def require_registered_counts(kind: str, n: int, warmup: int) -> None:
-    if kind in CAMPAIGN_KINDS and (n, warmup) != (REGISTERED_N, REGISTERED_WARMUP):
+def require_registered_counts(
+    kind: str, n: int, warmup: int, batches: int
+) -> None:
+    registered = (REGISTERED_N, REGISTERED_WARMUP, REGISTERED_BATCHES)
+    if kind in CAMPAIGN_KINDS and (n, warmup, batches) != registered:
         raise BenchFail(
-            f"TEST FAIL: kind={kind} launched with n={n} warmup={warmup}; "
-            f"the D-0055 registration is n={REGISTERED_N} "
-            f"warmup={REGISTERED_WARMUP}. A stray BENCH_N/BENCH_WARMUP env "
-            f"var is the usual cause; there is no override."
+            f"TEST FAIL: kind={kind} launched with n={n} warmup={warmup} "
+            f"batches={batches}; the D-0055 registration is n={REGISTERED_N} "
+            f"warmup={REGISTERED_WARMUP} batches={REGISTERED_BATCHES}. A "
+            f"stray BENCH_N/BENCH_WARMUP/BENCH_BATCHES env var is the usual "
+            f"cause; there is no override."
         )
 
 
@@ -1456,8 +1465,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     qemu_cpu, client_cpu = pin_cpus()
     n = args.n
     warmup = args.warmup
-    require_registered_counts(args.kind, n, warmup)
     batches = args.batches
+    require_registered_counts(args.kind, n, warmup, batches)
     port = args.port
     require_port_free(port)
     out_dir = Path(args.out_dir)
@@ -1719,7 +1728,13 @@ def cmd_run(args: argparse.Namespace) -> int:
     rc = cmd_summarize(
         argparse.Namespace(
             out_dir=str(out_dir),
-            stability=batches >= 2,
+            # Campaign kinds always request the two-batch comparison.
+            # The old batches>=2 ternary skipped it silently when
+            # BENCH_BATCHES=1 produced a one-batch CSV and TEST PASS.
+            # A one-batch campaign cannot reach here: the launch gate
+            # refuses it, and if it did, summarize fails closed on
+            # "<cfg>: need ≥2 batches".
+            stability=True if args.kind in CAMPAIGN_KINDS else batches >= 2,
             expect_n=n,
             expect_warmup=warmup,
             f3_scanned=len(run_rows),
@@ -2172,14 +2187,21 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
     falsifier3_scan("PHASE E3g ok\nHTTP OK\n")  # clean serial passes
 
     try:
-        require_registered_counts("t47", 5, 3)
+        require_registered_counts("t47", 5, 3, 2)
         raise BenchFail("nonconforming n did not fire")
     except BenchFail as e:
         if "BENCH_N" not in str(e):
             raise
         fired.append(f"nonconforming counts: {e}")
-    require_registered_counts("t47", 30, 3)  # registered shape passes
-    require_registered_counts("fp-ab", 5, 1)  # diagnostic kind exempt
+    try:
+        require_registered_counts("t47", 30, 3, 1)
+        raise BenchFail("nonconforming batches did not fire")
+    except BenchFail as e:
+        if "BENCH_BATCHES" not in str(e):
+            raise
+        fired.append(f"nonconforming batches: {e}")
+    require_registered_counts("t47", 30, 3, 2)  # registered shape passes
+    require_registered_counts("fp-ab", 5, 1, 1)  # diagnostic kind exempt
 
     tmp = ROOT / "results" / "selftest"
     tmp.mkdir(parents=True, exist_ok=True)
