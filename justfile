@@ -807,17 +807,19 @@ bench-fp-ab:
 bench-summary:
     bash scripts/bench.sh summarize --stability
 
-# T4.3 / T4.4 / T4.6 / T4.8: regenerate report exhibits from git objects.
-# Baseline: tag baseline-t4.3. After-ladder / Δ: T4.6 CSV commit.
-# Cross-system: T4.8 CSV commit ffb7ac7 (frozen pre-FTRACE; D-0073
-# does not retarget this). T4.8b: CSV commit a0c53e2 (D-0073 after
-# + D-0075 /init), cross-system-t48b.md, with T4.8 as the before.
-# Linux decomposition: serial pin d705ecb plus D-0072 labels
-# 93ab617. Working-tree CSVs / serials are not read (D-0067).
+# T4.3 / T4.4 / T4.6 / T4.8 / T4.8b / T4.7: regenerate report exhibits
+# from git objects. Baseline: tag baseline-t4.3. After-ladder / Δ: T4.6
+# CSV commit. Cross-system: T4.8 CSV commit ffb7ac7 (frozen pre-FTRACE;
+# D-0073 does not retarget this). T4.8b: CSV commit a0c53e2 (D-0073
+# after + D-0075 /init), cross-system-t48b.md, with T4.8 as the before.
+# T4.7: t47c CSV commit c2759e2 → t47-firmware.md. Linux decomposition:
+# serial pin d705ecb plus D-0072 labels 93ab617. Working-tree CSVs /
+# serials are not read (D-0067).
 report-exhibits:
     python3 scripts/report-exhibits.py
 
-# Failing-input selftest for validate / validate_t48. Does not write exhibits.
+# Failing-input selftest for validate / validate_t48 / validate_t47.
+# Does not write exhibits.
 report-exhibits-selftest:
     python3 scripts/report-exhibits.py selftest
 

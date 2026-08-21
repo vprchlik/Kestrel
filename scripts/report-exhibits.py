@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the M4 report exhibits from named git objects (D-0064 / D-0067 / D-0071 / D-0072).
+"""Generate the M4 report exhibits from named git objects (D-0064 / D-0067 / D-0071 / D-0072 / D-0079).
 
 The harness overwrites `results/runs.csv` and `results/phases.csv` per
 run; they are not an append-only history. Baseline columns therefore
@@ -11,8 +11,10 @@ does not retarget it), the Linux decomposition from the T4.8
 serial pin (`d705ecb`), and D-0072 hole labels from the
 `ignore_loglevel` pin (`93ab617`). HEAD may hold a later batch;
 pins do not follow it. The T4.8b table comes from its own CSV pin
-(`a0c53e2`, D-0073 after) with T4.8 frozen as the before. The working-tree files are not read — a
-local `just bench` leftover cannot become an exhibit.
+(`a0c53e2`, D-0073 after) with T4.8 frozen as the before. The T4.7
+firmware exhibit comes from the t47c CSV pin (`c2759e2`). The
+working-tree files are not read — a local `just bench` leftover
+cannot become an exhibit.
 
 Never type the numbers this script prints.
 `just report-exhibits` regenerates report/exhibits/.
@@ -69,6 +71,16 @@ T48B_REV = "t48b"
 T48B_SHA_PREFIX = "06687e2"
 T48B_BATCHES = frozenset({"20260819T142033Z-1", "20260819T142033Z-2"})
 T48B_N_PER_ARM = 60
+# T4.7 confirmation CSV commit (D-0079). Measured kernel is git_sha
+# 346f4c1 (not this object). Four Whimbrel arms, two firmware lanes,
+# one batch set. Working-tree CSVs are not read.
+T47_REV = "c2759e245bf7cbcf23dcf43ac228b73f06bb0960"
+T47_SHA_PREFIX = "346f4c1"
+T47_BATCHES = frozenset({"20260820T130700Z-1", "20260820T130700Z-2"})
+T47_N_PER_ARM = 60
+# t47b: aborted confirmation, recorded-not-published. Not an exhibit
+# pin. The selftest plants a cross-campaign pair against T47_REV.
+T47B_REV = "793680bcd4fe4174ede1ddd3ec80d9e1135b4b2b"
 # T4.8 instrumented + Whimbrel serial pin (decomposition, not CSVs).
 SERIAL_REV = "d705ecb8c67350519f9ce4653a4685a89e20e1d4"
 LINUX_SERIAL_PATH = (
@@ -98,6 +110,20 @@ CONTROL_TOL_NS = 1_000_000
 
 SAFE = "release-default"
 FAST = "release-fast-boot"
+M_FAST = "m-release-fast-boot"
+M_SAFE = "m-release-default"
+T47_ARM_ORDER = (FAST, SAFE, M_FAST, M_SAFE)
+T47_OPENSBI = frozenset({FAST, SAFE})
+T47_SHIM = frozenset({M_FAST, M_SAFE})
+# D-0079 registered seam set (source inspection, not a measured delta).
+T47_SEAM_PHASES = ("stvec", "frame_init", "E3g")
+CANARY_FIELDS = ("canary_stvec_ns", "canary_page_verify_ns")
+# ΔS bounds (D-0079). Expectation was retired from the fw_dynamic-load
+# window (+0.1, +1.5) ms; the corrected window is ΔS ≈ 0, |ΔS| ≤ 0.2 ms.
+# Falsifiers are unchanged coarse sanity — they refuse the exhibit.
+DS_EXPECT_ABS_NS = 200_000
+DS_FALSIFY_SLOWER_NS = -300_000
+DS_FALSIFY_ABS_NS = 3_000_000
 
 # Serial order from src/phase.rs NAMES (not a fourth copy of the justfile
 # list — this is the exhibit's row order, parsed values still come from CSV).
@@ -239,6 +265,17 @@ def fmt_ratio(num: float, den: float) -> str:
     if den == 0:
         raise ExhibitFail("TEST FAIL: ratio denominator is 0")
     return f"{num / den:.1f}×"
+
+
+def fmt_ms3(ns: float) -> str:
+    return f"{ns / 1e6:.3f} ms"
+
+
+def fmt_signed_ms3(ns: float) -> str:
+    if ns == 0:
+        return "0.000 ms"
+    sign = "−" if ns < 0 else "+"
+    return f"{sign}{abs(ns) / 1e6:.3f} ms"
 
 
 def md_cell(s: str) -> str:
@@ -520,6 +557,265 @@ def validate_t48(
         )
 
 
+def s_trial_ns(row: dict) -> float:
+    """S = (E4 − first_connect) − pcap(ARP → FIN). Same formula as
+    `scripts/bench.py::s_trial_ns`. S is not a CSV column."""
+    for key in (
+        "e0_to_e4_ns",
+        "e0_to_first_connect_ns",
+        "w_ns",
+        "synack_to_http_ns",
+        "d_fin_ns",
+    ):
+        if row.get(key) in (None, ""):
+            raise ExhibitFail(f"TEST FAIL: missing {key} for S")
+    return (
+        float(row["e0_to_e4_ns"]) - float(row["e0_to_first_connect_ns"])
+    ) - (
+        float(row["w_ns"])
+        + float(row["synack_to_http_ns"])
+        + float(row["d_fin_ns"])
+    )
+
+
+def s_vals(rec: list[dict], config: str) -> list[float]:
+    """One config, never concatenated across lanes (D-0062 / D-0071 / D-0079)."""
+    vals = [s_trial_ns(r) for r in rec if r["config"] == config]
+    if not vals:
+        raise ExhibitFail(f"TEST FAIL: no S values for {config}")
+    return vals
+
+
+def cfg_median_batch(
+    rec: list[dict], config: str, field: str, batch_id: str
+) -> float:
+    vals = [
+        float(r[field])
+        for r in rec
+        if r["config"] == config and r["batch_id"] == batch_id
+    ]
+    if not vals:
+        raise ExhibitFail(
+            f"TEST FAIL: no {field} rows for {config} batch {batch_id}"
+        )
+    return statistics.median(vals)
+
+
+def stability_tol_ns(median_ns: float) -> float:
+    return max(0.02 * abs(median_ns), 200_000.0)
+
+
+def require_e2e3g_stable(
+    rec: list[dict],
+    phases: list[dict],
+    config: str,
+    label: str,
+) -> None:
+    batches = sorted({r["batch_id"] for r in rec})
+    if len(batches) != 2:
+        raise ExhibitFail(
+            f"TEST FAIL: {label} has {len(batches)} batch_id values, "
+            "want 2 (Claim A is stability-gated)"
+        )
+    meds = [
+        statistics.median(e2e3g_vals(rec, phases, config, batch_id=b))
+        for b in batches
+    ]
+    if max(meds) < 1_000_000:
+        return
+    tol = stability_tol_ns(max(meds))
+    if abs(meds[0] - meds[1]) > tol:
+        raise ExhibitFail(
+            f"TEST FAIL: {label} {config} E2→E3g not stable across batches "
+            f"(medians {meds[0]:.0f} vs {meds[1]:.0f} ns, "
+            f"Δ={abs(meds[0] - meds[1]):.0f}, tol={tol:.0f}; "
+            "Claim A is stability-gated)"
+        )
+
+
+def require_delta_s_sane(rec: list[dict], label: str) -> float:
+    """ΔS = S(OpenSBI fast) − S(shim fast). Never pooled across lanes."""
+    delta = statistics.median(s_vals(rec, FAST)) - statistics.median(
+        s_vals(rec, M_FAST)
+    )
+    if delta < DS_FALSIFY_SLOWER_NS:
+        raise ExhibitFail(
+            f"TEST FAIL: {label} ΔS = {delta:.0f} ns < −0.3 ms "
+            "(variant made startup slower; unmodelled cost)"
+        )
+    if abs(delta) > DS_FALSIFY_ABS_NS:
+        raise ExhibitFail(
+            f"TEST FAIL: {label} |ΔS| = {abs(delta):.0f} ns > 3 ms "
+            "(E0-side contaminated; no firmware saving is published)"
+        )
+    return delta
+
+
+def validate_t47(
+    runs: list[dict],
+    phases: list[dict],
+    *,
+    batches: frozenset[str] = T47_BATCHES,
+    sha_prefix: str = T47_SHA_PREFIX,
+    n_per_arm: int = T47_N_PER_ARM,
+    label: str = "T4.7",
+) -> None:
+    """One campaign, two firmware lanes, or the exhibit does not generate.
+
+    Binding gate (D-0079): the OpenSBI lane and the shim lane share one
+    batch set and one canary in the shared header. Mixing lanes from
+    different campaigns is a validator failure, not a caption.
+    """
+    if runs_schema(runs[0].keys()) != "new":
+        raise ExhibitFail(f"TEST FAIL: {label} is not new-schema")
+    rec = recorded(runs)
+    for field in CANARY_FIELDS:
+        if field not in runs[0]:
+            raise ExhibitFail(
+                f"TEST FAIL: {label} missing canary column {field} "
+                "(D-0079: one canary in the shared header)"
+            )
+    cfgs = {r["config"] for r in rec}
+    want_cfgs = set(T47_ARM_ORDER)
+    if cfgs != want_cfgs:
+        raise ExhibitFail(
+            f"TEST FAIL: {label} configs {sorted(cfgs)} "
+            f"want {sorted(want_cfgs)}"
+        )
+    opensbi_batches = {
+        r["batch_id"] for r in rec if r["config"] in T47_OPENSBI
+    }
+    shim_batches = {r["batch_id"] for r in rec if r["config"] in T47_SHIM}
+    if opensbi_batches != shim_batches:
+        raise ExhibitFail(
+            f"TEST FAIL: {label} lanes from different batch sets "
+            f"(OpenSBI {sorted(opensbi_batches)} vs shim "
+            f"{sorted(shim_batches)}; D-0079: one campaign or the "
+            "exhibit does not generate)"
+        )
+    batches_got = {r["batch_id"] for r in runs}
+    if batches_got != batches:
+        raise ExhibitFail(
+            f"TEST FAIL: {label} batch_id set {sorted(batches_got)} "
+            f"want {sorted(batches)}"
+        )
+    canaries = set()
+    for r in runs:
+        pair = tuple(r.get(f, "") for f in CANARY_FIELDS)
+        if any(v in (None, "") for v in pair):
+            raise ExhibitFail(
+                f"TEST FAIL: {label} empty canary columns "
+                "(D-0079: one canary in the shared header)"
+            )
+        canaries.add(pair)
+    if len(canaries) != 1:
+        raise ExhibitFail(
+            f"TEST FAIL: {label} has {len(canaries)} canary values "
+            "in the shared header, want 1 (D-0079: lanes from "
+            "different campaigns do not generate)"
+        )
+    shas = {r["git_sha"] for r in rec}
+    if len(shas) != 1:
+        raise ExhibitFail(f"TEST FAIL: {label} mixed git_sha {sorted(shas)}")
+    sha = next(iter(shas))
+    if not sha.startswith(sha_prefix):
+        raise ExhibitFail(
+            f"TEST FAIL: {label} git_sha {sha} does not start with "
+            f"{sha_prefix}"
+        )
+    if any(int(r["dirty"]) != 0 for r in rec):
+        raise ExhibitFail(f"TEST FAIL: dirty-tree row in {label}")
+    for cfg in T47_ARM_ORDER:
+        n = sum(1 for r in rec if r["config"] == cfg)
+        if n != n_per_arm:
+            raise ExhibitFail(
+                f"TEST FAIL: {label} {cfg} has {n} recorded trials, "
+                f"want {n_per_arm}"
+            )
+        systems = {r["system"] for r in rec if r["config"] == cfg}
+        if systems != {"whimbrel"}:
+            raise ExhibitFail(
+                f"TEST FAIL: {label} {cfg} system {sorted(systems)} "
+                "want whimbrel"
+            )
+    steal = [int(r["steal_ticks"]) for r in rec]
+    if any(s != 0 for s in steal):
+        raise ExhibitFail(
+            f"TEST FAIL: nonzero steal_ticks in recorded {label} "
+            f"(nonzero={sum(1 for s in steal if s != 0)}/{len(steal)})"
+        )
+    if len(rec) != n_per_arm * len(T47_ARM_ORDER):
+        raise ExhibitFail(
+            f"TEST FAIL: {label} has {len(rec)} recorded trials, "
+            f"want {n_per_arm * len(T47_ARM_ORDER)}"
+        )
+    for field, want in (
+        ("virt", "none"),
+        ("governor", "performance"),
+        ("smt_control", "off"),
+        ("cpufreq_boost", "0"),
+    ):
+        if field not in rec[0]:
+            raise ExhibitFail(f"TEST FAIL: {label} runs.csv missing {field}")
+        vals = {r[field] for r in rec}
+        if vals != {want}:
+            raise ExhibitFail(
+                f"TEST FAIL: {label} {field} values {sorted(vals)} "
+                f"want {{{want!r}}}"
+            )
+    bios = {r.get("bios_sha256", "") for r in rec if r["config"] in T47_SHIM}
+    if len(bios) != 1 or "" in bios:
+        raise ExhibitFail(
+            f"TEST FAIL: {label} shim bios_sha256 {sorted(bios)} "
+            "(want one non-empty blob hash on every shim row)"
+        )
+    conn_meds = []
+    for cfg in T47_ARM_ORDER:
+        vals = [
+            float(r["e0_to_first_connect_ns"])
+            for r in rec
+            if r["config"] == cfg
+        ]
+        conn_meds.append(statistics.median(vals))
+    span = max(conn_meds) - min(conn_meds)
+    if span > CONTROL_TOL_NS:
+        raise ExhibitFail(
+            f"TEST FAIL: {label} first-connect medians span {span:.0f} ns "
+            f"(> 1 ms): {conn_meds}"
+        )
+    rec_keys = {(r["batch_id"], r["trial"], r["config"]) for r in rec}
+    e3g = [
+        p
+        for p in phases
+        if int(p["warmup"]) == 0
+        and p["phase"] == "E3g"
+        and (p["batch_id"], p["trial"], p["config"]) in rec_keys
+    ]
+    want_e3g = n_per_arm * len(T47_ARM_ORDER)
+    if len(e3g) != want_e3g:
+        raise ExhibitFail(
+            f"TEST FAIL: {label} has {len(e3g)} recorded E3g rows, "
+            f"want {want_e3g}"
+        )
+    for cfg in (FAST, M_FAST):
+        for phase in T47_SEAM_PHASES:
+            n_ph = sum(
+                1
+                for p in phases
+                if int(p["warmup"]) == 0
+                and p["phase"] == phase
+                and p["config"] == cfg
+                and (p["batch_id"], p["trial"], p["config"]) in rec_keys
+            )
+            if n_ph != n_per_arm:
+                raise ExhibitFail(
+                    f"TEST FAIL: {label} {cfg} has {n_ph} recorded "
+                    f"{phase} rows, want {n_per_arm}"
+                )
+        require_e2e3g_stable(rec, phases, cfg, label)
+    require_delta_s_sane(rec, label)
+
+
 def phase_deltas(
     rec_runs: list[dict], phases: list[dict], config: str
 ) -> dict[str, list[float]]:
@@ -545,8 +841,18 @@ def stat(vals: list[float]) -> tuple[float, float, float]:
     return statistics.median(vals), iqr(vals), min(vals)
 
 
-def e2e3g_median(rec: list[dict], phases: list[dict], config: str) -> float:
-    keys = {(r["batch_id"], r["trial"]) for r in rec if r["config"] == config}
+def e2e3g_vals(
+    rec: list[dict],
+    phases: list[dict],
+    config: str,
+    batch_id: str | None = None,
+) -> list[float]:
+    keys = {
+        (r["batch_id"], r["trial"])
+        for r in rec
+        if r["config"] == config
+        and (batch_id is None or r["batch_id"] == batch_id)
+    }
     vals = [
         float(p["ns_since_e2"])
         for p in phases
@@ -554,8 +860,21 @@ def e2e3g_median(rec: list[dict], phases: list[dict], config: str) -> float:
         and p["phase"] == "E3g"
         and p["config"] == config
         and (p["batch_id"], p["trial"]) in keys
+        and p.get("ns_since_e2") not in (None, "")
     ]
-    return statistics.median(vals)
+    if not vals:
+        where = config if batch_id is None else f"{config} batch {batch_id}"
+        raise ExhibitFail(f"TEST FAIL: no E2→E3g values for {where}")
+    return vals
+
+
+def e2e3g_median(
+    rec: list[dict],
+    phases: list[dict],
+    config: str,
+    batch_id: str | None = None,
+) -> float:
+    return statistics.median(e2e3g_vals(rec, phases, config, batch_id))
 
 
 def csv_field_block(rec: list[dict], label: str) -> list[str]:
@@ -2003,8 +2322,227 @@ def write_linux_decomposition(
     return "\n".join(lines)
 
 
+def phase_median_delta(
+    rec: list[dict], phases: list[dict], config: str, phase: str
+) -> float:
+    keys = {
+        (r["batch_id"], r["trial"], r["config"])
+        for r in rec
+        if r["config"] == config
+    }
+    vals = [
+        float(p["delta_ns"])
+        for p in phases
+        if int(p["warmup"]) == 0
+        and p["phase"] == phase
+        and p["config"] == config
+        and (p["batch_id"], p["trial"], p["config"]) in keys
+    ]
+    if not vals:
+        raise ExhibitFail(
+            f"TEST FAIL: no {phase} deltas for {config}"
+        )
+    return statistics.median(vals)
+
+
+def write_t47_firmware(rec: list[dict], phases: list[dict]) -> str:
+    """T4.7 firmware-removal exhibit. Every displayed quantity is
+    computed from the pin. S is per-config; ΔS is the fast pair only."""
+    batches = tuple(sorted({r["batch_id"] for r in rec}))
+    b1, b2 = batches
+    n = sum(1 for r in rec if r["config"] == FAST)
+    n_per_batch = n // len(batches)
+    canary = rec[0]
+    s_fast = statistics.median(s_vals(rec, FAST))
+    s_safe = statistics.median(s_vals(rec, SAFE))
+    s_m_fast = statistics.median(s_vals(rec, M_FAST))
+    s_m_safe = statistics.median(s_vals(rec, M_SAFE))
+    delta_s = s_fast - s_m_fast
+    if abs(delta_s) <= DS_EXPECT_ABS_NS:
+        ds_expect = (
+            f"inside the corrected window (ΔS ≈ 0, "
+            f"|ΔS| ≤ {fmt_ns(DS_EXPECT_ABS_NS)})"
+        )
+    else:
+        ds_expect = (
+            f"outside the corrected window "
+            f"(|ΔS| ≤ {fmt_ns(DS_EXPECT_ABS_NS)}); "
+            "falsifiers still decide publication"
+        )
+    e2_fast = e2e3g_vals(rec, phases, FAST)
+    e2_m_fast = e2e3g_vals(rec, phases, M_FAST)
+    claim_a = statistics.median(e2_m_fast) - statistics.median(e2_fast)
+    e4 = {}
+    d_e4 = {}
+    d_e2_b = {}
+    guest_fw = {}
+    for b in batches:
+        e4[(FAST, b)] = cfg_median_batch(rec, FAST, "e0_to_e4_ns", b)
+        e4[(M_FAST, b)] = cfg_median_batch(rec, M_FAST, "e0_to_e4_ns", b)
+        d_e4[b] = e4[(M_FAST, b)] - e4[(FAST, b)]
+        d_e2_b[b] = e2e3g_median(rec, phases, M_FAST, b) - e2e3g_median(
+            rec, phases, FAST, b
+        )
+        guest_fw[b] = d_e4[b] - d_e2_b[b] - delta_s
+    seams = []
+    for phase in T47_SEAM_PHASES:
+        open_med = phase_median_delta(rec, phases, FAST, phase)
+        shim_med = phase_median_delta(rec, phases, M_FAST, phase)
+        seams.append((phase, open_med, shim_med, shim_med - open_med))
+    claim_a_b1 = d_e2_b[b1]
+    claim_a_b2 = d_e2_b[b2]
+    e2_fast_med, e2_fast_iqr, e2_fast_min = stat(e2_fast)
+    e2_m_med, e2_m_iqr, e2_m_min = stat(e2_m_fast)
+    ratio_b1 = fmt_ratio(e4[(FAST, b1)], e4[(M_FAST, b1)])
+    ratio_b2 = fmt_ratio(e4[(FAST, b2)], e4[(M_FAST, b2)])
+    shim_s_span = abs(s_m_fast - s_m_safe)
+    lines = [
+        "<!-- generated by scripts/report-exhibits.py — do not edit -->",
+        "",
+        "T4.7 firmware-removal campaign (D-0079). Source: `git show "
+        f"{T47_REV}:results/{{runs,phases}}.csv` (batches "
+        f"`{b1}` / `{b2}`, measured kernel `{T47_SHA_PREFIX}`, "
+        f"n={n} recorded per arm, warmup excluded). Working-tree CSVs "
+        "are not read. Regeneration: `just report-exhibits`.",
+        "",
+        "Same-campaign gate: both firmware lanes from one batch set; "
+        "one canary in the shared header "
+        f"(canary_stvec_ns={canary['canary_stvec_ns']} "
+        f"canary_page_verify_ns={canary['canary_page_verify_ns']}). "
+        "A pair whose lanes come from different campaigns does not "
+        "generate.",
+        "",
+        "### Claim A — pooled ΔE2→E3g, stability-gated",
+        "",
+        "Guest work. Pooled across both batches because E2→E3g was "
+        "stable on both compared arms. Per-batch figures sit beside "
+        "the claim; they are not a second pooling rule.",
+        "",
+        "| config | n | E2→E3g median | IQR | min | batch 1 Δ vs OpenSBI | batch 2 Δ vs OpenSBI |",
+        "|---|---:|---:|---:|---:|---:|---:|",
+        f"| `{FAST}` | {len(e2_fast)} | {fmt_ns(e2_fast_med)} | "
+        f"{fmt_ns(e2_fast_iqr)} | {fmt_ns(e2_fast_min)} | — | — |",
+        f"| `{M_FAST}` | {len(e2_m_fast)} | {fmt_ns(e2_m_med)} | "
+        f"{fmt_ns(e2_m_iqr)} | {fmt_ns(e2_m_min)} | "
+        f"{fmt_signed_ms3(claim_a_b1)} | {fmt_signed_ms3(claim_a_b2)} |",
+        "",
+        f"Claim A (shim − OpenSBI, pooled): **{fmt_signed_ms3(claim_a)}**.",
+        "",
+        "### Claim B — ΔE0→E4 per batch, never pooled",
+        "",
+        "The quantity being removed is the OpenSBI-side firmware "
+        "window. That window moves across campaigns; per-trial `w_ns` "
+        "records it. Claim B is therefore one number per batch, not a "
+        "pooled median.",
+        "",
+        "| batch | OpenSBI fast E0→E4 | shim fast E0→E4 | ΔE0→E4 | ΔS (fast pair) |",
+        "|---|---:|---:|---:|---:|",
+        f"| `{b1}` | {fmt_ns(e4[(FAST, b1)])} | "
+        f"{fmt_ns(e4[(M_FAST, b1)])} | {fmt_signed_ms3(d_e4[b1])} | "
+        f"{fmt_signed_ms3(delta_s)} |",
+        f"| `{b2}` | {fmt_ns(e4[(FAST, b2)])} | "
+        f"{fmt_ns(e4[(M_FAST, b2)])} | {fmt_signed_ms3(d_e4[b2])} | "
+        f"{fmt_signed_ms3(delta_s)} |",
+        "",
+        "ΔS is a campaign-header quantity (one fast-pair median, not "
+        "per batch) sitting in the same table because it is a "
+        "different kind of firmware cost from the guest window Claim B "
+        "removes.",
+        "",
+        "### Decomposition — three terms, not one firmware number",
+        "",
+        "D-0079: the E0→E4 improvement is guest firmware execution "
+        "removed + ΔS (host-side firmware load removed) + seam "
+        "deltas. Those are different kinds of cost.",
+        "",
+        "| term | kind | how | batch 1 | batch 2 |",
+        "|---|---|---|---:|---:|",
+        "| guest firmware execution removed | guest M-mode runtime "
+        "(OpenSBI init / banner / jump) | "
+        "ΔE0→E4 − ΔE2→E3g − ΔS, per batch | "
+        f"{fmt_signed_ms3(guest_fw[b1])} | "
+        f"{fmt_signed_ms3(guest_fw[b2])} |",
+        "| ΔS | host-side firmware load | "
+        "S(`release-fast-boot`) − S(`m-release-fast-boot`); "
+        "never pooled across lanes | "
+        f"{fmt_signed_ms3(delta_s)} | {fmt_signed_ms3(delta_s)} |",
+        "| seam envelope | guest work that contains the seams | "
+        "Claim A (pooled ΔE2→E3g) | "
+        f"{fmt_signed_ms3(claim_a)} | {fmt_signed_ms3(claim_a)} |",
+        "",
+        "Seam deltas itemised (D-0079 registered set "
+        "`stvec`, `frame_init`, `E3g` — replaced-SBI call sites or "
+        "in-window print). These are inside the Claim A envelope; "
+        "they are not folded into the firmware window.",
+        "",
+        "| phase | OpenSBI fast | shim fast | Δ (shim − OpenSBI) |",
+        "|---|---:|---:|---:|",
+    ]
+    for phase, open_med, shim_med, delta in seams:
+        lines.append(
+            f"| `{phase}` | {fmt_ns(open_med)} | {fmt_ns(shim_med)} | "
+            f"{fmt_delta(delta)} |"
+        )
+    lines.extend(
+        [
+            "",
+            "### Per-lane S (batch header, never pooled across lanes)",
+            "",
+            "S is not a CSV column. Each line is one config's recorded "
+            "median of `(E0→E4 − E0→first_connect) − (W + SYN→HTTP + "
+            "D_fin)`. OpenSBI and shim are different populations by "
+            "construction (D-0062 / D-0071 / D-0079). The shim-safe "
+            "arm is a known open item with no consumer — quoted, never "
+            "gated, never pooled with the fast pair that carries ΔS.",
+            "",
+            f"`s_ns_fast={s_fast:.0f}` `s_ns_safe={s_safe:.0f}`",
+            f"`s_ns_m_fast={s_m_fast:.0f}` `s_ns_m_safe={s_m_safe:.0f}`",
+            f"ΔS = {fmt_signed_ms3(delta_s)} — {ds_expect}. "
+            "Falsifiers (unchanged coarse sanity): "
+            f"ΔS < {fmt_signed_ms3(DS_FALSIFY_SLOWER_NS)} or "
+            f"|ΔS| > {fmt_ms3(DS_FALSIFY_ABS_NS)}.",
+        ]
+    )
+    if shim_s_span > CONTROL_TOL_NS:
+        lines.extend(
+            [
+                "",
+                f"Shim-lane S is profile-dependent "
+                f"(|s_ns_m_fast − s_ns_m_safe| = {fmt_ns(shim_s_span)}). "
+                "D-0079 open item; no consumer.",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "### Published claim",
+            "",
+            "Under QEMU TCG software emulation on RISC-V, with no KVM, "
+            "on the pinned bench host (D-0055 controls: "
+            f"{len(batches)} interleaved {n_per_batch}-trial batches, "
+            "Claim A stability-gated, steal 0), replacing OpenSBI with "
+            "the M-mode shim in the `-bios` slot cuts the fast-boot "
+            "image's spawn-to-first-HTTP-byte median from "
+            f"{fmt_ns(e4[(FAST, b1)])} / {fmt_ns(e4[(FAST, b2)])} to "
+            f"{fmt_ns(e4[(M_FAST, b1)])} / {fmt_ns(e4[(M_FAST, b2)])} "
+            f"per batch ({fmt_signed_ms3(d_e4[b1])} / "
+            f"{fmt_signed_ms3(d_e4[b2])}, {ratio_b1} / {ratio_b2}), of "
+            f"which only {fmt_signed_ms3(claim_a)} is guest-side work "
+            "(pooled ΔE2→E3g); the remainder is the removed firmware "
+            "window, whose OpenSBI-side size is the volatile quantity "
+            "being removed and is therefore reported per batch, never "
+            "pooled.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def cmd_selftest() -> int:
-    """Planted failing inputs for validate / validate_t48. Does not write exhibits."""
+    """Planted failing inputs for validate / validate_t48 / validate_t47.
+
+    Does not write exhibits.
+    """
     fired: list[str] = []
 
     def expect_fail(fn, needle: str, label: str) -> None:
@@ -2349,6 +2887,324 @@ def cmd_selftest() -> int:
         "validate_t48 E3g count",
     )
 
+    t47_batches = frozenset({"g-1", "g-2"})
+    t47_sha = "346f4c1fixture"
+    t47_n = 2
+    t47_bios = "c" * 64
+
+    def t47_run(**over: object) -> dict:
+        cfg = str(over.get("config", FAST))
+        e4 = {
+            FAST: "50000000",
+            SAFE: "140000000",
+            M_FAST: "27000000",
+            M_SAFE: "120000000",
+        }[cfg]
+        w = {
+            FAST: "25000000",
+            SAFE: "25000000",
+            M_FAST: "2000000",
+            M_SAFE: "2000000",
+        }[cfg]
+        row = {
+            "batch_id": "g-1",
+            "trial": "1",
+            "warmup": "0",
+            "system": "whimbrel",
+            "config": cfg,
+            "git_sha": t47_sha,
+            "dirty": "0",
+            "steal_ticks": "0",
+            "virt": "none",
+            "governor": "performance",
+            "smt_control": "off",
+            "cpufreq_boost": "0",
+            "w_ns": w,
+            "d_ack_ns": "1",
+            "d_fin_ns": "100000",
+            "synack_to_http_ns": "500000",
+            "e0_to_e4_ns": e4,
+            "e0_to_first_connect_ns": "18500000",
+            "canary_stvec_ns": "1000000",
+            "canary_page_verify_ns": "12000000",
+            "bios_sha256": t47_bios if cfg in T47_SHIM else "",
+        }
+        row.update(over)  # type: ignore[arg-type]
+        return row
+
+    def t47_phase(
+        batch: str, cfg: str, phase: str, *, since: str, delta: str
+    ) -> dict:
+        return {
+            "batch_id": batch,
+            "trial": "1",
+            "warmup": "0",
+            "config": cfg,
+            "phase": phase,
+            "ns_since_e2": since,
+            "delta_ns": delta,
+        }
+
+    def t47_campaign() -> tuple[list[dict], list[dict]]:
+        runs: list[dict] = []
+        phases: list[dict] = []
+        e2 = {FAST: "6400000", SAFE: "90000000", M_FAST: "5700000", M_SAFE: "80000000"}
+        for batch in ("g-1", "g-2"):
+            for cfg in T47_ARM_ORDER:
+                runs.append(t47_run(batch_id=batch, config=cfg))
+                phases.append(
+                    t47_phase(batch, cfg, "E3g", since=e2[cfg], delta="700000")
+                )
+                if cfg in (FAST, M_FAST):
+                    phases.append(
+                        t47_phase(batch, cfg, "stvec", since="200000", delta="200000")
+                    )
+                    phases.append(
+                        t47_phase(
+                            batch, cfg, "frame_init", since="300000", delta="100000"
+                        )
+                    )
+        return runs, phases
+
+    def check_t47(runs: list[dict], phases: list[dict], **kw: object) -> None:
+        validate_t47(
+            runs,
+            phases,
+            batches=t47_batches,
+            sha_prefix="346f4c1",
+            n_per_arm=t47_n,
+            label="t47-fix",
+            **kw,  # type: ignore[arg-type]
+        )
+
+    g_runs, g_ph = t47_campaign()
+    check_t47(g_runs, g_ph)
+    fired.append("validate_t47 accepts a clean four-arm fixture")
+    g_md = write_t47_firmware(recorded(g_runs), g_ph)
+    if "QEMU TCG software emulation" not in g_md or "no KVM" not in g_md:
+        raise ExhibitFail("TEST FAIL: T4.7 exhibit missing TCG substrate")
+    tcg_ok = any(
+        "QEMU TCG software emulation" in sent
+        and "no KVM" in sent
+        and "×" in sent
+        for sent in re.split(r"(?<=\.)\s+", g_md)
+    )
+    if not tcg_ok:
+        raise ExhibitFail(
+            "TEST FAIL: T4.7 exhibit ratio is not in the same sentence "
+            "as QEMU TCG / no KVM"
+        )
+    if re.search(r"s_ns=\d", g_md):
+        raise ExhibitFail(
+            "TEST FAIL: T4.7 exhibit pooled an s_ns= line across lanes"
+        )
+    if "+0.1" in g_md or "1.5 ms" in g_md:
+        raise ExhibitFail(
+            "TEST FAIL: T4.7 exhibit used the retired ΔS load-model window"
+        )
+    fired.append("write_t47_firmware accepts a clean fixture")
+
+    old_g = [dict(r, e0_to_e3w_ns="1") for r in g_runs]
+    for r in old_g:
+        del r["w_ns"]
+        del r["d_ack_ns"]
+        del r["d_fin_ns"]
+    expect_fail(
+        lambda: check_t47(old_g, g_ph),
+        "is not new-schema",
+        "validate_t47 schema",
+    )
+    no_canary = [dict(r) for r in g_runs]
+    for r in no_canary:
+        del r["canary_stvec_ns"]
+        del r["canary_page_verify_ns"]
+    expect_fail(
+        lambda: check_t47(no_canary, g_ph),
+        "missing canary column",
+        "validate_t47 missing canary",
+    )
+    empty_canary = [dict(r, canary_stvec_ns="") for r in g_runs]
+    expect_fail(
+        lambda: check_t47(empty_canary, g_ph),
+        "empty canary columns",
+        "validate_t47 empty canary",
+    )
+    split_canary = [
+        dict(r, canary_stvec_ns="999") if r["config"] in T47_SHIM else dict(r)
+        for r in g_runs
+    ]
+    expect_fail(
+        lambda: check_t47(split_canary, g_ph),
+        "canary values",
+        "validate_t47 split canary",
+    )
+    cross = []
+    cross_ph = []
+    for r in g_runs:
+        row = dict(r)
+        if row["config"] in T47_SHIM:
+            row["batch_id"] = "x-1" if row["batch_id"] == "g-1" else "x-2"
+        cross.append(row)
+    for p in g_ph:
+        row = dict(p)
+        if row["config"] in T47_SHIM:
+            row["batch_id"] = "x-1" if row["batch_id"] == "g-1" else "x-2"
+        cross_ph.append(row)
+    expect_fail(
+        lambda: check_t47(cross, cross_ph),
+        "lanes from different batch sets",
+        "validate_t47 cross-campaign",
+    )
+    wrong_pin = [dict(r, batch_id="z-1" if r["batch_id"] == "g-1" else "z-2") for r in g_runs]
+    wrong_ph = [dict(p, batch_id="z-1" if p["batch_id"] == "g-1" else "z-2") for p in g_ph]
+    expect_fail(
+        lambda: check_t47(wrong_pin, wrong_ph),
+        "batch_id set",
+        "validate_t47 batch-set",
+    )
+    mixed_sha = [dict(r) for r in g_runs]
+    mixed_sha[0]["git_sha"] = "zzzzzzzdeadbeef"
+    expect_fail(
+        lambda: check_t47(mixed_sha, g_ph),
+        "mixed git_sha",
+        "validate_t47 mixed sha",
+    )
+    expect_fail(
+        lambda: validate_t47(
+            g_runs, g_ph, batches=t47_batches, sha_prefix="nope", n_per_arm=t47_n,
+            label="t47-fix",
+        ),
+        "does not start with",
+        "validate_t47 sha-prefix",
+    )
+    dirty = [dict(r, dirty="1") for r in g_runs]
+    expect_fail(lambda: check_t47(dirty, g_ph), "dirty-tree row", "validate_t47 dirty")
+    one_lane = [r for r in g_runs if r["config"] in T47_OPENSBI]
+    one_ph = [p for p in g_ph if p["config"] in T47_OPENSBI]
+    expect_fail(lambda: check_t47(one_lane, one_ph), "configs", "validate_t47 configs")
+    short = g_runs[:-1]
+    short_ph = g_ph[:-1]
+    expect_fail(
+        lambda: check_t47(short, short_ph),
+        "recorded trials, want 2",
+        "validate_t47 n-per-arm",
+    )
+    stolen = [dict(r, steal_ticks="1") for r in g_runs]
+    expect_fail(
+        lambda: check_t47(stolen, g_ph),
+        "nonzero steal_ticks",
+        "validate_t47 steal",
+    )
+    nogov = [dict(r) for r in g_runs]
+    for r in nogov:
+        del r["governor"]
+    expect_fail(
+        lambda: check_t47(nogov, g_ph),
+        "runs.csv missing governor",
+        "validate_t47 missing host-control field",
+    )
+    gov = [dict(r, governor="powersave") for r in g_runs]
+    expect_fail(
+        lambda: check_t47(gov, g_ph),
+        "governor values",
+        "validate_t47 governor",
+    )
+    linux_sys = [
+        dict(r, system="linux") if r["config"] == FAST else dict(r) for r in g_runs
+    ]
+    expect_fail(
+        lambda: check_t47(linux_sys, g_ph),
+        "system",
+        "validate_t47 system",
+    )
+    no_bios = [
+        dict(r, bios_sha256="") if r["config"] in T47_SHIM else dict(r) for r in g_runs
+    ]
+    expect_fail(
+        lambda: check_t47(no_bios, g_ph),
+        "shim bios_sha256",
+        "validate_t47 bios",
+    )
+    span = [
+        dict(r, e0_to_first_connect_ns="20500000") if r["config"] == M_FAST else dict(r)
+        for r in g_runs
+    ]
+    expect_fail(
+        lambda: check_t47(span, g_ph),
+        "first-connect medians span",
+        "validate_t47 span",
+    )
+    expect_fail(
+        lambda: check_t47(g_runs, []),
+        "recorded E3g rows",
+        "validate_t47 E3g count",
+    )
+    no_seam = [p for p in g_ph if p["phase"] != "stvec"]
+    expect_fail(
+        lambda: check_t47(g_runs, no_seam),
+        "stvec rows",
+        "validate_t47 seam count",
+    )
+    unstable = []
+    for p in g_ph:
+        row = dict(p)
+        if (
+            row["config"] == M_FAST
+            and row["phase"] == "E3g"
+            and row["batch_id"] == "g-2"
+        ):
+            row["ns_since_e2"] = "9000000"
+        unstable.append(row)
+    expect_fail(
+        lambda: check_t47(g_runs, unstable),
+        "E2→E3g not stable",
+        "validate_t47 Claim A stability",
+    )
+    ds_slow = [
+        dict(r, w_ns="1000000") if r["config"] == M_FAST else dict(r) for r in g_runs
+    ]
+    expect_fail(
+        lambda: check_t47(ds_slow, g_ph),
+        "< −0.3 ms",
+        "validate_t47 ΔS slower",
+    )
+    ds_wide = [
+        dict(r, w_ns="20000000") if r["config"] == FAST else dict(r) for r in g_runs
+    ]
+    expect_fail(
+        lambda: check_t47(ds_wide, g_ph),
+        "> 3 ms",
+        "validate_t47 |ΔS|",
+    )
+
+    t47c_runs = read_csv_text(
+        git_show(T47_REV, "results/runs.csv"),
+        f"{T47_REV}:results/runs.csv",
+    )
+    t47c_ph = read_csv_text(
+        git_show(T47_REV, "results/phases.csv"),
+        f"{T47_REV}:results/phases.csv",
+    )
+    t47b_runs = read_csv_text(
+        git_show(T47B_REV, "results/runs.csv"),
+        f"{T47B_REV}:results/runs.csv",
+    )
+    t47b_ph = read_csv_text(
+        git_show(T47B_REV, "results/phases.csv"),
+        f"{T47B_REV}:results/phases.csv",
+    )
+    mixed_pin = [r for r in t47c_runs if r["config"] in T47_OPENSBI] + [
+        r for r in t47b_runs if r["config"] in T47_SHIM
+    ]
+    mixed_pin_ph = [p for p in t47c_ph if p["config"] in T47_OPENSBI] + [
+        p for p in t47b_ph if p["config"] in T47_SHIM
+    ]
+    expect_fail(
+        lambda: validate_t47(mixed_pin, mixed_pin_ph),
+        "lanes from different batch sets",
+        "validate_t47 planted t47c/t47b pair",
+    )
+
     print("TEST PASS: report-exhibits fail-closed selftest")
     for line in fired:
         print(f"  fired: {line}")
@@ -2406,10 +3262,20 @@ def main() -> int:
             n_per_arm=T48B_N_PER_ARM,
             label="T4.8b",
         )
+        t47_runs = read_csv_text(
+            git_show(T47_REV, "results/runs.csv"),
+            f"{T47_REV}:results/runs.csv",
+        )
+        t47_phases = read_csv_text(
+            git_show(T47_REV, "results/phases.csv"),
+            f"{T47_REV}:results/phases.csv",
+        )
+        validate_t47(t47_runs, t47_phases)
         base_rec = recorded(base_runs)
         after_rec = recorded(after_runs)
         t48_rec = recorded(t48_runs)
         t48b_rec = recorded(t48b_runs)
+        t47_rec = recorded(t47_runs)
         e2e3g_after_fast = e2e3g_median(after_rec, after_phases, FAST)
         OUT_DIR.mkdir(parents=True, exist_ok=True)
         (OUT_DIR / "machine-spec.md").write_text(
@@ -2470,10 +3336,14 @@ def main() -> int:
             ),
             encoding="utf-8",
         )
+        (OUT_DIR / "t47-firmware.md").write_text(
+            write_t47_firmware(t47_rec, t47_phases),
+            encoding="utf-8",
+        )
         print(
             f"TEST PASS: exhibits from {BASELINE_TAG} + {AFTER_REV} + "
             f"{T48_REV[:12]} + {T48B_REV[:12]} + {SERIAL_REV[:12]} + "
-            f"{LABEL_REV[:12]} → {OUT_DIR}"
+            f"{LABEL_REV[:12]} + {T47_REV[:12]} → {OUT_DIR}"
         )
         print((OUT_DIR / "machine-spec.md").read_text(encoding="utf-8"))
         print((OUT_DIR / "phase-decomposition.md").read_text(encoding="utf-8"))
@@ -2482,6 +3352,7 @@ def main() -> int:
         print((OUT_DIR / "cross-system.md").read_text(encoding="utf-8"))
         print((OUT_DIR / "cross-system-t48b.md").read_text(encoding="utf-8"))
         print((OUT_DIR / "linux-decomposition.md").read_text(encoding="utf-8"))
+        print((OUT_DIR / "t47-firmware.md").read_text(encoding="utf-8"))
         return 0
     except ExhibitFail as e:
         print(e, file=sys.stderr)
