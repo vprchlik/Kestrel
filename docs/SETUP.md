@@ -301,24 +301,31 @@ reboot; do not assume.
 ### What `scripts/bench.py` asserts (fail closed)
 
 At batch start the harness aborts with
-`TEST FAIL: host control <name>=… (want …)` unless all five hold.
-Missing sysfs is `unavailable`, not a pass. No `--allow-dirty`-style
-override exists for these checks. Gates (`just test`) do not run this
-gate.
+`TEST FAIL: host control <name>=… (want …)` unless all of the rows
+below hold. Governor is every **online** CPU's `scaling_governor`,
+not `cpu0` alone — mixed CPUs fail closed as `mixed:cpuN=…`. A
+nonzero per-trial `steal_ticks` aborts at that trial (warmup
+included) and again at summarize. Missing sysfs is `unavailable`,
+not a pass. No `--allow-dirty`-style override exists for these
+checks. Gates (`just test`) do not run this gate.
 
 | Control | Want |
 |---|---|
-| `governor` (`cpu0` `scaling_governor`) | `performance` |
+| `governor` (every online CPU `scaling_governor`) | `performance` |
 | `smt_control` | `off` |
 | `cpufreq_boost` | `0` |
 | `virt` (`systemd-detect-virt`) | `none` |
 | `steal_start_ticks` (`/proc/stat` at batch start) | `0` |
+| `steal_ticks` (per-trial `/proc/stat` steal delta, warmup included) | `0` |
 
-All five are copied onto every `runs.csv` row so a violating batch is
-identifiable after the fact. Per-trial `steal_ticks` is still recorded
-separately. The stability criterion is unchanged (two interleaved
-30-trial batches, max(2%, 200 µs)); these host checks are additional
-and do not widen it.
+The first five are copied onto every `runs.csv` row (`governor`
+records the unanimous `performance` when the check passes) so a
+violating batch is identifiable after the fact. Per-trial
+`steal_ticks` is measured per boot and fail-closed at 0, warmup
+included. USER_HZ=100 ⇒ 10 ms/tick, so `steal_ticks=0` is
+necessary, not sufficient. The stability criterion is unchanged
+(two interleaved 30-trial batches, max(2%, 200 µs)); these host
+checks are additional and do not widen it.
 
 ### Machine-spec block (report methodology)
 

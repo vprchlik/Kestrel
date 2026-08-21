@@ -18,8 +18,8 @@ a mid-warmup flip. campaign() still filters warmup == "0" for the
 recorded witness; the join is a separate pass over warmup == "1".
 
 Fail-closed: a pin that does not load, a campaign with no recorded
-safe-arm rows (flagged pins excepted), or a mixed kernel hash within
-one campaign's safe arm is an error, not a skipped row.
+safe-arm rows, or a mixed kernel hash within one campaign's safe arm
+is an error, not a skipped row. There is no flagged-pin exemption.
 """
 
 from __future__ import annotations

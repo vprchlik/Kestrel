@@ -5196,7 +5196,11 @@ D-0011 onward are working decisions made under those constraints.
     mechanism proposed:** (a) every batch-2 first safe warmup in
     all four campaigns, every canary ever taken, and every lone
     e0drift witness boot falls in **[11.76, 12.14] ms** — one
-    tight cluster; batch-1 first warmups dip in two of four;
+    tight cluster (the exhibit generator, seeing only pins,
+    derives **[11.78, 12.11] ms** from the 8 pinned boots; this
+    entry's range also includes host-only e0drift witness boots
+    that are in no pin — provenance difference, not a
+    discrepancy); batch-1 first warmups dip in two of four;
     (b) the dipped boots sat behind 0.7–0.8 s gaps, identical to
     their inflated neighbors — **wall-clock spacing is refuted as
     the driver**; (c) the m-lane dips at the same position (t47c
@@ -6569,6 +6573,21 @@ D-0011 onward are working decisions made under those constraints.
       assert the correct fail-closed shape per environment (green
       boot-test with artifacts present, missing-artifact failure
       without).
+    - **REFUTED 2026-08-21 (harness audit, fix 2).** "two-batch
+      interleaved shuffle and median/IQR ENFORCED structurally"
+      (D-0055 standing protocol above) and "same-day interleaving
+      ENFORCED structurally (one invocation = one shuffle = both
+      batches)" (D-0079 confirmation block above) stand as written
+      — that was the audit's verdict. The batch *count* was not
+      structural: `--batches` defaulted from `BENCH_BATCHES` the
+      same way `--n` did from `BENCH_N`, and `cmd_run` passed
+      `stability=batches >= 2`, so `batches=1` skipped the
+      two-batch comparison and still printed TEST PASS. Same
+      DEFAULT class as the 3+30 counts this audit already named.
+      Converted with the rest of the enforcement pass:
+      `require_registered_counts` now gates `batches=2` for
+      campaign kinds, and those kinds always request the stability
+      comparison.
   - **Falsifier 3's reported verdicts were assertions, not checks —
     said plainly.** Falsifier 3 was restated in every launch prompt
     as the most serious falsifier, and both t47 and t47b were
