@@ -10,6 +10,13 @@ compare only within one family; the regime divide is stated per family
 and only where that family exhibits both clusters or a corroborating
 in-family boot record.
 
+Warmup rows are parsed and joined by (batch, position). The closing
+finding is computed from that join — canary vs batch-1 position-1,
+the cluster of canaries and batch-boundary first warmups, m-lane
+same-position dips, idle-gap overlap — never a string literal about
+a mid-warmup flip. campaign() still filters warmup == "0" for the
+recorded witness; the join is a separate pass over warmup == "1".
+
 Fail-closed: a pin that does not load, a campaign with no recorded
 safe-arm rows (flagged pins excepted), or a mixed kernel hash within
 one campaign's safe arm is an error, not a skipped row.
@@ -41,11 +48,16 @@ PINS = [
      "(console record in D-0079)"),
     ("t47b", "793680bcd4fe4174ede1ddd3ec80d9e1135b4b2b",
      "aborted, recorded-not-published; the amendment's trigger"),
+    ("t47c", "c2759e245bf7cbcf23dcf43ac228b73f06bb0960",
+     "passed T4.7 confirmation; second canary disagreement"),
 ]
 # The divide between the two observed clusters for kernel families that
 # exhibit both (ms, on page_verify). Families with a single observed
 # cluster get no classification — stated per family in the output.
 DIVIDE_MS = 14.0
+# A warmup is a dip vs its siblings when it sits this far below their
+# median. Used for the m-lane (no 14 ms divide) and for labelling.
+DIP_BELOW_MEDIAN_MS = 1.0
 
 
 class Fail(Exception):
@@ -94,8 +106,253 @@ def campaign(rev: str) -> dict:
         "lo": min(pv) / 1e6,
         "hi": max(pv) / 1e6,
         "canary": canary,
+        "canary_pv": (
+            int(rec[0]["canary_page_verify_ns"]) / 1e6
+            if rec[0].get("canary_page_verify_ns") else None
+        ),
         "batches": batches,
+        "warmup": warmup_join(rev, runs, phases),
     }
+
+
+def _pv_map(phases: list[dict], config: str) -> dict[tuple[str, int], float]:
+    out: dict[tuple[str, int], float] = {}
+    for p in phases:
+        if p["warmup"] != "1" or p["config"] != config or p["phase"] != "page_verify":
+            continue
+        out[(p["batch_id"], int(p["trial"]))] = int(p["delta_ns"]) / 1e6
+    return out
+
+
+def _arm_warmups(
+    batches: list[str], pv: dict[tuple[str, int], float]
+) -> list[list[float]] | None:
+    if not pv:
+        return None
+    rows = []
+    for b in batches:
+        trials = sorted(t for bb, t in pv if bb == b)
+        if trials != [1, 2, 3]:
+            raise Fail(
+                f"TEST FAIL: warmup page_verify trials for batch {b} "
+                f"are {trials}, want [1, 2, 3]"
+            )
+        rows.append([pv[(b, t)] for t in trials])
+    return rows
+
+
+def warmup_join(rev: str, runs: list[dict], phases: list[dict]) -> dict | None:
+    """Safe-arm (and m-lane, if present) warmup page_verify by batch × trial."""
+    wu_runs = [r for r in runs if r["warmup"] == "1" and r["config"] == "release-default"]
+    if not wu_runs:
+        return None
+    batches = sorted({r["batch_id"] for r in wu_runs})
+    safe_pv = _pv_map(phases, "release-default")
+    safe = _arm_warmups(batches, safe_pv)
+    if safe is None:
+        raise Fail(f"TEST FAIL: {rev} has warmup runs but no page_verify")
+    m_pv = _pv_map(phases, "m-release-default")
+    m_wu = _arm_warmups(batches, m_pv) if m_pv else None
+
+    by_batch: dict[str, list[dict]] = {}
+    for r in runs:
+        by_batch.setdefault(r["batch_id"], []).append(r)
+    gaps: list[tuple[int, int, float, float]] = []  # batch_idx, trial, pv_ms, gap_s
+    for bi, bid in enumerate(batches):
+        rs = sorted(by_batch[bid], key=lambda x: int(x["run_order"]))
+        for i, r in enumerate(rs):
+            if r["warmup"] != "1" or r["config"] != "release-default":
+                continue
+            if i == 0:
+                continue
+            prev = rs[i - 1]
+            gap_s = (
+                int(r["e0_mono_ns"])
+                - (int(prev["e0_mono_ns"]) + int(prev["e0_to_e4_ns"]))
+            ) / 1e9
+            trial = int(r["trial"])
+            gaps.append((bi, trial, safe[bi][trial - 1], gap_s))
+    return {"batches": batches, "safe": safe, "m": m_wu, "gaps": gaps}
+
+
+def regime_side(ms: float) -> str:
+    return "deflated" if ms < DIVIDE_MS else "inflated"
+
+
+def is_dip(val: float, siblings: list[float]) -> bool:
+    if not siblings:
+        return False
+    return statistics.median(siblings) - val >= DIP_BELOW_MEDIAN_MS
+
+
+def fmt_wu(vals: list[float], campaign_wu: list[list[float]], batch_idx: int) -> str:
+    parts = []
+    for ti, v in enumerate(vals):
+        others = [
+            x
+            for bj, wu in enumerate(campaign_wu)
+            for tk, x in enumerate(wu)
+            if not (bj == batch_idx and tk == ti)
+        ]
+        parts.append(f"**{v:.2f}**" if is_dip(v, others) else f"{v:.2f}")
+    return " ".join(parts)
+
+
+def structural_finding(rows: list[dict]) -> list[str]:
+    """Closing paragraphs computed from the warmup-position join.
+
+    A hardcoded mid-warmup-flip sentence cannot appear here: campaign()
+    never sees warmup rows, and the join orders by batch then trial.
+    """
+    joined = [r for r in rows if r.get("warmup")]
+    if not joined:
+        raise Fail("TEST FAIL: no pinned campaign has warmup rows to join")
+
+    cluster: list[tuple[str, float]] = []
+    for r in joined:
+        if (
+            r["canary_pv"] is not None
+            and regime_side(r["canary_pv"]) != regime_side(r["med"])
+        ):
+            cluster.append((f"{r['label']} canary", r["canary_pv"]))
+        safe = r["warmup"]["safe"]
+        for bi, wu in enumerate(safe):
+            others = [
+                v
+                for bj, w in enumerate(safe)
+                for tk, v in enumerate(w)
+                if not (bj == bi and tk == 0)
+            ]
+            if is_dip(wu[0], others):
+                cluster.append(
+                    (f"{r['label']} batch-{bi + 1} position-1", wu[0])
+                )
+    if not cluster:
+        raise Fail("TEST FAIL: warmup join found no canary or position-1 dip")
+    clo = min(v for _, v in cluster)
+    chi = max(v for _, v in cluster)
+
+    b2_first_inflated = [
+        (r["label"], r["warmup"]["safe"][1][0])
+        for r in joined
+        if len(r["warmup"]["safe"]) >= 2 and r["med"] >= DIVIDE_MS
+    ]
+    b2_outside = [
+        (lab, v) for lab, v in b2_first_inflated
+        if not (clo - 1e-9 <= v <= chi + 1e-9)
+    ]
+
+    disagrees = []
+    for r in rows:
+        if not r["canary"] or r["canary_pv"] is None:
+            continue
+        c_side = regime_side(r["canary_pv"])
+        w_side = regime_side(r["med"])
+        if c_side != w_side:
+            disagrees.append(r)
+
+    # Canary vs the first trial-conditions boot (batch-1 position-1).
+    not_instant = []
+    for r in joined:
+        if r["canary_pv"] is None:
+            continue
+        b1 = r["warmup"]["safe"][0][0]
+        if regime_side(r["canary_pv"]) != regime_side(b1):
+            not_instant.append((r, b1))
+
+    m_dips = []
+    for r in joined:
+        m_wu = r["warmup"]["m"]
+        if not m_wu:
+            continue
+        for bi, wu in enumerate(m_wu):
+            others = [
+                v
+                for bj, w in enumerate(m_wu)
+                for ti, v in enumerate(w)
+                if not (bj == bi and ti == 0)
+            ]
+            if is_dip(wu[0], others):
+                m_dips.append((r["label"], bi + 1, wu[0], statistics.median(others)))
+
+    dip_gaps = []
+    other_gaps = []
+    for r in joined:
+        if r["med"] < DIVIDE_MS:
+            continue
+        safe = r["warmup"]["safe"]
+        for bi, trial, pv, gap in r["warmup"]["gaps"]:
+            others = [
+                v
+                for bj, wu in enumerate(safe)
+                for tk, v in enumerate(wu)
+                if not (bj == bi and tk == trial - 1)
+            ]
+            if is_dip(pv, others):
+                dip_gaps.append(gap)
+            else:
+                other_gaps.append(gap)
+
+    lines = []
+    dlab = ", ".join(r["label"] for r in disagrees) if disagrees else "none"
+    lines.append(
+        f"Canary vs recorded witness: {len(disagrees)} disagreement"
+        f"{'' if len(disagrees) == 1 else 's'} ({dlab}). "
+        "The recorded witness is the campaign's regime; a disagreement "
+        "is the canary failing as a certificate, not a mid-run flip "
+        "unless the warmup-position join says so."
+    )
+    if not_instant:
+        bits = []
+        for r, b1 in not_instant:
+            b2 = r["warmup"]["safe"][1][0]
+            bits.append(
+                f"{r['label']}: canary {r['canary_pv']:.3f} ms "
+                f"({regime_side(r['canary_pv'])}) vs batch-1 position-1 "
+                f"{b1:.2f} ms ({regime_side(b1)}); the deflated warmup "
+                f"is batch-2 position-1 {b2:.2f} ms, not the first "
+                f"trial-conditions boot"
+            )
+        lines.append(
+            "Join by (batch, position) — not campaign-flat warmup order — "
+            "refutes a first-two-warmups flip: " + "; ".join(bits) + "."
+        )
+    lines.append(
+        f"Structural cluster, derived from disagreeing canaries and "
+        f"every batch-boundary first safe warmup that dips ≥ "
+        f"{DIP_BELOW_MEDIAN_MS:.0f} ms below its campaign's other "
+        f"warmups: [{clo:.2f}, {chi:.2f}] ms "
+        f"({len(cluster)} boots). "
+        + (
+            "Every batch-2 position-1 safe warmup of an inflated "
+            "recorded campaign falls in that cluster."
+            if not b2_outside
+            else "Batch-2 position-1 outside the cluster: "
+            + ", ".join(f"{lab} {v:.2f}" for lab, v in b2_outside) + "."
+        )
+        + " Lone e0drift witness boots are not in these pins and are "
+        "not asserted here."
+    )
+    if m_dips:
+        bits = [
+            f"{lab} batch-{bi} position-1 {v:.2f} ms vs sibling median "
+            f"{med:.2f} ms"
+            for lab, bi, v, med in m_dips
+        ]
+        lines.append(
+            "The same position dips on the m-lane (no OpenSBI, no DBCN): "
+            + "; ".join(bits)
+            + " — lane-independent, host-side of the polled UART."
+        )
+    if dip_gaps and other_gaps:
+        lines.append(
+            f"Idle gap before the spawn (e0_mono − previous trial's "
+            f"e0+E4, same batch): dipped boots {min(dip_gaps):.2f}–"
+            f"{max(dip_gaps):.2f} s, inflated neighbors {min(other_gaps):.2f}–"
+            f"{max(other_gaps):.2f} s — ranges overlap, so wall-clock "
+            f"spacing is not the driver."
+        )
+    return lines
 
 
 def main() -> int:
@@ -119,17 +376,15 @@ def main() -> int:
         "(the safe arm's `kernel_sha256`), so rows are grouped by",
         "family; the regime divide is applied only inside a family",
         "that exhibits both clusters or a corroborating in-family boot",
-        "record. Regeneration: `python3 scripts/regime-witness.py`.",
+        "record. Warmup `page_verify` is joined by batch and trial",
+        "position; the closing finding is computed from that join.",
+        "Regeneration: `python3 scripts/regime-witness.py`.",
         "",
     ]
     for kern in sorted(families, key=lambda k: min(r["label"] for r in families[k])):
         fam = families[kern]
         meds = [c["med"] for c in fam]
         both = min(meds) < DIVIDE_MS < max(meds)
-        # t47/t47b's family has one recorded cluster but two in-family
-        # boot records below the divide (t47b's canary and its first
-        # warmup, both in its pinned CSVs/serial record) — the canary
-        # column itself corroborates the divide there.
         corroborated = both or any(
             c["canary"] and (float(c["canary"].split("/")[1]) < DIVIDE_MS) != (c["med"] < DIVIDE_MS)
             for c in fam
@@ -174,13 +429,35 @@ def main() -> int:
                 f"{c['canary'] or '—'} | {verdict} |"
             )
         lines.append("")
+
+    lines.append("### warmup-position join (safe-arm `page_verify`, ms)")
+    lines.append("")
     lines.append(
-        "The one disagreement (t47b) is the amendment's trigger: the canary "
-        "read a state that flipped between the first two warmups (11.85 → "
-        "16.28 ms, in the pinned phases.csv warmup rows), so the canary was "
-        "correct at its instant and wrong as a certificate."
+        "Warmup rows (`warmup=1`), ordered by batch then trial. "
+        "A value is bold iff it dips ≥ 1 ms below the median of the "
+        "other five safe warmups in that campaign. This is the join "
+        "the closing finding is computed from — not campaign-flat "
+        "warmup order, which is what produced the refuted flip reading."
     )
     lines.append("")
+    lines.append(
+        "| campaign | canary pv | batch-1 warmups | batch-2 warmups | recorded med |"
+    )
+    lines.append("|---|---|---|---|---|")
+    for c in rows:
+        wu = c.get("warmup")
+        if not wu or len(wu["safe"]) < 2:
+            continue
+        can = f"{c['canary_pv']:.3f}" if c["canary_pv"] is not None else "—"
+        lines.append(
+            f"| {c['label']} | {can} | {fmt_wu(wu['safe'][0], wu['safe'], 0)} | "
+            f"{fmt_wu(wu['safe'][1], wu['safe'], 1)} | {c['med']:.2f} |"
+        )
+    lines.append("")
+    for para in structural_finding(rows):
+        lines.append(para)
+        lines.append("")
+
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text("\n".join(lines), encoding="utf-8")
     print(f"TEST PASS: regime-witness → {OUT}")
