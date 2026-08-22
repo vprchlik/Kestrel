@@ -6661,3 +6661,265 @@ D-0011 onward are working decisions made under those constraints.
   anywhere in the gate suite (rule 5's clause); or any future
   campaign aborting on a pre-guest control before this probe has
   run, which converts this entry from scheduled to urgent.
+
+## D-0081: Skip the unaligned-access probe on the Linux cmdline; T4.8c re-run
+- Date: 2026-08-21 — Status: accepted (pre-registered 2026-08-21
+  before any cmdline edit; T4.8c measured 2026-08-21, published
+  2026-08-22; campaign record below)
+- **Decision:** append `unaligned_scalar_speed=fast` to both Linux
+  kernel cmdlines (the shared quiet append that governs the
+  `trimmed` and `stock` rows, and the instrumented append, so the
+  observer-cost cell stays pure), re-run the five-arm cross-system
+  campaign as **T4.8c**, and publish the corrected ratios with
+  T4.8b (`t48b`) kept as the before. No kernel config change, no
+  rebuild: every artifact hash in `bench/linux/MANIFEST` must be
+  byte-identical before and after.
+- **The finding as verified (2026-08-21 Linux-side fairness audit;
+  read-only, adversarially verified):**
+  - Both `Image-trimmed` and `Image-stock` carry
+    `CONFIG_RISCV_PROBE_UNALIGNED_ACCESS=y` (the kconfig default;
+    `build/trimmed.config:337`, `build/stock.config:397`).
+    `check_unaligned_access_all_cpus` busy-wait-benchmarks
+    unaligned access at boot: per test, sync to a jiffy edge then
+    a 2-jiffy measure window, twice, at HZ=250 — **~16–24 ms by
+    construction, measured 24.0 ms** (initcall table rank 4,
+    `results/serial/linux-trimmed-ignore-loglevel-…-initcalls.txt`)
+    and **24.1 ms** on the T4.8b image (printk gap ending at
+    `Ratio of byte access time to unaligned word access is 7.36`,
+    `linux-trimmed-instrumented-20260819T142033Z-1-t04.log`). The
+    wait is jiffies-clocked — wall-fixed, not UART-inflated — and
+    runs after timekeeping, before `Run /init`: inside E0→E4 on
+    every Linux row. It is counted once in the existing
+    decomposition (the initcall entry, the T4.8 gap-rank-5 cell,
+    and the T4.8b gap are one interval on three boots) and
+    overlaps no other audit item.
+  - The probed answer is a foregone conclusion on the pinned
+    emulator (measured "fast", ratio 7.36, on the retained logs),
+    and no consumer here needs the probe: `/init` never calls
+    hwprobe.
+  - **Why this was never a D-0073 sweep item, and why the config
+    route is closed:** the probe's result has a live consumer on
+    the serve path — `has_fast_unaligned_accesses()` in
+    `arch/riscv/lib/csum.c` (`do_csum`), consulted for software
+    checksums because the shared virtio args force `csum=off` —
+    so it fails the sweep rule's "obviously unused" test (D-0073
+    criterion b). Structurally it is a kconfig `choice` member: a
+    bare unset re-defaults under olddefconfig, so acting by config
+    means positively selecting
+    `RISCV_EMULATED_UNALIGNED_ACCESS=y`, which encodes knowledge
+    of the deployment target. That is the `# CONFIG_SMP is not
+    set` class — tuning to the fixed machine shape, disclose-not-
+    sweep — and it would also flip the `do_csum` branch. The
+    cmdline route sidesteps the config question entirely: the
+    pinned 6.18.7 source has
+    `__setup("unaligned_scalar_speed=", …)`
+    (`arch/riscv/kernel/unaligned_access_speed.c`); `=fast` sets
+    the per-cpu speed the probe would have measured and skips the
+    probe, leaving runtime behavior identical to today's probed
+    outcome. Trap emulation stays built either way; UABI is
+    unchanged.
+- **Alternatives considered:** flip the kconfig choice to
+  `RISCV_EMULATED_UNALIGNED_ACCESS` (rejected: fails D-0073's own
+  criteria as written — live `do_csum` consumer; a choice-flip is
+  target-knowledge tuning, not an unused-subsystem unset; and it
+  changes the checksum branch this workload runs). Leave the probe
+  and only disclose it (rejected: D-0073's "Why now" — leaving a
+  named ~24 ms sink, the largest single named cost remaining on
+  the quiet row, in a row published as "tuned in good faith"
+  undercuts the claim, and a zero-config-change removal exists in
+  the same tuning envelope as the existing `quiet loglevel=0`
+  append). Unset `RISCV_PROBE_UNALIGNED_ACCESS` alone (rejected:
+  not a real unset; olddefconfig restores the choice default).
+- **Rationale:** the probe measures a property of the machine the
+  campaign already pins; its answer is fixed on this emulator; the
+  parameter is the same class of cmdline tuning as `loglevel=0`,
+  requires no config change and no Image hash change, and both
+  Linux rows shed the cost — the change deflates **both**
+  published ratios and is therefore against the headline's own
+  favor.
+- **The change (bench-host operator spec).** Three places carry
+  the append and `bench.py` fail-closes if they disagree:
+  1. `scripts/bench.py:161-162` — extend `LINUX_APPEND_QUIET` and
+     `LINUX_APPEND_INSTRUMENTED` with ` unaligned_scalar_speed=fast`.
+  2. `scripts/linux-build.sh:547-548` — the same two strings.
+  3. `just linux-build` — regenerates `bench/linux/MANIFEST`'s two
+     `append` lines. It must verify-and-reuse: all four `artifact`
+     hashes (`Image-stock fa0f4315…`, `Image-trimmed 1bf91509…`,
+     `rootfs.cpio 258c9325…`, `init b6cb40b4…`) byte-identical, or
+     stop (falsifier 4).
+  Then `just test-linux` (boot gate), then the campaign:
+  `just bench-t48` on the dedicated bench host under D-0055
+  controls (two interleaved batches, 3 warmup + 30 recorded per
+  arm, five arms). Report shape: pin the CSVs at a new ref
+  (`t48c`), generate a T4.8c cross-system exhibit with a
+  before/after table against `t48b` (same shape as
+  `cross-system-t48b.md`'s), update the README ratios, and leave
+  every `t48b` pin in place as the before.
+- **Expected effect (orientation ranges per D-0069, not points):**
+  each Linux row's E0→E4 median moves by **Δ ∈ [−27, −16] ms**
+  relative to its `t48b` pinned median (mechanism bound 16–24 ms
+  plus measurement covariance; the two retained measurements sit
+  at 24.0/24.1 ms). Orientation ratios if Whimbrel fast holds
+  within ±0.5 ms of 51.87 ms: trimmed ≈ **4.9–5.2×** (from
+  5.49×), stock ≈ **17.6–18.1×** (from 18.28×). The ranges are
+  orientation; the falsifiers below are the falsifiers.
+- **Falsifiers (fail-closed; responses stated before any number
+  exists). Per the D-0055 2026-08-20 amendment, checks 1 and 2
+  are "stated, unenforced" as of this entry and MUST land as code
+  (serial scan in `bench.py check-serial` / summarize-time gate)
+  in the same change-set as the append edit, before T4.8c runs:**
+  1. **Probe still present.** Any T4.8c instrumented-arm trial
+     serial containing `Ratio of byte access time` (or any
+     initcall listing containing `check_unaligned_access_all_cpus`
+     with nonzero duration) — the parameter did not take. Diagnose
+     append propagation (`bench.py:161`, `linux-build.sh:547`,
+     MANIFEST, the batch header's `linux_append_quiet=` line)
+     before any rerun. No publish.
+  2. **Δ out of range.** Either Linux row's E0→E4 median moves
+     outside [−27, −16] ms vs `t48b`, in either direction — too
+     small means the parameter half-took or the cost was not the
+     probe; too large means the change removed more than the named
+     mechanism. Diagnose before publishing; do not publish a
+     saving.
+  3. **Whimbrel moved.** `release-fast-boot` |Δ| > 1 ms vs `t48b`
+     (its window has no serial exposure; T4.8→T4.8b moved
+     −411 µs). `release-default` is serial-exposed (D-0078): its
+     movement is judged against the same-campaign canary, and any
+     movement the day's serial regime does not account for fires.
+     The Whimbrel arms carry no change; movement is contamination.
+  4. **Any artifact hash changed.** The four MANIFEST `artifact`
+     hashes must be byte-identical to `t48b`'s. This change must
+     not rebuild anything.
+  5. **Any gate green in T4.8b failing in T4.8c** — SYN-grid, RST,
+     first-connect span ≤ 1 ms, trimmed < stock tripwire,
+     stability criterion, READY / `LINUX INIT OK`, host controls.
+     Standard responses per D-0062/D-0055.
+- **What is NOT claimed.** This is a cmdline tuning choice, not a
+  config trim. A deployer who did not know the target's alignment
+  behavior would leave the probe in — that is what it is for. The
+  parameter encodes the same machine-shape knowledge the campaign
+  already pins (and the same class the quiet cmdline already
+  encodes); it is listed as tuning, beside `loglevel=0`, in any
+  exhibit note. The `stock` row remains config-stock: its config
+  is untouched; its cmdline was already tuned and now carries one
+  more disclosed tuning token. We still claim *a* minimal Linux,
+  not *the* minimal Linux.
+- **Campaign record (T4.8c, 2026-08-21).** Batches
+  `20260821T233038Z-1` / `20260821T233038Z-2`. Measured kernel
+  `1c8816e`, dirty=0, steal 0 on all 300 recorded trials. CSVs
+  pinned at tag `t48c` (`fca2f66`). Canary columns unanimous:
+  `canary_stvec_ns=1025900` `canary_page_verify_ns=11976600`
+  (1.026 / 11.977 ms, deflated). Host controls: virt=none,
+  governor=performance, smt=off, boost=0.
+  Falsifiers 1 and 2 were registered as "stated, unenforced" and
+  landed as code in `1c8816e` (serial scan in `check-serial`,
+  summarize-time Δ gate) in the same change-set as the append,
+  before this run, with planted failures in `bench.py selftest`.
+  That sequencing was this entry's own requirement and it was
+  met.
+  - **Falsifier verdicts, one per line:**
+    Falsifier 1: PASS (probe-absent scan fail-closed per
+    instrumented serial; planted ratio-line and nonzero-duration
+    initcall failures demonstrated before the run).
+    Falsifier 2: PASS (trimmed Δ −20.94 ms, stock Δ −24.40 ms vs
+    `t48b`; both inside the pre-registered [−27, −16] ms window).
+    Falsifier 3: PASS (`release-fast-boot` Δ +80.8 µs, |Δ| ≪ 1 ms).
+    Falsifier 4: PASS (four MANIFEST artifact hashes
+    byte-identical to `t48b`; also enforced in `validate_t48c`).
+    Falsifier 5: PASS (stability 5/5; steal 0; dirty=0;
+    first-connect span 100.3 µs ≤ 1 ms; trimmed 263.75 ms <
+    stock 923.70 ms; host controls as pinned; campaign completed
+    with the T4.8b boot gates).
+  - **Per-batch E0→E4 medians (IQR), ms:**
+
+    | arm | b1 | b2 |
+    |---|---:|---:|
+    | release-fast-boot | 51.930 (0.231) | 51.975 (0.322) |
+    | release-default | 139.314 (0.729) | 139.342 (0.570) |
+    | trimmed | 263.484 (0.981) | 264.355 (1.874) |
+    | trimmed-instrumented | 286.957 (2.014) | 287.525 (0.944) |
+    | stock | 922.629 (2.542) | 924.807 (2.564) |
+
+  - **Before/after vs `t48b` (pooled E0→E4 medians):**
+    `release-fast-boot` 51.87 → 51.95 ms (Δ +80.8 µs);
+    `release-default` 139.31 → 139.34 ms (Δ +33.3 µs);
+    trimmed 284.68 → 263.75 ms (Δ −20.94 ms);
+    trimmed-instrumented 310.97 → 287.41 ms (Δ −23.56 ms);
+    stock 948.10 → 923.70 ms (Δ −24.40 ms).
+  - **Ratios** (T4.8c pooled E0→E4): `release-fast-boot` /
+    trimmed = **5.1×**; / stock = **17.8×**. Both sit inside
+    the orientation ranges (4.9–5.2 and 17.6–18.1).
+  - **Canary boundary.** t48c's canary is 1.026 / 11.977 ms
+    (deflated). t48b has no canary columns; its witness is the
+    safe-arm phase medians 1.172 / 16.159 ms (inflated). The
+    before/after table spans a D-0078 regime boundary. Comparable:
+    Whimbrel `release-fast-boot` E0→E4 (zero in-window serial; the
+    falsifier-3 control) and the Linux quiet-row deltas (the
+    probe is jiffies-clocked, not UART-inflated). Not comparable:
+    Whimbrel `release-default` E0→E4 (serial-exposed; canaries
+    disagree). The observer-cost cell stays day-scoped.
+- **Consequences:** the `stock` row stops being the cross-campaign
+  parity control at the T4.8b→T4.8c seam (it moves by design);
+  the drift-control role passes to `release-fast-boot` (no change,
+  no serial window, falsifier 3's ±1 ms) plus the D-0078 campaign
+  canary. The T4.8b exhibits keep their pins. The README headline
+  now cites T4.8c (`a8a1387`): published ratios moved from
+  **5.5× / 18.3×** to **5.1× / 17.8×**; `t48b` stays pinned as
+  the before. Revisit if the pinned kernel version ever changes:
+  the `__setup` parameter's existence and semantics were read out
+  of 6.18.7 and must be re-verified on any other tree.
+
+## D-0082: Record two Linux-side audit disclosures that do not depend on T4.8c
+- Date: 2026-08-21 — Status: accepted (record entry; consequences
+  name deferred edits, not performed here)
+- **Decision:** record two findings from the 2026-08-21 Linux-side
+  fairness audit that stand regardless of whether D-0081's
+  campaign runs.
+- **Item 1 — the pre-guest slice scales with bytes loaded;
+  `results/README.md`'s constancy sentence is false as written.**
+  `results/README.md` states S "is a per-host, per-QEMU-build
+  constant. It does not scale with the guest profile." Measured
+  across the 300 recorded T4.8b trials by two independent
+  read-only methods (a pcap-anchored proxy; guest-stamp-anchored
+  brackets), the pre-guest slice of E0→E4 scales with the bytes
+  QEMU loads, roughly **0.35–0.60 ms/MB**: the Linux arms carry a
+  component Whimbrel does not pay — about **6–13 ms (trimmed)**
+  and **10–20 ms (stock)**; stock−trimmed ≈ 4–7 ms. Magnitude is
+  method-dependent and only bracketable read-only (the wire ARP
+  leaves somewhere inside a stamped `sendto` interior; pcap
+  frame-write latency is unquantified). Charging a VM for loading
+  its own image is defensible — a small image is a real unikernel
+  property — but the sentence is contradicted by the data, and
+  the component is larger than the one bias the README names
+  (the 2.87 ms D-0075 round trip). **Consequences (deferred,
+  named so they are not lost):** correct the `results/README.md`
+  sentence to say S is per-host *per-image-size*; add the
+  size-scaling component, as a bracket, beside the neigh bias
+  wherever that bias is disclosed (README, cross-system exhibit
+  notes). Per-Linux-arm S is not recomputable from the pinned
+  CSVs alone (no `synack_to_http_ns` column, no committed T4.8b
+  batch header); any published bracket must say which method
+  produced it.
+- **Item 2 — an unexplained 12–15 ms interior in the announce
+  `sendto` on Linux's measured path (open observation, not a
+  conclusion).** The `/init` stamp bracket T_NEIGH→T_ANNOUNCE —
+  one UDP `sendto` to the gateway, including the ARP solicit it
+  forces — is **12.1 ms (trimmed), 12.2 ms (instrumented),
+  15.1 ms (stock)** median across the T4.8b trials, IQR
+  ~0.1–0.24 ms: real, arm-dependent, and decomposed by no
+  exhibit. Where within it the ARP frame leaves the guest is not
+  observable from the retained artifacts. Per the threats item-19
+  discipline, this interval spans guest stack, virtio, and slirp
+  boundaries and is **not attributed** to any of them without an
+  instrument that sees the boundary (a guest stamp around
+  `arp_send`, or a QEMU trace — the latter would change the
+  measured configuration). Recorded so it is not rediscovered;
+  a future entry may register an instrument.
+- **Rationale:** both items are audit outputs whose evidence lives
+  in retained artifacts; recording them next to the decisions they
+  qualify is the log's job (D-0064 discipline: misses next to
+  wins).
+- **Consequences:** the two deferred edits named in item 1; item 2
+  is a candidate instrument registration, nothing more. Revisit
+  item 2 if any campaign's announce bracket moves regime or if a
+  boundary instrument is registered.

@@ -3,8 +3,8 @@
 A minimal RISC-V (rv64gc) unikernel written from scratch in Rust: QEMU's
 `virt` machine, OpenSBI (or the project's own M-mode shim), Sv39 paging,
 single hart, single address space, one application compiled into the
-image and run in U-mode over a five-syscall interface (`write`, `exit`,
-`sbrk`, `gettime`, `yield`). At boot it brings up a hand-rolled
+image and run in U-mode over a seven-syscall interface (`write`, `exit`,
+`sbrk`, `gettime`, `yield`, `recv`, `send`). At boot it brings up a hand-rolled
 virtio-net driver and network stack (Ethernet, ARP, IPv4, ICMP, UDP,
 TCP; smoltcp deliberately rejected) and serves one pinned HTTP
 response.
@@ -34,19 +34,19 @@ transfers, because the emulation penalty applies to both arms
 
 Boot to first HTTP byte (E0→E4, QEMU process spawn to first response
 byte at the client) from one campaign with all arms interleaved
-([cross-system-t48b](report/exhibits/cross-system-t48b.md)):
+([cross-system-t48c](report/exhibits/cross-system-t48c.md)):
 
 | system | E0→E4 median | IQR |
 |---|---:|---:|
-| Whimbrel `release-fast-boot` | **51.87 ms** | 404.8 µs |
-| Whimbrel `release-default` (boot-time verification on) | 139.31 ms | 690.7 µs |
-| Linux, minimal, tuned in good faith (Buildroot 2026.02.3 / kernel 6.18.7, config published) | 284.68 ms | 1.66 ms |
-| Linux, stock defconfig | 948.10 ms | 4.27 ms |
+| Whimbrel `release-fast-boot` | **51.95 ms** | 258.3 µs |
+| Whimbrel `release-default` (boot-time verification on) | 139.34 ms | 631.6 µs |
+| Linux, minimal, tuned in good faith (Buildroot 2026.02.3 / kernel 6.18.7, config published) | 263.75 ms | 1.43 ms |
+| Linux, stock defconfig | 923.70 ms | 3.33 ms |
 
 Under those conditions (QEMU TCG software emulation on RISC-V, no KVM,
 same host and same QEMU for every arm), the trimmed Linux baseline takes
-**5.5×** the unikernel's time to first HTTP byte and stock takes
-**18.3×**, and the comparison carries a known measured bias toward
+**5.1×** the unikernel's time to first HTTP byte and stock takes
+**17.8×**, and the comparison carries a known measured bias toward
 Whimbrel: the D-0075 `/init` neighbor-table round trip adds 2.87 ms to
 every Linux row, published in the exhibit. This is largely a result of 
 the single-purpose structure.
@@ -83,7 +83,7 @@ the numbers above checkable.
 |---|---|
 | `src/` | the kernel: boot, trap handling, Sv39 paging, scheduler, virtio-net driver, the network stack |
 | `app/` | the single U-mode application (the HTTP responder), linked into the kernel image |
-| `usys/` | the five syscall stubs |
+| `usys/` | the seven syscall stubs |
 | `linker.ld` | image layout, including the dedicated user sections `check-utext` enforces |
 | `scripts/` | the harness: boot gates, pcap assertions, `bench.py`, the exhibit generator |
 | `bench/linux/` | pinned inputs for the Linux baseline: Buildroot pin, kernel-config fragments, `/init` |
