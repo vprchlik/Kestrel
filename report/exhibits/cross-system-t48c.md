@@ -2,7 +2,7 @@
 
 T4.8c five-arm campaign (D-0081: skip the RISC-V unaligned-access probe via cmdline). **RISC-V under QEMU TCG software emulation.** Source: `git show t48c:results/{runs,phases}.csv` (batches `20260821T233038Z-1` / `20260821T233038Z-2`, measured kernel `1c8816e`, n=60 recorded per arm, warmup excluded). The T4.8b pin (`t48b`) stays the before. Working-tree CSVs are not read. Regeneration: `just report-exhibits`.
 
-Both Linux arms run the D-0075 `/init` (same Image, same cpio as T4.8b). Threats item 20.
+Both Linux arms run the D-0075 `/init` (same Image, same cpio as T4.8b). Image-size scaling of the pre-guest slice S is a disclosed Linux-side component: roughly **6–13 ms (trimmed)** and **10–20 ms (stock)** of E0→E4 that Whimbrel does not pay (D-0082; a bracket from two read-only methods on the T4.8b artifacts, not from these CSV cells — older pins have no `synack_to_http_ns` column and pcaps are gitignored). Charging a small image is a unikernel property; the ratio is not retracted. Threats item 20.
 
 The serial regime changed between campaigns. T4.8c canary 1.026 ms/11.977 ms (canary columns, deflated); T4.8b 1.172 ms/16.159 ms (safe-arm phase medians; this pin has no filled canary columns, inflated). E0→E4 on the fast arms is unaffected (zero in-window serial), but per D-0078 safe-profile numbers do not compare across campaigns whose canaries disagree — and this before/after table spans exactly that boundary.
 

@@ -2,7 +2,7 @@
 
 T4.8b five-arm campaign (D-0073 after: FTRACE-swept `Image-trimmed`, D-0075 `/init`). **RISC-V under QEMU TCG software emulation.** Source: `git show t48b:results/{runs,phases}.csv` (batches `20260819T142033Z-1` / `20260819T142033Z-2`, measured kernel `06687e2`, n=60 recorded per arm, warmup excluded). The T4.8 pin (`ffb7ac71234e`) stays the before. Working-tree CSVs are not read. Regeneration: `just report-exhibits`.
 
-Both Linux arms run the D-0075 `/init`: one RTM_SETNEIGHTBL round trip before the announce, a measured **2.87 ms** on the Linux side of every row (`T_NEIGH` stamp; a bias toward Whimbrel, identical on stock and trimmed, so the trim delta is unaffected). Threats item 20.
+Both Linux arms run the D-0075 `/init`: one RTM_SETNEIGHTBL round trip before the announce, a measured **2.87 ms** on the Linux side of every row (`T_NEIGH` stamp; a bias toward Whimbrel, identical on stock and trimmed, so the trim delta is unaffected). Beside that, image-size scaling of the pre-guest slice S is a second disclosed Linux-side component: roughly **6–13 ms (trimmed)** and **10–20 ms (stock)** of E0→E4 that Whimbrel does not pay (D-0082; a bracket from two read-only methods on the T4.8b artifacts, not from these CSV cells — older pins have no `synack_to_http_ns` column and pcaps are gitignored). Charging a small image is a unikernel property; the ratio is not retracted. Threats item 20.
 
 ### Comparison (E0→E4)
 

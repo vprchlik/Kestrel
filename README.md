@@ -7,11 +7,12 @@ image and run in U-mode over a seven-syscall interface (`write`, `exit`,
 `sbrk`, `gettime`, `yield`, `recv`, `send`). At boot it brings up a hand-rolled
 virtio-net driver and network stack (Ethernet, ARP, IPv4, ICMP, UDP,
 TCP; smoltcp deliberately rejected) and serves one pinned HTTP
-response.
+response. The design rule everywhere: minimal and legible beats clever.
 
 The project's claims live in its measurement work: campaigns are
 pre-registered with falsifiers before they run, gates fail closed, and
-every published number regenerates from pinned git objects.
+every published number regenerates from pinned git objects, never from
+the working tree.
 
 **Status:** M0-M3 (boot, traps, paging, U-mode execution, virtio-net,
 HTTP) are done and merged. M4 (evaluation) is in progress, and it is
@@ -48,8 +49,14 @@ same host and same QEMU for every arm), the trimmed Linux baseline takes
 **5.1×** the unikernel's time to first HTTP byte and stock takes
 **17.8×**, and the comparison carries a known measured bias toward
 Whimbrel: the D-0075 `/init` neighbor-table round trip adds 2.87 ms to
-every Linux row, published in the exhibit. This is largely a result of 
-the single-purpose structure.
+every Linux row, published in the exhibit. Beside that, a second
+disclosed Linux-side component is image-size scaling of the pre-guest
+slice S: roughly **6–13 ms (trimmed)** and **10–20 ms (stock)** of
+E0→E4 that Whimbrel does not pay (D-0082; a bracket — two read-only
+methods agreed on direction and not on precision; not regenerable
+from the pinned CSVs). Charging a small image is a real unikernel
+property; this does not retract the ratio. This is what single-purpose
+structure buys under stated conditions, not a "fastest OS" claim.
 
 Two more measured results:
 
@@ -71,11 +78,15 @@ Two more measured results:
   interval is attributed; none exceeds 19% of the total.
 
 **What this is not.** As an operating system, Whimbrel is not
-very significant. It exhibits one workload, one emulated machine 
-shape, one request served, then exits. The major artifact is the 
-measurement discipline and the reasoning around it. The decision 
-log is a display of this. Those records are deliberate, and make 
-the numbers above checkable.
+significant: one workload, one emulated machine shape, one request
+served, then exit. The significant artifact is the measurement
+discipline and the reasoning around it. The decision log keeps the
+misses next to the wins: a headline metric retired when analysis
+showed its name promised something it did not measure, an aborted
+campaign, a published diagnosis later refuted by data already on disk
+and marked as such in place, an expectation model retired after three
+consecutive misses in the same direction. Those records are deliberate:
+they are what makes the numbers above checkable.
 
 ## What's in the repo
 
