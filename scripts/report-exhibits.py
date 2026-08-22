@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the M4 report exhibits from named git objects (D-0064 / D-0067 / D-0071 / D-0072 / D-0079).
+"""Generate the M4 report exhibits from named git objects (D-0064 / D-0067 / D-0071 / D-0072 / D-0079 / D-0081).
 
 The harness overwrites `results/runs.csv` and `results/phases.csv` per
 run; they are not an append-only history. Baseline columns therefore
@@ -11,9 +11,10 @@ does not retarget it), the Linux decomposition from the T4.8
 serial pin (`d705ecb`), and D-0072 hole labels from the
 `ignore_loglevel` pin (`93ab617`). HEAD may hold a later batch;
 pins do not follow it. The T4.8b table comes from its own CSV pin
-(`a0c53e2`, D-0073 after) with T4.8 frozen as the before. The T4.7
-firmware exhibit comes from the t47c CSV pin (`c2759e2`). The
-working-tree files are not read — a local `just bench` leftover
+(`t48b`, D-0073 after) with T4.8 frozen as the before. The T4.8c
+table comes from `t48c` (D-0081) with T4.8b frozen as the before.
+The T4.7 firmware exhibit comes from the t47c CSV pin (`c2759e2`).
+The working-tree files are not read — a local `just bench` leftover
 cannot become an exhibit.
 
 Never type the numbers this script prints.
@@ -71,6 +72,20 @@ T48B_REV = "t48b"
 T48B_SHA_PREFIX = "06687e2"
 T48B_BATCHES = frozenset({"20260819T142033Z-1", "20260819T142033Z-2"})
 T48B_N_PER_ARM = 60
+# T4.8c five-arm CSV pin (D-0081: unaligned_scalar_speed=fast). The
+# annotated tag names the object so a reader can `git show t48c:…`,
+# same form as t48b / baseline-t4.3. Measured kernel is git_sha
+# 1c8816e (not this object). T4.8b stays the before.
+T48C_REV = "t48c"
+T48C_SHA_PREFIX = "1c8816e"
+T48C_BATCHES = frozenset({"20260821T233038Z-1", "20260821T233038Z-2"})
+T48C_N_PER_ARM = 60
+# D-0081 falsifier 2 window (registered, not a measurement).
+D0081_DELTA_LO_NS = -27_000_000
+D0081_DELTA_HI_NS = -16_000_000
+# D-0078 / regime-witness cluster divide on page_verify. Classifies
+# a generated canary; it is not a campaign number.
+D0078_CANARY_DIVIDE_NS = 14_000_000
 # T4.7 confirmation CSV commit (D-0079). Measured kernel is git_sha
 # 346f4c1 (not this object). Four Whimbrel arms, two firmware lanes,
 # one batch set. Working-tree CSVs are not read.
@@ -555,6 +570,145 @@ def validate_t48(
             f"TEST FAIL: {label} has {len(e3g)} recorded Whimbrel E3g rows, "
             f"want {want_e3g}"
         )
+
+
+def parse_linux_manifest_appends(text: str) -> dict[str, str]:
+    appends: dict[str, str] = {}
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line.startswith("append "):
+            continue
+        parts = line.split(None, 2)
+        if len(parts) != 3:
+            raise ExhibitFail(f"TEST FAIL: malformed MANIFEST append: {line}")
+        appends[parts[1]] = parts[2]
+    return appends
+
+
+def campaign_canary(runs: list[dict], label: str) -> tuple[int, int]:
+    rec = recorded(runs)
+    for field in CANARY_FIELDS:
+        if field not in runs[0]:
+            raise ExhibitFail(
+                f"TEST FAIL: {label} missing canary column {field}"
+            )
+    pairs = set()
+    for r in rec:
+        pair = tuple(r.get(f, "") for f in CANARY_FIELDS)
+        if any(v in (None, "") for v in pair):
+            raise ExhibitFail(
+                f"TEST FAIL: {label} empty canary columns"
+            )
+        pairs.add(pair)
+    if len(pairs) != 1:
+        raise ExhibitFail(
+            f"TEST FAIL: {label} has {len(pairs)} canary values, want 1"
+        )
+    stvec, pv = next(iter(pairs))
+    return int(stvec), int(pv)
+
+
+def serial_witness(
+    rec: list[dict], phases: list[dict], label: str
+) -> tuple[int, int, str]:
+    """stvec / page_verify for D-0078. Prefer filled canary columns."""
+    if rec and CANARY_FIELDS[0] in rec[0]:
+        pairs = [tuple(r.get(f, "") for f in CANARY_FIELDS) for r in rec]
+        filled = [p for p in pairs if all(v not in (None, "") for v in p)]
+        if filled:
+            uniq = set(filled)
+            if len(uniq) != 1:
+                raise ExhibitFail(
+                    f"TEST FAIL: {label} mixed canary values"
+                )
+            stvec, pv = next(iter(uniq))
+            return int(stvec), int(pv), "canary columns"
+    stvec = phase_median_delta(rec, phases, SAFE, "stvec")
+    pv = phase_median_delta(rec, phases, SAFE, "page_verify")
+    return (
+        int(stvec),
+        int(pv),
+        "safe-arm phase medians; this pin has no filled canary columns",
+    )
+
+
+def d0078_regime(page_verify_ns: float) -> str:
+    return (
+        "inflated" if page_verify_ns >= D0078_CANARY_DIVIDE_NS else "deflated"
+    )
+
+
+def validate_t48c(
+    runs: list[dict],
+    phases: list[dict],
+    *,
+    rev: str = T48C_REV,
+    batches: frozenset[str] = T48C_BATCHES,
+    sha_prefix: str = T48C_SHA_PREFIX,
+    n_per_arm: int = T48C_N_PER_ARM,
+    label: str = "T4.8c",
+    manifest_text: str | None = None,
+    t48b_rec: list[dict] | None = None,
+    t48b_manifest_text: str | None = None,
+) -> None:
+    """T4.8 five-arm shape plus D-0081: filled canary, skip-probe append,
+    artifact hashes identical to t48b, Linux Δ inside the registered window.
+    """
+    man_text = (
+        manifest_text
+        if manifest_text is not None
+        else git_show(rev, "bench/linux/MANIFEST")
+    )
+    validate_t48(
+        runs,
+        phases,
+        rev=rev,
+        batches=batches,
+        sha_prefix=sha_prefix,
+        n_per_arm=n_per_arm,
+        label=label,
+        manifest_text=man_text,
+    )
+    campaign_canary(runs, label)
+    appends = parse_linux_manifest_appends(man_text)
+    token = "unaligned_scalar_speed=fast"
+    for kind in ("quiet", "instrumented"):
+        got = appends.get(kind, "")
+        if token not in got:
+            raise ExhibitFail(
+                f"TEST FAIL: {label} MANIFEST append {kind} missing "
+                f"{token}: {got!r}"
+            )
+    if t48b_manifest_text is not None:
+        here = parse_linux_manifest(man_text)
+        before = parse_linux_manifest(t48b_manifest_text)
+        for name in ("Image-stock", "Image-trimmed", "rootfs.cpio", "init"):
+            if here[name] != before[name]:
+                raise ExhibitFail(
+                    f"TEST FAIL: {label} MANIFEST {name} {here[name]} "
+                    f"!= t48b {before[name]} (D-0081 falsifier 4)"
+                )
+    if t48b_rec is not None:
+        rec = recorded(runs)
+        for cfg in ("trimmed", "stock"):
+            after = statistics.median(
+                float(r["e0_to_e4_ns"]) for r in rec if r["config"] == cfg
+            )
+            before_vals = [
+                float(r["e0_to_e4_ns"])
+                for r in t48b_rec
+                if r["config"] == cfg and int(r.get("warmup", "0")) == 0
+            ]
+            if not before_vals:
+                raise ExhibitFail(
+                    f"TEST FAIL: {label} no t48b {cfg} rows for Δ"
+                )
+            delta = after - statistics.median(before_vals)
+            if delta < D0081_DELTA_LO_NS or delta > D0081_DELTA_HI_NS:
+                raise ExhibitFail(
+                    f"TEST FAIL: {label} {cfg} Δ vs t48b "
+                    f"{delta / 1e6:.2f} ms outside D-0081 [-27, -16] ms"
+                )
 
 
 def s_trial_ns(row: dict) -> float:
@@ -1569,6 +1723,201 @@ def write_cross_system_t48b(
     return "\n".join(lines)
 
 
+def write_cross_system_t48c(
+    t48c_rec: list[dict],
+    t48c_phases: list[dict],
+    t48b_rec: list[dict],
+    t48b_phases: list[dict],
+    *,
+    manifest_text: str,
+) -> str:
+    """T4.8c comparison + the D-0081 before/after against t48b.
+
+    Same table columns as cross-system-t48b.md. Every displayed
+    quantity is computed from the two pins.
+    """
+    e4c = {
+        cfg: cfg_median(t48c_rec, cfg, "e0_to_e4_ns")
+        for _sys, cfg in T48_ARM_ORDER
+    }
+    e4b = {
+        cfg: cfg_median(t48b_rec, cfg, "e0_to_e4_ns")
+        for _sys, cfg in T48_ARM_ORDER
+    }
+    fast_e4 = e4c[FAST]
+    trim_e4 = e4c["trimmed"]
+    stock_e4 = e4c["stock"]
+    instr_e4 = e4c["trimmed-instrumented"]
+    t48c_e2 = e2e3g_median(t48c_rec, t48c_phases, FAST)
+    t48b_e2 = e2e3g_median(t48b_rec, t48b_phases, FAST)
+    conn = {
+        cfg: cfg_median(t48c_rec, cfg, "e0_to_first_connect_ns")
+        for _sys, cfg in T48_ARM_ORDER
+    }
+    conn_span = max(conn.values()) - min(conn.values())
+    c_stvec, c_pv, c_src = serial_witness(t48c_rec, t48c_phases, "T4.8c")
+    b_stvec, b_pv, b_src = serial_witness(t48b_rec, t48b_phases, "T4.8b")
+    c_reg = d0078_regime(c_pv)
+    b_reg = d0078_regime(b_pv)
+    canaries_agree = c_reg == b_reg
+    appends = parse_linux_manifest_appends(manifest_text)
+    quiet = appends.get("quiet", "")
+    n = sum(1 for r in t48c_rec if r["config"] == FAST)
+    batches = tuple(sorted({r["batch_id"] for r in t48c_rec}))
+    if canaries_agree:
+        regime_note = (
+            f"T4.8c serial witness {fmt_ms3(c_stvec)}/{fmt_ms3(c_pv)} "
+            f"({c_src}, {c_reg}) and T4.8b "
+            f"{fmt_ms3(b_stvec)}/{fmt_ms3(b_pv)} ({b_src}, {b_reg}) "
+            "sit on the same side of the D-0078 divide, so a "
+            "safe-profile cross-campaign reading is permitted."
+        )
+    else:
+        regime_note = (
+            f"The serial regime changed between campaigns. T4.8c "
+            f"canary {fmt_ms3(c_stvec)}/{fmt_ms3(c_pv)} ({c_src}, "
+            f"{c_reg}); T4.8b {fmt_ms3(b_stvec)}/{fmt_ms3(b_pv)} "
+            f"({b_src}, {b_reg}). E0→E4 on the fast arms is "
+            "unaffected (zero in-window serial), but per D-0078 "
+            "safe-profile numbers do not compare across campaigns "
+            "whose canaries disagree — and this before/after table "
+            "spans exactly that boundary."
+        )
+    why = {
+        FAST: "same kernel; zero in-window serial (D-0081 falsifier 3 control)",
+        SAFE: "not comparable — canaries disagree (D-0078 / threats 21)"
+        if not canaries_agree
+        else "same kernel; canaries agree so D-0078 permits the reading",
+        "trimmed": (
+            "`unaligned_scalar_speed=fast` on the quiet append "
+            "(D-0081); same Image"
+        ),
+        "trimmed-instrumented": (
+            "same parameter on the instrumented append; same Image"
+        ),
+        "stock": (
+            "same Image; cmdline carries one more tuning token "
+            "(no longer a parity control)"
+        ),
+    }
+    lines = [
+        "<!-- generated by scripts/report-exhibits.py — do not edit -->",
+        "",
+        "T4.8c five-arm campaign (D-0081: skip the RISC-V unaligned-access "
+        "probe via cmdline). **RISC-V under QEMU TCG software emulation.** "
+        "Source: `git show "
+        f"{T48C_REV}:results/{{runs,phases}}.csv` (batches "
+        f"`{batches[0]}` / `{batches[1]}`, "
+        f"measured kernel `{T48C_SHA_PREFIX}`, n={n} "
+        "recorded per arm, warmup excluded). The T4.8b pin "
+        f"(`{T48B_REV}`) stays the before. Working-tree CSVs are "
+        "not read. Regeneration: `just report-exhibits`.",
+        "",
+        "Both Linux arms run the D-0075 `/init` (same Image, same "
+        "cpio as T4.8b). Threats item 20.",
+        "",
+        regime_note,
+        "",
+        "This is a cmdline tuning choice, not a config trim. A "
+        "deployer who did not know the target's alignment behavior "
+        "would leave the probe in — that is what it is for. The "
+        "parameter encodes the same machine-shape knowledge the "
+        "campaign already pins, listed as tuning beside `loglevel=0` "
+        f"(quiet append `{quiet}`). The `stock` row remains "
+        "config-stock: its config is untouched; its cmdline was "
+        "already tuned and now carries one more disclosed tuning "
+        "token. We still claim *a* minimal Linux, not *the* minimal "
+        "Linux.",
+        "",
+        "### Comparison (E0→E4)",
+        "",
+        "| system | config | n | E0→E4 median | IQR | min | D_fin median |",
+        "|---|---|---:|---:|---:|---:|---:|",
+    ]
+    for sys, cfg in T48_ARM_ORDER:
+        rows = [r for r in t48c_rec if r["config"] == cfg]
+        e4s = [float(r["e0_to_e4_ns"]) for r in rows]
+        dfins = [float(r["d_fin_ns"]) for r in rows]
+        med, iq, mn = stat(e4s)
+        dmed = statistics.median(dfins)
+        lines.append(
+            f"| {sys} | {cfg} | {len(rows)} | {fmt_ns(med)} | "
+            f"{fmt_ns(iq)} | {fmt_ns(mn)} | {fmt_ns(dmed)} |"
+        )
+    lines.extend(
+        [
+            "",
+            "Ratios are E0→E4 medians under TCG; the emulation penalty "
+            "applies to both arms (see the T4.8 exhibit for the "
+            "KVM-comparability caveat, unchanged):",
+            "",
+            f"- `release-fast-boot` / `trimmed` = "
+            f"**{fmt_ratio(trim_e4, fast_e4)}**",
+            f"- `release-fast-boot` / `stock` = "
+            f"**{fmt_ratio(stock_e4, fast_e4)}**",
+            "",
+            "### Before/after (T4.8b → T4.8c, E0→E4 medians)",
+            "",
+            "| config | T4.8b | T4.8c | Δ | why |",
+            "|---|---:|---:|---:|---|",
+        ]
+    )
+    for _sys, cfg in T48_ARM_ORDER:
+        lines.append(
+            f"| {cfg} | {fmt_ns(e4b[cfg])} | {fmt_ns(e4c[cfg])} | "
+            f"{fmt_delta(e4c[cfg] - e4b[cfg])} | {why[cfg]} |"
+        )
+    lines.extend(
+        [
+            "",
+            "The `stock` row stops being the cross-campaign parity "
+            "control at this seam (it moves by design). Drift control "
+            "passes to `release-fast-boot` (no change, no serial "
+            "window) plus the D-0078 campaign canary.",
+            "",
+            "### Control (E0→first-connect)",
+            "",
+            "| system | config | n | median | IQR | min |",
+            "|---|---|---:|---:|---:|---:|",
+        ]
+    )
+    for sys, cfg in T48_ARM_ORDER:
+        rows = [r for r in t48c_rec if r["config"] == cfg]
+        vals = [float(r["e0_to_first_connect_ns"]) for r in rows]
+        med, iq, mn = stat(vals)
+        lines.append(
+            f"| {sys} | {cfg} | {len(rows)} | {fmt_ns(med)} | "
+            f"{fmt_ns(iq)} | {fmt_ns(mn)} |"
+        )
+    lines.extend(
+        [
+            "",
+            f"Span of medians: {fmt_ns(conn_span)} (bound 1 ms).",
+            "",
+            "### Trim and observer cost (Linux, same campaign)",
+            "",
+            "| comparison | Δ E0→E4 (median − median) | what it is |",
+            "|---|---:|---|",
+            f"| `stock` − `trimmed` | {fmt_ns(stock_e4 - trim_e4)} | "
+            "the D-0073 sweep, measured on the quiet row |",
+            f"| `trimmed-instrumented` − `trimmed` | "
+            f"{fmt_ns(instr_e4 - trim_e4)} | observer cost; "
+            "in-window console output, so this cell is "
+            "**day-scoped** (D-0078) |",
+            "",
+            "### E2→E3g held across campaign shape",
+            "",
+            f"T4.8c `release-fast-boot` E2→E3g median "
+            f"{fmt_ns(t48c_e2)}; T4.8b's on the same kernel "
+            f"{fmt_ns(t48b_e2)} (Δ {fmt_delta(t48c_e2 - t48b_e2)}). "
+            "The whimbrel arms carry no D-0081 change, and "
+            "fast-boot's window has no serial exposure (D-0078).",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def load_pin(
     rev: str, batches: frozenset[str], sha_prefix: str, label: str
 ) -> tuple[list[dict], list[dict]]:
@@ -2539,7 +2888,8 @@ def write_t47_firmware(rec: list[dict], phases: list[dict]) -> str:
 
 
 def cmd_selftest() -> int:
-    """Planted failing inputs for validate / validate_t48 / validate_t47.
+    """Planted failing inputs for validate / validate_t48 / validate_t48c /
+    validate_t47.
 
     Does not write exhibits.
     """
@@ -2885,6 +3235,212 @@ def cmd_selftest() -> int:
         lambda: check_t48(t_runs, []),
         "recorded Whimbrel E3g rows",
         "validate_t48 E3g count",
+    )
+
+    t48c_man = (
+        man_text
+        + "append quiet console=ttyS0 quiet loglevel=0 rdinit=/init "
+        "unaligned_scalar_speed=fast\n"
+        "append instrumented console=ttyS0 loglevel=7 "
+        "printk.time=1 initcall_debug rdinit=/init "
+        "unaligned_scalar_speed=fast\n"
+    )
+
+    def with_canary(
+        runs: list[dict],
+        *,
+        stvec: str = "1000000",
+        pv: str = "12000000",
+    ) -> list[dict]:
+        return [
+            dict(r, canary_stvec_ns=stvec, canary_page_verify_ns=pv)
+            for r in runs
+        ]
+
+    def t48_phases_for_write(
+        ph: list[dict],
+        *,
+        safe_stvec: str = "1200000",
+        safe_pv: str = "16000000",
+    ) -> list[dict]:
+        out: list[dict] = []
+        for p in ph:
+            row = dict(p, ns_since_e2="6400000", delta_ns="700000")
+            out.append(row)
+            if row["config"] == SAFE and row["phase"] == "E3g":
+                out.append(dict(row, phase="stvec", delta_ns=safe_stvec))
+                out.append(dict(row, phase="page_verify", delta_ns=safe_pv))
+        return out
+
+    c_runs = with_canary(t_runs)
+    t48b_for_delta = [
+        dict(
+            r,
+            e0_to_e4_ns=(
+                "60000000"
+                if r["config"] == "trimmed"
+                else "70000000"
+                if r["config"] == "stock"
+                else r["e0_to_e4_ns"]
+            ),
+        )
+        for r in t_runs
+    ]
+
+    def check_t48c(runs: list[dict], phases: list[dict], **kw: object) -> None:
+        kw.setdefault("manifest_text", t48c_man)
+        validate_t48c(
+            runs,
+            phases,
+            rev="unused",
+            batches=t48_batches,
+            sha_prefix="1005399",
+            n_per_arm=t48_n,
+            label="t48c-fix",
+            **kw,  # type: ignore[arg-type]
+        )
+
+    check_t48c(c_runs, t_ph)
+    fired.append("validate_t48c accepts a clean five-arm fixture")
+    check_t48c(
+        c_runs,
+        t_ph,
+        t48b_rec=t48b_for_delta,
+        t48b_manifest_text=man_text,
+    )
+    fired.append("validate_t48c accepts a clean fixture against t48b")
+    c_md = write_cross_system_t48c(
+        recorded(c_runs),
+        t48_phases_for_write(t_ph),
+        recorded(t48b_for_delta),
+        t48_phases_for_write(t_ph),
+        manifest_text=t48c_man,
+    )
+    if "2.87" in c_md or "~11 KB" in c_md or "40.2" in c_md or "540–740" in c_md:
+        raise ExhibitFail(
+            "TEST FAIL: T4.8c exhibit copied typed T4.8b measurements"
+        )
+    if "did not know the target" not in c_md:
+        raise ExhibitFail("TEST FAIL: T4.8c exhibit missing D-0081 not-claimed")
+    if "loglevel=0" not in c_md or "unaligned_scalar_speed=fast" not in c_md:
+        raise ExhibitFail("TEST FAIL: T4.8c exhibit missing cmdline tuning tokens")
+    if "1.000 ms" not in c_md or "12.000 ms" not in c_md:
+        raise ExhibitFail("TEST FAIL: T4.8c exhibit did not generate canary")
+    if "deflated" not in c_md or "inflated" not in c_md:
+        raise ExhibitFail("TEST FAIL: T4.8c exhibit missing D-0078 regime labels")
+    if "canaries disagree" not in c_md:
+        raise ExhibitFail("TEST FAIL: T4.8c exhibit missing canary-disagree note")
+    fired.append("write_cross_system_t48c accepts a clean fixture")
+
+    expect_fail(
+        lambda: check_t48c(t_runs, t_ph),
+        "missing canary column",
+        "validate_t48c missing canary",
+    )
+    empty_canary_c = [dict(r, canary_stvec_ns="") for r in c_runs]
+    expect_fail(
+        lambda: check_t48c(empty_canary_c, t_ph),
+        "empty canary columns",
+        "validate_t48c empty canary",
+    )
+    split_canary_c = [dict(r) for r in c_runs]
+    split_canary_c[0]["canary_stvec_ns"] = "999"
+    expect_fail(
+        lambda: check_t48c(split_canary_c, t_ph),
+        "canary values",
+        "validate_t48c split canary",
+    )
+    expect_fail(
+        lambda: serial_witness(recorded(split_canary_c), t_ph, "t48c-fix"),
+        "mixed canary values",
+        "serial_witness mixed canary",
+    )
+    no_quiet = (
+        man_text
+        + "append quiet console=ttyS0 quiet loglevel=0 rdinit=/init\n"
+        + "append instrumented console=ttyS0 loglevel=7 "
+        "printk.time=1 initcall_debug rdinit=/init "
+        "unaligned_scalar_speed=fast\n"
+    )
+    expect_fail(
+        lambda: check_t48c(c_runs, t_ph, manifest_text=no_quiet),
+        "append quiet missing",
+        "validate_t48c quiet append token",
+    )
+    no_instr = (
+        man_text
+        + "append quiet console=ttyS0 quiet loglevel=0 rdinit=/init "
+        "unaligned_scalar_speed=fast\n"
+        + "append instrumented console=ttyS0 loglevel=7 "
+        "printk.time=1 initcall_debug rdinit=/init\n"
+    )
+    expect_fail(
+        lambda: check_t48c(c_runs, t_ph, manifest_text=no_instr),
+        "append instrumented missing",
+        "validate_t48c instrumented append token",
+    )
+    bad_append = man_text + "append quiet\n"
+    expect_fail(
+        lambda: check_t48c(c_runs, t_ph, manifest_text=bad_append),
+        "malformed MANIFEST append",
+        "validate_t48c malformed append",
+    )
+    t48b_man_mismatch = (
+        f"artifact Image-stock {'f' * 64}\n"
+        f"artifact Image-trimmed {trim_h}\n"
+        f"artifact rootfs.cpio {'c' * 64}\n"
+        f"artifact init {'d' * 64}\n"
+    )
+    expect_fail(
+        lambda: check_t48c(
+            c_runs,
+            t_ph,
+            t48b_manifest_text=t48b_man_mismatch,
+        ),
+        "D-0081 falsifier 4",
+        "validate_t48c hash mismatch",
+    )
+    expect_fail(
+        lambda: check_t48c(
+            c_runs,
+            t_ph,
+            t48b_rec=[r for r in t48b_for_delta if r["config"] == FAST],
+        ),
+        "no t48b trimmed rows",
+        "validate_t48c no t48b trimmed",
+    )
+    expect_fail(
+        lambda: check_t48c(
+            c_runs,
+            t_ph,
+            t48b_rec=[
+                r for r in t48b_for_delta if r["config"] != "stock"
+            ],
+        ),
+        "no t48b stock rows",
+        "validate_t48c no t48b stock",
+    )
+    same_e4 = [dict(r) for r in t_runs]
+    expect_fail(
+        lambda: check_t48c(c_runs, t_ph, t48b_rec=same_e4),
+        "outside D-0081",
+        "validate_t48c Δ out of range",
+    )
+    stock_only_out = [
+        dict(
+            r,
+            e0_to_e4_ns=(
+                "60000000"
+                if r["config"] == "trimmed"
+                else r["e0_to_e4_ns"]
+            ),
+        )
+        for r in t_runs
+    ]
+    expect_fail(
+        lambda: check_t48c(c_runs, t_ph, t48b_rec=stock_only_out),
+        "stock Δ vs t48b",
+        "validate_t48c stock Δ out of range",
     )
 
     t47_batches = frozenset({"g-1", "g-2"})
@@ -3262,6 +3818,23 @@ def main() -> int:
             n_per_arm=T48B_N_PER_ARM,
             label="T4.8b",
         )
+        t48c_runs = read_csv_text(
+            git_show(T48C_REV, "results/runs.csv"),
+            f"{T48C_REV}:results/runs.csv",
+        )
+        t48c_phases = read_csv_text(
+            git_show(T48C_REV, "results/phases.csv"),
+            f"{T48C_REV}:results/phases.csv",
+        )
+        t48c_manifest = git_show(T48C_REV, "bench/linux/MANIFEST")
+        t48b_manifest = git_show(T48B_REV, "bench/linux/MANIFEST")
+        validate_t48c(
+            t48c_runs,
+            t48c_phases,
+            manifest_text=t48c_manifest,
+            t48b_rec=recorded(t48b_runs),
+            t48b_manifest_text=t48b_manifest,
+        )
         t47_runs = read_csv_text(
             git_show(T47_REV, "results/runs.csv"),
             f"{T47_REV}:results/runs.csv",
@@ -3275,6 +3848,7 @@ def main() -> int:
         after_rec = recorded(after_runs)
         t48_rec = recorded(t48_runs)
         t48b_rec = recorded(t48b_runs)
+        t48c_rec = recorded(t48c_runs)
         t47_rec = recorded(t47_runs)
         e2e3g_after_fast = e2e3g_median(after_rec, after_phases, FAST)
         OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -3321,6 +3895,16 @@ def main() -> int:
             ),
             encoding="utf-8",
         )
+        (OUT_DIR / "cross-system-t48c.md").write_text(
+            write_cross_system_t48c(
+                t48c_rec,
+                t48c_phases,
+                t48b_rec,
+                t48b_phases,
+                manifest_text=t48c_manifest,
+            ),
+            encoding="utf-8",
+        )
         linux_serial = git_show(SERIAL_REV, LINUX_SERIAL_PATH)
         whim_serial = git_show(SERIAL_REV, WHIMBREL_SERIAL_PATH)
         labels_text = git_show(LABEL_REV, LABEL_PATH)
@@ -3342,7 +3926,7 @@ def main() -> int:
         )
         print(
             f"TEST PASS: exhibits from {BASELINE_TAG} + {AFTER_REV} + "
-            f"{T48_REV[:12]} + {T48B_REV[:12]} + {SERIAL_REV[:12]} + "
+            f"{T48_REV[:12]} + {T48B_REV} + {T48C_REV} + {SERIAL_REV[:12]} + "
             f"{LABEL_REV[:12]} + {T47_REV[:12]} → {OUT_DIR}"
         )
         print((OUT_DIR / "machine-spec.md").read_text(encoding="utf-8"))
@@ -3351,6 +3935,7 @@ def main() -> int:
         print((OUT_DIR / "dump-placement.md").read_text(encoding="utf-8"))
         print((OUT_DIR / "cross-system.md").read_text(encoding="utf-8"))
         print((OUT_DIR / "cross-system-t48b.md").read_text(encoding="utf-8"))
+        print((OUT_DIR / "cross-system-t48c.md").read_text(encoding="utf-8"))
         print((OUT_DIR / "linux-decomposition.md").read_text(encoding="utf-8"))
         print((OUT_DIR / "t47-firmware.md").read_text(encoding="utf-8"))
         return 0
