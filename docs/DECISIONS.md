@@ -6663,9 +6663,9 @@ D-0011 onward are working decisions made under those constraints.
   run, which converts this entry from scheduled to urgent.
 
 ## D-0081: Skip the unaligned-access probe on the Linux cmdline; T4.8c re-run
-- Date: 2026-08-21 — Status: accepted (pre-registered before any
-  change; no cmdline edit, no build, and no campaign has run; the
-  operator reads this entry before it governs a run)
+- Date: 2026-08-21 — Status: accepted (pre-registered 2026-08-21
+  before any cmdline edit; T4.8c measured 2026-08-21, published
+  2026-08-22; campaign record below)
 - **Decision:** append `unaligned_scalar_speed=fast` to both Linux
   kernel cmdlines (the shared quiet append that governs the
   `trimmed` and `stock` rows, and the instrumented append, so the
@@ -6804,14 +6804,70 @@ D-0011 onward are working decisions made under those constraints.
   is untouched; its cmdline was already tuned and now carries one
   more disclosed tuning token. We still claim *a* minimal Linux,
   not *the* minimal Linux.
+- **Campaign record (T4.8c, 2026-08-21).** Batches
+  `20260821T233038Z-1` / `20260821T233038Z-2`. Measured kernel
+  `1c8816e`, dirty=0, steal 0 on all 300 recorded trials. CSVs
+  pinned at tag `t48c` (`fca2f66`). Canary columns unanimous:
+  `canary_stvec_ns=1025900` `canary_page_verify_ns=11976600`
+  (1.026 / 11.977 ms, deflated). Host controls: virt=none,
+  governor=performance, smt=off, boost=0.
+  Falsifiers 1 and 2 were registered as "stated, unenforced" and
+  landed as code in `1c8816e` (serial scan in `check-serial`,
+  summarize-time Δ gate) in the same change-set as the append,
+  before this run, with planted failures in `bench.py selftest`.
+  That sequencing was this entry's own requirement and it was
+  met.
+  - **Falsifier verdicts, one per line:**
+    Falsifier 1: PASS (probe-absent scan fail-closed per
+    instrumented serial; planted ratio-line and nonzero-duration
+    initcall failures demonstrated before the run).
+    Falsifier 2: PASS (trimmed Δ −20.94 ms, stock Δ −24.40 ms vs
+    `t48b`; both inside the pre-registered [−27, −16] ms window).
+    Falsifier 3: PASS (`release-fast-boot` Δ +80.8 µs, |Δ| ≪ 1 ms).
+    Falsifier 4: PASS (four MANIFEST artifact hashes
+    byte-identical to `t48b`; also enforced in `validate_t48c`).
+    Falsifier 5: PASS (stability 5/5; steal 0; dirty=0;
+    first-connect span 100.3 µs ≤ 1 ms; trimmed 263.75 ms <
+    stock 923.70 ms; host controls as pinned; campaign completed
+    with the T4.8b boot gates).
+  - **Per-batch E0→E4 medians (IQR), ms:**
+
+    | arm | b1 | b2 |
+    |---|---:|---:|
+    | release-fast-boot | 51.930 (0.231) | 51.975 (0.322) |
+    | release-default | 139.314 (0.729) | 139.342 (0.570) |
+    | trimmed | 263.484 (0.981) | 264.355 (1.874) |
+    | trimmed-instrumented | 286.957 (2.014) | 287.525 (0.944) |
+    | stock | 922.629 (2.542) | 924.807 (2.564) |
+
+  - **Before/after vs `t48b` (pooled E0→E4 medians):**
+    `release-fast-boot` 51.87 → 51.95 ms (Δ +80.8 µs);
+    `release-default` 139.31 → 139.34 ms (Δ +33.3 µs);
+    trimmed 284.68 → 263.75 ms (Δ −20.94 ms);
+    trimmed-instrumented 310.97 → 287.41 ms (Δ −23.56 ms);
+    stock 948.10 → 923.70 ms (Δ −24.40 ms).
+  - **Ratios** (T4.8c pooled E0→E4): `release-fast-boot` /
+    trimmed = **5.1×**; / stock = **17.8×**. Both sit inside
+    the orientation ranges (4.9–5.2 and 17.6–18.1).
+  - **Canary boundary.** t48c's canary is 1.026 / 11.977 ms
+    (deflated). t48b has no canary columns; its witness is the
+    safe-arm phase medians 1.172 / 16.159 ms (inflated). The
+    before/after table spans a D-0078 regime boundary. Comparable:
+    Whimbrel `release-fast-boot` E0→E4 (zero in-window serial; the
+    falsifier-3 control) and the Linux quiet-row deltas (the
+    probe is jiffies-clocked, not UART-inflated). Not comparable:
+    Whimbrel `release-default` E0→E4 (serial-exposed; canaries
+    disagree). The observer-cost cell stays day-scoped.
 - **Consequences:** the `stock` row stops being the cross-campaign
   parity control at the T4.8b→T4.8c seam (it moves by design);
   the drift-control role passes to `release-fast-boot` (no change,
   no serial window, falsifier 3's ±1 ms) plus the D-0078 campaign
-  canary. The T4.8b exhibits keep their pins. Revisit if the
-  pinned kernel version ever changes: the `__setup` parameter's
-  existence and semantics were read out of 6.18.7 and must be
-  re-verified on any other tree.
+  canary. The T4.8b exhibits keep their pins. The README headline
+  now cites T4.8c (`a8a1387`): published ratios moved from
+  **5.5× / 18.3×** to **5.1× / 17.8×**; `t48b` stays pinned as
+  the before. Revisit if the pinned kernel version ever changes:
+  the `__setup` parameter's existence and semantics were read out
+  of 6.18.7 and must be re-verified on any other tree.
 
 ## D-0082: Record two Linux-side audit disclosures that do not depend on T4.8c
 - Date: 2026-08-21 — Status: accepted (record entry; consequences
