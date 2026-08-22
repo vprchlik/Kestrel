@@ -2642,7 +2642,9 @@ D-0011 onward are working decisions made under those constraints.
   Image, T4.8b campaign). T4.8 stays the before.
 
 ## D-0063: Unikraft spike — go/no-go and the no-core-patches line
-- Date: 2026-08-16 — Status: accepted
+- Date: 2026-08-16 — Status: accepted (pin recorded 2026-08-22; go
+  criteria **not met** at the pin, abandon line held — see Outcome;
+  the (2)-vs-(3) fallback choice is a separate, pending decision)
 - **Decision:** pin the unikraft/unikraft PR #1698 branch commit and the
   kraftkit version in this entry when the spike starts. **Go** = the
   HTTP example builds for qemu/riscv64 at the pin, boots on our pinned
@@ -2678,6 +2680,135 @@ D-0011 onward are working decisions made under those constraints.
 - **Consequences:** the pin (commit + kraftkit version) is recorded here
   at spike start; whichever fallback fires, the report's abstract states
   the comparison shape in its opening paragraphs.
+- **Pin (recorded 2026-08-22, from live GitHub state; nothing built or
+  run):** unikraft = PR #1698 head
+  `e9b1d5496bd9d0678b035dde2986171bf4398c56` (zzSunil/unikraft
+  `staging`, committed 2026-06-15T08:17:11Z; PR open, not draft, zero
+  reviews, one author comment; base `be744898`, reported
+  clean-mergeable against upstream `staging` `e31b2c44` of
+  2026-08-12). kraftkit = v0.12.15 (2026-08-05, tag `0f4c1222`) is the
+  latest stable release and **lacks riscv64**; riscv64 support is
+  kraftkit#2900, merged to `staging` 2026-08-09 as `5019204e`, first
+  shipped in prerelease `v0.12.15-11-g5019204e` — the spike pins that
+  prerelease and records that it is not a stable release. Application
+  = catalog-core `c-http` at `7196610a` (2026-05-16), a make-driven
+  build over lib-lwip `ec55ae17` (2026-04-15) and nolibc; built with
+  Unikraft's own Makefile (`UK_DEFCONFIG`), not `kraft build`, and run
+  through `scripts/qemu-args.sh`, so kraftkit is on record but off the
+  critical path (`kraft run` on riscv64 would add `-cpu max` and
+  `virtio-net-pci`, both deltas against Whimbrel, and the second is
+  dead on riscv64 — see below). **Correction to this entry's
+  premise:** it assumed the PR branch would have moved between
+  2026-08-16 and the pin. It has not: the head is unchanged since
+  2026-06-15, and no riscv-related issue, PR, or `staging` commit has
+  touched unikraft/unikraft since 2026-08-01 (search returns zero; the
+  original port #461 was last touched 2026-04-22; #804 remains open).
+  D-0045's "kraftkit riscv64 merged" was true of `staging` from
+  2026-08-09, not of any release.
+- **Outcome (2026-08-22, source analysis at the pin): go criteria not
+  met; the abandon line held.** Two no-go criteria fired
+  independently: **riscv64 network path nonfunctional**, and **the
+  fix requires a patch to Unikraft internals**. Either alone is a
+  no-go; the second is also the abandon criterion, and it held rather
+  than being crossed — no patch was written. The trace, so a reader
+  can check it rather than trust it:
+  1. `c-http` → `LIBLWIP` → `LIBUKNETDEV` → `LIBVIRTIO_NET` →
+     `LIBVIRTIO_BUS` (`drivers/virtio/bus/Config.uk`), which implies
+     `LIBVIRTIO_PCI if HAVE_PCI` and `LIBVIRTIO_MMIO if HAVE_MMIO`;
+     `KVM_VMM_QEMU` (`plat/kvm/Config.uk`) selects both `HAVE_PCI` and
+     `HAVE_MMIO` with no arch condition.
+  2. On the MMIO transport — Whimbrel's topology, `virtio-net-device`
+     — `LIBVIRTIO_MMIO` is not arch-gated and `LIBVIRTIO_MMIO_FDT`
+     defaults on whenever `LIBFDT && LIBUKOFW`, which the PR selects
+     for riscv64. The platform bus (`drivers/ukbus/platform/
+     platform_bus.c`, `pf_probe_fdt`, ~l.144) walks every node whose
+     compatible is in `pf_device_compatible_list` (`virtio,mmio`,
+     `pci-host-ecam-generic`, `arm,pl031`) and calls the driver's
+     `probe` *before* `add_dev`. `virtio_mmio_probe_fdt`
+     (`drivers/virtio/mmio/virtio_mmio.c`, ~l.423) calls
+     `uk_intctlr_irq_fdt_xlat(dtb, offs, 0, &irq)` unconditionally.
+  3. The generic layer (`lib/ukintctlr/ukintctlr.c:212–225`) does
+     `UK_ASSERT(uk_intctlr->ops->fdt_xlat)` then calls through it. The
+     PR's PLIC driver (`drivers/ukintctlr/plic/ukintctlr.c`) registers
+     `plic_ops` with **`.fdt_xlat = __NULL`** and a `configure_irq`
+     that returns 0 without reading the IRQ. Asserts on → `UK_CRASH`;
+     asserts off → indirect call to address 0 → fetch fault →
+     unhandled trap.
+  4. QEMU's `virt` machine always presents **eight** `virtio,mmio`
+     transports in the DTB whether or not a device is attached, and
+     the magic/dummy-ID check that would skip an empty transport lives
+     in `virtio_mmio_add_dev`, which runs after `probe`. So the crash
+     fires on the first transport, during bus probing, **before
+     `main`**, in any riscv64 build with `LIBVIRTIO_MMIO=y`. Go
+     criterion 2 (boots) fails together with criterion 3 (answers the
+     client); only a network-less build can boot.
+  5. The fix is a ~15-line `plic_fdt_xlat` reading the one-cell
+     `interrupts` property (PLIC `#interrupt-cells = <1>`) plus a real
+     `configure_irq` — new code in a Unikraft driver, which is exactly
+     what the no-core-patches line forbids.
+  **Closed escape routes, each with why.** (a) PCI transport:
+  `drivers/ukbus/pci/Config.uk` has `LIBUKBUS_PCI depends on
+  (ARCH_X86_64 || ARCH_ARM_64)`, untouched by the PR, so
+  `virtio-net-pci` (what kraftkit emits for every arch,
+  `machine/qemu/v1alpha1.go:298,342`) attaches a NIC Unikraft cannot
+  enumerate; flipping that one line drags in the ECAM driver, whose
+  FDT-interrupt parsing has its own open fix (#804), and the ECAM path
+  needs the same `fdt_xlat` regardless. (b) Command-line devices:
+  `VIRTIO_MMIO_LINUX_COMPAT_CMDLINE` / `virtio_mmio.device=` exists in
+  `drivers/virtio/mmio/Config.uk`, but `virtio_mmio.c` in this tree
+  has zero libparam references and `virtio_mmio_probe` has only the
+  FDT branch — a Kconfig orphan. (c) Disabling FDT probing:
+  `LIBVIRTIO_MMIO_FDT` is a promptless `bool` with `default y if
+  (LIBFDT && LIBUKOFW)`, so it cannot be switched off from `.config`.
+  (d) Stripping the `virtio,mmio` nodes: that is a hand-edited machine
+  description passed via `-dtb`, not a flag delta, and it would also
+  remove the transport the NIC needs.
+  **Why the port is in this state.** This is a **regression from
+  #461**, not a gap Unikraft never filled: #461 (eduardvintila, 2022)
+  describes PCI and MMIO probing as "virtually identical" to the ARM
+  implementation and reports Redis, NGINX, SQLite and Python running,
+  all of which need the network. The `uk_intctlr` driver-ops API
+  (`fdt_xlat`, `configure_irq`) postdates 2022; the 2026 rebase that
+  is #1698 stubbed it (`plic.c` carries a `// leave it alone at the
+  moment, seems like just not used anymore` on `plic_ack_irq`). The
+  PR's own checklist says Application(s): N/A and "tested on Qemu
+  10.0.3", consistent with a hello-world-only port. The accurate
+  statement for the report is therefore not "Unikraft lacks riscv64"
+  but "this rebase has not reconnected the interrupt path to device
+  discovery".
+  **What looked right, for the boot-path analysis either fallback
+  needs:** trap dispatch (`plat/kvm/riscv/traps.c`, `_trap_handler`:
+  `SUPERVISOR_EXT → plic_handle_irq` with a claim/complete loop,
+  timer via SBI with `sbi_set_timer(-1)` as the ack); PLIC enable plus
+  priority 1 on unmask (`plic_clear_irq`) and threshold 0 at init;
+  `fence`-based `mb/rmb/wmb` for the virtio ring
+  (`arch/riscv/riscv64/include/uk/asm/lcpu.h:85–96`); MMIO mapping via
+  `uk_bus_pf_devmap` with plain RW attributes, which is sufficient
+  under Sv39 on TCG; lib-lwip and nolibc carry no arch gating and the
+  PR adds the riscv64 nolibc bits `c-http` needs; `virtio_mmio.c`
+  accepts device versions 1–2, so `-global
+  virtio-mmio.force-legacy=false` is compatible; OpenSBI's
+  `0x80000000` residency is special-cased in
+  `plat/common/bootinfo_fdt.c`. **Not verified** (no build, no run):
+  TLS and context-switch correctness (`arch/riscv/ctx.c`, `tls.c`),
+  the timer under load, whether riscv64 nolibc is complete enough for
+  lwip's build, and whether the port boots at all on QEMU 10.2.1
+  (author tested 10.0.3).
+  **Review liabilities bearing on merge timing:** two cross-arch core
+  edits ride in the PR. `lib/ukboot/boot.c` changes the constructor
+  call from `(*ctorfn)(argc, argv)` to `(*ctorfn)()` for *all*
+  architectures; `lib/uklcpu/lcpu.c` adds a fallback in
+  `uk_lcpu_get_current_idx_in_except` when the exception-stack base is
+  0 (which the riscv64 port returns). Both need a maintainer's
+  attention beyond the riscv64 directories, and the PR has had no
+  review in the 68 days since it was reopened.
+  **Standing:** this is a finding, not a failure — the entry's own
+  framing is that only an unrecorded outcome would be one. The pin is
+  recorded, the go criteria were not met, the abandon line held, and
+  the fallback choice between (2) and (3) is deferred to a separate
+  decision. The one route back to (1) that does not cross the line is
+  the stub being fixed in the PR branch itself and the spike re-pinning
+  to that head; it is noted, not planned.
 
 ## D-0064: Report structure, claims discipline, convergence, audits
 - Date: 2026-08-16 — Status: accepted
