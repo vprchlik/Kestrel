@@ -49,7 +49,13 @@ same host and same QEMU for every arm), the trimmed Linux baseline takes
 **5.1×** the unikernel's time to first HTTP byte and stock takes
 **17.8×**, and the comparison carries a known measured bias toward
 Whimbrel: the D-0075 `/init` neighbor-table round trip adds 2.87 ms to
-every Linux row, published in the exhibit. This is what single-purpose
+every Linux row, published in the exhibit. Beside that, a second
+disclosed Linux-side component is image-size scaling of the pre-guest
+slice S: roughly **6–13 ms (trimmed)** and **10–20 ms (stock)** of
+E0→E4 that Whimbrel does not pay (D-0082; a bracket — two read-only
+methods agreed on direction and not on precision; not regenerable
+from the pinned CSVs). Charging a small image is a real unikernel
+property; this does not retract the ratio. This is what single-purpose
 structure buys under stated conditions, not a "fastest OS" claim.
 
 Two more measured results:

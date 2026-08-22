@@ -338,3 +338,15 @@ item is mitigated-and-measured or stated.
     first two runs caught a flip the per-boot framing had missed.
     A mid-campaign flip remains checkable at trial grain from the
     safe arm's own deltas.
+
+22. **Open observation: 12–15 ms unexplained interior in Linux
+    `/init`'s announce `sendto` (D-0082).** The stamp bracket
+    T_NEIGH→T_ANNOUNCE — one UDP `sendto` to the gateway, including
+    the ARP solicit it forces — is **12.1 ms (trimmed), 12.2 ms
+    (instrumented), 15.1 ms (stock)** median across the T4.8b
+    trials, IQR ~0.1–0.24 ms: real, arm-dependent, and decomposed
+    by no exhibit. Where within it the ARP frame leaves the guest
+    is not observable from the retained artifacts. Per item 19,
+    this interval spans guest stack, virtio, and slirp boundaries
+    and is **not attributed** to any of them without an instrument
+    that sees the boundary. Recorded so it is not rediscovered.

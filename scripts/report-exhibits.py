@@ -1596,7 +1596,15 @@ def write_cross_system_t48b(
         "round trip before the announce, a measured **2.87 ms** on "
         "the Linux side of every row (`T_NEIGH` stamp; a bias toward "
         "Whimbrel, identical on stock and trimmed, so the trim delta "
-        "is unaffected). Threats item 20.",
+        "is unaffected). Beside that, image-size scaling of the "
+        "pre-guest slice S is a second disclosed Linux-side "
+        "component: roughly **6–13 ms (trimmed)** and **10–20 ms "
+        "(stock)** of E0→E4 that Whimbrel does not pay (D-0082; a "
+        "bracket from two read-only methods on the T4.8b artifacts, "
+        "not from these CSV cells — older pins have no "
+        "`synack_to_http_ns` column and pcaps are gitignored). "
+        "Charging a small image is a unikernel property; the ratio "
+        "is not retracted. Threats item 20.",
         "",
         "### Comparison (E0→E4)",
         "",
@@ -1814,7 +1822,15 @@ def write_cross_system_t48c(
         "not read. Regeneration: `just report-exhibits`.",
         "",
         "Both Linux arms run the D-0075 `/init` (same Image, same "
-        "cpio as T4.8b). Threats item 20.",
+        "cpio as T4.8b). Image-size scaling of the pre-guest slice "
+        "S is a disclosed Linux-side component: roughly **6–13 ms "
+        "(trimmed)** and **10–20 ms (stock)** of E0→E4 that "
+        "Whimbrel does not pay (D-0082; a bracket from two "
+        "read-only methods on the T4.8b artifacts, not from these "
+        "CSV cells — older pins have no `synack_to_http_ns` "
+        "column and pcaps are gitignored). Charging a small image "
+        "is a unikernel property; the ratio is not retracted. "
+        "Threats item 20.",
         "",
         regime_note,
         "",
@@ -3319,6 +3335,10 @@ def cmd_selftest() -> int:
     if "2.87" in c_md or "~11 KB" in c_md or "40.2" in c_md or "540–740" in c_md:
         raise ExhibitFail(
             "TEST FAIL: T4.8c exhibit copied typed T4.8b measurements"
+        )
+    if "6–13 ms" not in c_md or "10–20 ms" not in c_md or "D-0082" not in c_md:
+        raise ExhibitFail(
+            "TEST FAIL: T4.8c exhibit missing D-0082 size-scaling bracket"
         )
     if "did not know the target" not in c_md:
         raise ExhibitFail("TEST FAIL: T4.8c exhibit missing D-0081 not-claimed")

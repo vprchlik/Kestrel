@@ -222,8 +222,26 @@ a different pcap. Do not silently drop the trial.
 ### S — batch header, not a `runs.csv` column
 
 S is the pre-ARP QEMU-startup slice (listener-up → main-loop-live).
-It is a **per-host, per-QEMU-build constant**. It does not scale
-with the guest profile. It is never a report number.
+It is a **per-host, per-QEMU-build, per-image-size** quantity, not
+a constant across guests. Same-image Whimbrel profiles still fail
+closed if they disagree (`|s_ns_fast − s_ns_safe| > 1 ms` below).
+Across image sizes it **does** scale with the bytes QEMU loads
+(D-0082). On the T4.8b 300 recorded trials a read-only audit
+measured roughly **0.35–0.60 ms/MB**: the Linux arms carry a
+pre-guest component of E0→E4 that Whimbrel does not pay — about
+**6–13 ms (trimmed)** and **10–20 ms (stock)**; stock−trimmed ≈
+4–7 ms. That is a bracket, not a point: two independent methods
+(a pcap-anchored proxy; guest-stamp-anchored brackets) agreed on
+direction and disagreed on precision, and a read-only derivation
+cannot pin it tighter than roughly a factor of two (the wire ARP
+leaves somewhere inside a stamped `sendto` interior; pcap
+frame-write latency is unquantified). Per-arm S is not
+recomputable from the pinned CSVs alone (older pins have no
+`synack_to_http_ns` column; pcaps are gitignored; T4.8b has no
+committed batch header). Charging a small image to the unikernel
+is defensible — small images are a real unikernel property. The
+false sentence was the constancy claim; this does not retract a
+ratio. It is never a report number.
 
 **Do not add `s_ns` to `runs.csv`.** A per-trial column would invite
 median / IQR / stability / rung-delta treatment — the exact path
@@ -258,8 +276,9 @@ FIN-after-E4 tail. That is a diagnostic, not a first-class edge.
 
 Fail closed on the header:
 
-- `|s_ns_fast − s_ns_safe| > 1 ms` → `TEST FAIL` (S scaled with
-  profile; D-0071 is reopened).
+- `|s_ns_fast − s_ns_safe| > 1 ms` → `TEST FAIL` (same-image S
+  scaled with Whimbrel profile; D-0071 is reopened). Cross-system
+  image-size scaling is D-0082; it is not this gate.
 - Pool both configs for the headline `s_ns`. A QEMU or host change
   is allowed to move S on the *next* batch; that is the revisit
   trigger, and the header is the grain that shows it.
